@@ -25,7 +25,7 @@ async function bootstrap(): Promise<void> {
     }),
   );
   app.enableShutdownHooks();
-  await app.listen(config.getOrThrow<number>('API_PORT'), '0.0.0.0');
+  await app.listen(config.getOrThrow<number>('API_PORT'), '127.0.0.1');
 }
 
 void bootstrap();
