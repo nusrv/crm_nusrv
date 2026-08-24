@@ -1,0 +1,84 @@
+1- Excel / Data
+Can you provide the current Excel file, or at least its columns? Also, should Excel remain the master source, or should the CP database eventually replace it?
+Services
+
+Answer: You have it
+
+2- What exact services do we manage today?
+Example: Domain, SSL, Hosting, VPS, Dedicated Server, Email, Microsoft 365, Maintenance, etc.
+
+Answer: Only those (Make it simple, yet, we can add service in the future but for now the following:
+Domain, SSL, Hosting, Dedicated Server, Support, Antivirus..etc (Check the "Registration Type" Column
+
+3- Renewal Rules
+Confirm the reminder schedule: 30, 21, 14, 7, and 2 days before expiry.
+What happens on expiry day and after expiry? Is there a grace period?
+
+Answer: On the expiry date, a final email warning that within 24 hours all services will be suspended. On this part another urgent reminder goes to the top management (Emails of those are going to be set on the portal, we will have different level of notification for our team, 2 days prior would go for example to the IT, last day would go to the IT and the CEO or whoever we have assigned in the portal)
+
+4- Customer Reply
+When a customer replies to any renewal email, should the system immediately pause further reminders and send the case to a human for review?
+
+Answer: When a customer reply, it is either Accept/Reject. This means the whole workflow should change, if Accept, then the status change to Invoice generation then attached it with it proper reply with our bank details (Based on a template we set for acceptance replies) and the service details with attached invoice that was generated. After this stage, there will be only reminders for collecting the money either by transfer or by check or credit card. the status of receiving money should be changed manual by a human but the reminders of money collection (which have different template using the same main invoice template with a reminder #1/#2...etc) until the client confirms the money has been paid, the status changes automatically to fulfilled, or manual in case of money received by different means and no email was sent, the IT could change it manual.
+If the client reply with Reject, then the follow changes to the IT, Sales Development Personal, CEO to either try to handle the client to bring him back (so reminders to be internally to push us to bring this client back) if the case is not valid, the sales development personal change the status close, and it should then automatically put this client into suspended (on his expiry date ofcourse) to put off the serivces automatically or manually in case we have no api to handle it.
+
+5- Outlook / Email
+Are we using Microsoft 365 / Exchange Online? Which mailbox will send reminders and receive customer replies?
+
+Answer: We are using a system called Smartermail, which it have an API for accessing the suspension. Also the email we have access to it using POP or IMAP and sending from it using SMTP. you could directly connect to the webmail and capture the emails and send to the clients. The captured email should be handled by LLM to understand what the client is saying, he might be asking for an upgrade, or request a clarification, so based on that we should handle the flow to be handled by human or not if there is no answer generated.
+
+6- Invoice / Fawtara
+How are official invoices currently issued through Fawtara? Manually, through accounting software, or through an existing API/integration? Who currently handles this?
+
+Answer: Currently we are issuing it manually, then we place it on an invoice manually (we have a template ready) and then put the QR code and the Digital invoice and send it to the client . but there is an API that we can make the whole process automatic, but the Accountant must change the status of the issued invoice from draft to Published which will return the QR code and make it official.
+
+
+7- Payment
+After the Fawtara invoice is issued, how do we know the customer has paid? Manual confirmation by Finance, bank integration, payment gateway, or another method?
+
+Answer: Yes, client will reply to us, because we will make a follow on his payment after he approved and after we send them the invoice, the status changes to collecting money and following up. if the client did not answer, on the third trial
+Note: We have two companies, we have two Fawtara account for each company
+New Serve for Digital Data Transformation - which will handle all local payments
+Future foresight for Digital Data Transformation - which will handle all international Payments (no local)
+Each client is related to a company, so in the DB each client is under a company.
+
+8- Renewal Approval
+What must happen before the system is allowed to renew a service? For example:
+
+Customer approval → Invoice → Payment → Internal approval → Renewal
+
+Answer: Yes, an email approval is considered legally binding, so approval, invoice (accountant review it, publish it), email follow up to the client for payment, Internal approval to confirm money received, renewal updated on the status of client only (the clients are always autorenewed unless we stop them, so the automation only goes for suspension)
+
+Please confirm the actual sequence.
+
+9- Suspension
+When are we allowed to suspend a service? Immediately on expiry, after X days, or only after human approval? Are there any services that must never be automatically suspended?
+
+Answer: The suspension is done after 24 hours from the expiry date. At the time, the IT must know, the CEO must know (a list of emails whill be added to this final stage for final action overview)
+
+10- Plesk
+How many Plesk servers do we manage? Do we have full administrator/API access? What actions should the CP eventually perform there: read status, renew/change expiry, suspend, reactivate, etc.?
+
+Answer: That means, we should have for each client the server access related to it, so there should be a place where we create the server connections and we name it for example server1/2/3.....etc then when a client is created he will be hooked to the server related (could be more than one) for example a hosting client could have Email, Hosting. both are different server so when we suspend we will connect that client to two servers and the system will go there and suspend this.
+Also some services are internal and not server related, for example like the SSL, it is a service internal in the server, when we suspended we do not suspend the emails, or even the hosting, only the SSL is stopped.
+We have API for the Linux server, as we have Plesk as a CP and smartermail for emails. other service we do not have API for it, we notify manually and it keeps pending until the IT can change its type.
+
+11- Other Providers
+Where are domains, paid SSLs, Microsoft licenses, and other services actually purchased/managed? We need only the provider names for now.
+Yes, as agreed before, when we create the connections, we give them names, and then connect them to the client, each service could have one or two or three connection that is related to the renewal and should be mitigated.
+
+
+12- Users & Approval Roles
+Who will use the CP, and who is allowed to approve:
+* Invoice issuance - Accountant
+* Renewal - Accountant
+* Suspension - IT Person
+* Reactivation - IT Person
+There will be Admin role which have full access to everything.
+All login must be build with security in mind, and Capatcha involved
+
+And the three most important things for me after that are:
+
+- Your actual Excel file
+- The current renewal process as your staff performs it today
+-The answers concerning Outlook + Fawtara + Plesk

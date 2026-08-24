@@ -1,0 +1,22 @@
+[Unit]
+Description=Customer Lifecycle CP staging web frontend
+After=network-online.target customer-cp-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_PLESK_SYSTEM_USER
+Group=REPLACE_PLESK_SYSTEM_GROUP
+WorkingDirectory=REPLACE_RELEASE_DIRECTORY
+EnvironmentFile=REPLACE_PRIVATE_ENV_PATH
+ExecStart=/opt/plesk/node/22/bin/npm run start --workspace @cp/web -- --port 3000
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=customer-cp-web-staging
+
+[Install]
+WantedBy=multi-user.target

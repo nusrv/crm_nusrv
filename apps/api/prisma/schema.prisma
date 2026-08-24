@@ -1,0 +1,598 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+  engineType   = "client"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum PaymentScope {
+  LOCAL
+  INTERNATIONAL
+}
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum BillingFrequency {
+  MONTHLY
+  QUARTERLY
+  SEMI_ANNUAL
+  ANNUAL
+  BIENNIAL
+  CUSTOM
+}
+
+enum TechnicalConnectionType {
+  PLESK
+  SMARTERMAIL
+  MANUAL
+  FUTURE_API
+}
+
+enum IntegrationEnvironment {
+  SANDBOX
+  PRODUCTION
+}
+
+enum HealthStatus {
+  UNKNOWN
+  HEALTHY
+  DEGRADED
+  UNAVAILABLE
+}
+
+enum RenewalCaseStatus {
+  UPCOMING
+  REMINDER_CYCLE
+  AWAITING_CUSTOMER
+  HUMAN_REVIEW
+  ACCEPTED
+  INVOICE_DRAFT
+  INVOICE_PENDING_PUBLICATION
+  INVOICE_PUBLISHED
+  COLLECTING
+  PAYMENT_REPORTED
+  PAYMENT_CONFIRMED
+  FULFILLED
+  REJECTED
+  RETENTION
+  DO_NOT_RENEW
+  SUSPENSION_DUE
+  SUSPENSION_PENDING_APPROVAL
+  SUSPENSION_IN_PROGRESS
+  SUSPENDED
+  REACTIVATION_PENDING
+  CLOSED
+  ERROR
+}
+
+enum CustomerDecision {
+  ACCEPTED
+  REJECTED
+  UNDECIDED
+}
+
+enum ActorType {
+  USER
+  SYSTEM
+  AI
+  INTEGRATION
+}
+
+enum MfaMethodType {
+  TOTP
+  WEBAUTHN
+}
+
+enum LegacyImportBatchStatus {
+  STAGED
+  IN_REVIEW
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+}
+
+enum LegacyImportRowStatus {
+  STAGED
+  REQUIRES_MANUAL_REVIEW
+  READY_FOR_APPROVAL
+  APPROVED
+  FAILED
+  SKIPPED
+}
+
+enum LegacyValidationStatus {
+  PENDING
+  VALID
+  INVALID
+  AMBIGUOUS
+}
+
+enum LegacyCustomerResolution {
+  CREATE_NEW
+  ATTACH_EXISTING
+  NOT_DUPLICATE
+}
+
+enum ReminderAudience {
+  CUSTOMER
+  INTERNAL
+}
+
+enum CommunicationOutboxStatus {
+  QUEUED
+  PROCESSING
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+enum RenewalDecisionOutcome {
+  SKIPPED_HOLD
+  SKIPPED_INELIGIBLE
+  DUPLICATE_PREVENTED
+}
+
+model BillingEntity {
+  id                     String            @id @default(uuid()) @db.VarChar(36)
+  name                   String
+  code                   String            @unique
+  paymentScope           PaymentScope      @map("payment_scope")
+  legalName              String            @map("legal_name")
+  taxNumber              String?           @map("tax_number")
+  address                String?
+  invoiceEmail           String?           @map("invoice_email")
+  bankDetailsCiphertext  String?           @map("bank_details_ciphertext") @db.Text
+  fawtaraConfigReference String?           @map("fawtara_config_reference")
+  active                 Boolean           @default(true)
+  createdAt              DateTime          @default(now()) @map("created_at")
+  updatedAt              DateTime          @updatedAt @map("updated_at")
+  customers              Customer[]
+  legacyImportRows       LegacyImportRow[]
+
+  @@map("billing_entities")
+}
+
+model Customer {
+  id                    String                @id @default(uuid()) @db.VarChar(36)
+  billingEntityId       String                @map("billing_entity_id") @db.VarChar(36)
+  customerCode          String                @unique @map("customer_code")
+  companyName           String                @map("company_name")
+  contactName           String?               @map("contact_name")
+  primaryEmail          String                @map("primary_email")
+  secondaryEmail        String?               @map("secondary_email")
+  phone                 String?
+  address               String?
+  country               String?
+  taxNumber             String?               @map("tax_number")
+  preferredLanguage     String                @default("en") @map("preferred_language")
+  status                CustomerStatus        @default(ACTIVE)
+  sourceLegacyReference String?               @map("source_legacy_reference")
+  notes                 String?               @db.Text
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+  billingEntity         BillingEntity         @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
+  subscriptions         Subscription[]
+  communicationOutbox   CommunicationOutbox[]
+  legacyCandidateRows   LegacyImportRow[]     @relation("LegacyCandidateCustomer")
+  legacyApprovedRows    LegacyImportRow[]     @relation("LegacyApprovedCustomer")
+
+  @@index([billingEntityId])
+  @@index([companyName])
+  @@index([primaryEmail])
+  @@map("customers")
+}
+
+model ServiceType {
+  id                   String         @id @default(uuid()) @db.VarChar(36)
+  code                 String         @unique
+  name                 String
+  description          String?
+  active               Boolean        @default(true)
+  defaultSuspendPolicy Json?          @map("default_suspend_policy")
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
+  subscriptions        Subscription[]
+
+  @@map("service_types")
+}
+
+model Subscription {
+  id                    String                        @id @default(uuid()) @db.VarChar(36)
+  customerId            String                        @map("customer_id") @db.VarChar(36)
+  serviceTypeId         String                        @map("service_type_id") @db.VarChar(36)
+  subscriptionCode      String                        @unique @map("subscription_code")
+  name                  String
+  description           String?
+  startDate             DateTime                      @map("start_date") @db.Date
+  renewalDate           DateTime                      @map("renewal_date") @db.Date
+  billingFrequency      BillingFrequency              @map("billing_frequency")
+  supplierCost          Decimal?                      @map("supplier_cost") @db.Decimal(14, 3)
+  sellingPrice          Decimal                       @map("selling_price") @db.Decimal(14, 3)
+  currency              String                        @db.VarChar(3)
+  providerAutoRenews    Boolean                       @default(true) @map("provider_auto_renews")
+  status                SubscriptionStatus            @default(ACTIVE)
+  graceHours            Int                           @default(24) @map("grace_hours")
+  sourceLegacyReference String?                       @map("source_legacy_reference")
+  notes                 String?                       @db.Text
+  createdAt             DateTime                      @default(now()) @map("created_at")
+  updatedAt             DateTime                      @updatedAt @map("updated_at")
+  customer              Customer                      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  serviceType           ServiceType                   @relation(fields: [serviceTypeId], references: [id], onDelete: Restrict)
+  connections           SubscriptionConnection[]
+  renewalCases          RenewalCase[]
+  communicationOutbox   CommunicationOutbox[]
+  legacyImportSource    LegacyImportSubscriptionLink?
+
+  @@index([customerId])
+  @@index([serviceTypeId])
+  @@index([renewalDate, status])
+  @@map("subscriptions")
+}
+
+model TechnicalConnection {
+  id                    String                   @id @default(uuid()) @db.VarChar(36)
+  code                  String                   @unique
+  name                  String
+  type                  TechnicalConnectionType
+  endpoint              String?                  @db.VarChar(500)
+  credentialsCiphertext String?                  @map("credentials_ciphertext") @db.Text
+  enabled               Boolean                  @default(true)
+  environment           IntegrationEnvironment   @default(SANDBOX)
+  capabilities          Json?
+  lastHealthStatus      HealthStatus             @default(UNKNOWN) @map("last_health_status")
+  lastHealthCheckedAt   DateTime?                @map("last_health_checked_at")
+  createdAt             DateTime                 @default(now()) @map("created_at")
+  updatedAt             DateTime                 @updatedAt @map("updated_at")
+  subscriptions         SubscriptionConnection[]
+
+  @@map("technical_connections")
+}
+
+model SubscriptionConnection {
+  id                    String              @id @default(uuid()) @db.VarChar(36)
+  subscriptionId        String              @map("subscription_id") @db.VarChar(36)
+  technicalConnectionId String              @map("technical_connection_id") @db.VarChar(36)
+  remoteIdentifier      String              @map("remote_identifier")
+  actionProfile         Json?               @map("action_profile")
+  metadata              Json?
+  active                Boolean             @default(true)
+  createdAt             DateTime            @default(now()) @map("created_at")
+  updatedAt             DateTime            @updatedAt @map("updated_at")
+  subscription          Subscription        @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  technicalConnection   TechnicalConnection @relation(fields: [technicalConnectionId], references: [id], onDelete: Restrict)
+
+  @@unique([subscriptionId, technicalConnectionId, remoteIdentifier])
+  @@index([technicalConnectionId])
+  @@map("subscription_connections")
+}
+
+model RenewalCase {
+  id                    String                      @id @default(uuid()) @db.VarChar(36)
+  subscriptionId        String                      @map("subscription_id") @db.VarChar(36)
+  cycleStartDate        DateTime                    @map("cycle_start_date") @db.Date
+  dueDate               DateTime                    @map("due_date") @db.Date
+  status                RenewalCaseStatus           @default(UPCOMING)
+  customerDecision      CustomerDecision            @default(UNDECIDED) @map("customer_decision")
+  acceptedAt            DateTime?                   @map("accepted_at")
+  rejectedAt            DateTime?                   @map("rejected_at")
+  doNotRenewAt          DateTime?                   @map("do_not_renew_at")
+  suspensionDueAt       DateTime?                   @map("suspension_due_at")
+  fulfilledAt           DateTime?                   @map("fulfilled_at")
+  closedAt              DateTime?                   @map("closed_at")
+  assignedUserId        String?                     @map("assigned_user_id") @db.VarChar(36)
+  lastCustomerContactAt DateTime?                   @map("last_customer_contact_at")
+  lastEvaluatedAt       DateTime?                   @map("last_evaluated_at")
+  createdAt             DateTime                    @default(now()) @map("created_at")
+  updatedAt             DateTime                    @updatedAt @map("updated_at")
+  subscription          Subscription                @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  assignedUser          User?                       @relation(fields: [assignedUserId], references: [id], onDelete: SetNull)
+  holds                 RenewalHold[]
+  communicationOutbox   CommunicationOutbox[]
+  evaluationDecisions   RenewalEvaluationDecision[]
+
+  @@unique([subscriptionId, dueDate])
+  @@index([status, dueDate])
+  @@index([assignedUserId])
+  @@map("renewal_cases")
+}
+
+model Role {
+  id          String     @id @default(uuid()) @db.VarChar(36)
+  code        String     @unique
+  name        String
+  description String?
+  permissions Json       @default("[]")
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+  users       UserRole[]
+
+  @@map("roles")
+}
+
+model User {
+  id                   String              @id @default(uuid()) @db.VarChar(36)
+  email                String              @unique
+  displayName          String              @map("display_name")
+  passwordHash         String              @map("password_hash")
+  active               Boolean             @default(true)
+  failedAttempts       Int                 @default(0) @map("failed_attempts")
+  lockedUntil          DateTime?           @map("locked_until")
+  mfaEnabled           Boolean             @default(false) @map("mfa_enabled")
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt @map("updated_at")
+  roles                UserRole[]
+  sessions             AuthSession[]
+  mfaMethods           UserMfaMethod[]
+  renewalCases         RenewalCase[]
+  importBatches        LegacyImportBatch[] @relation("LegacyImportBatchCreator")
+  approvedImportRows   LegacyImportRow[]   @relation("LegacyImportRowApprover")
+  createdRenewalHolds  RenewalHold[]       @relation("RenewalHoldCreator")
+  releasedRenewalHolds RenewalHold[]       @relation("RenewalHoldReleaser")
+
+  @@map("users")
+}
+
+model UserRole {
+  userId     String   @map("user_id") @db.VarChar(36)
+  roleId     String   @map("role_id") @db.VarChar(36)
+  assignedAt DateTime @default(now()) @map("assigned_at")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model AuthSession {
+  id               String    @id @default(uuid()) @db.VarChar(36)
+  userId           String    @map("user_id") @db.VarChar(36)
+  refreshTokenHash String    @map("refresh_token_hash")
+  expiresAt        DateTime  @map("expires_at")
+  revokedAt        DateTime? @map("revoked_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("auth_sessions")
+}
+
+model UserMfaMethod {
+  id               String        @id @default(uuid()) @db.VarChar(36)
+  userId           String        @map("user_id") @db.VarChar(36)
+  type             MfaMethodType
+  label            String?
+  secretCiphertext String?       @map("secret_ciphertext") @db.Text
+  credentialData   Json?         @map("credential_data")
+  verifiedAt       DateTime?     @map("verified_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_mfa_methods")
+}
+
+model AuditEvent {
+  id                  String               @id @default(uuid()) @db.VarChar(36)
+  actorType           ActorType            @map("actor_type")
+  actorId             String?              @map("actor_id") @db.VarChar(36)
+  eventKey            String               @map("event_key")
+  subjectType         String               @map("subject_type")
+  subjectId           String               @map("subject_id")
+  oldState            Json?                @map("old_state")
+  newState            Json?                @map("new_state")
+  metadata            Json?
+  ipAddress           String?              @map("ip_address") @db.VarChar(45)
+  createdAt           DateTime             @default(now()) @map("created_at")
+  communicationOutbox CommunicationOutbox?
+
+  @@index([subjectType, subjectId, createdAt])
+  @@index([eventKey, createdAt])
+  @@map("audit_events")
+}
+
+model LegacyImportBatch {
+  id             String                  @id @default(uuid()) @db.VarChar(36)
+  sourceFileName String                  @map("source_file_name")
+  sourceFileHash String                  @unique @map("source_file_hash")
+  sourceFileSize Int                     @map("source_file_size")
+  status         LegacyImportBatchStatus @default(STAGED)
+  uploadedById   String                  @map("uploaded_by_id") @db.VarChar(36)
+  totalRows      Int                     @default(0) @map("total_rows")
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
+  uploadedBy     User                    @relation("LegacyImportBatchCreator", fields: [uploadedById], references: [id], onDelete: Restrict)
+  rows           LegacyImportRow[]
+
+  @@index([status, createdAt])
+  @@map("legacy_import_batches")
+}
+
+model LegacyImportRow {
+  id                  String                         @id @default(uuid()) @db.VarChar(36)
+  batchId             String                         @map("batch_id") @db.VarChar(36)
+  sheetName           String                         @map("sheet_name")
+  sourceRowNumber     Int                            @map("source_row_number")
+  sourceReference     String                         @map("source_reference")
+  rowFingerprint      String                         @map("row_fingerprint")
+  rawValuesCiphertext String                         @map("raw_values_ciphertext") @db.Text
+  rawPreview          Json                           @map("raw_preview")
+  mappedCustomer      Json?                          @map("mapped_customer")
+  mappedSubscriptions Json?                          @map("mapped_subscriptions")
+  duplicateCandidates Json                           @default("[]") @map("duplicate_candidates")
+  validationIssues    Json                           @default("[]") @map("validation_issues")
+  status              LegacyImportRowStatus          @default(STAGED)
+  validationStatus    LegacyValidationStatus         @default(PENDING) @map("validation_status")
+  customerResolution  LegacyCustomerResolution?      @map("customer_resolution")
+  candidateCustomerId String?                        @map("candidate_customer_id") @db.VarChar(36)
+  billingEntityId     String?                        @map("billing_entity_id") @db.VarChar(36)
+  manualReviewReason  String?                        @map("manual_review_reason") @db.Text
+  resolutionNotes     String?                        @map("resolution_notes") @db.Text
+  approvedCustomerId  String?                        @map("approved_customer_id") @db.VarChar(36)
+  approvedById        String?                        @map("approved_by_id") @db.VarChar(36)
+  approvedAt          DateTime?                      @map("approved_at")
+  createdAt           DateTime                       @default(now()) @map("created_at")
+  updatedAt           DateTime                       @updatedAt @map("updated_at")
+  batch               LegacyImportBatch              @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  candidateCustomer   Customer?                      @relation("LegacyCandidateCustomer", fields: [candidateCustomerId], references: [id], onDelete: Restrict)
+  billingEntity       BillingEntity?                 @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
+  approvedCustomer    Customer?                      @relation("LegacyApprovedCustomer", fields: [approvedCustomerId], references: [id], onDelete: Restrict)
+  approvedBy          User?                          @relation("LegacyImportRowApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  subscriptionLinks   LegacyImportSubscriptionLink[]
+
+  @@unique([batchId, sheetName, sourceRowNumber])
+  @@index([batchId, status])
+  @@index([candidateCustomerId])
+  @@index([approvedCustomerId])
+  @@map("legacy_import_rows")
+}
+
+model LegacyImportSubscriptionLink {
+  id             String          @id @default(uuid()) @db.VarChar(36)
+  importRowId    String          @map("import_row_id") @db.VarChar(36)
+  subscriptionId String          @unique @map("subscription_id") @db.VarChar(36)
+  createdAt      DateTime        @default(now()) @map("created_at")
+  importRow      LegacyImportRow @relation(fields: [importRowId], references: [id], onDelete: Restrict)
+  subscription   Subscription    @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+
+  @@index([importRowId])
+  @@map("legacy_import_subscription_links")
+}
+
+model RenewalTemplate {
+  id              String         @id @default(uuid()) @db.VarChar(36)
+  code            String         @unique @db.VarChar(80)
+  name            String         @db.VarChar(150)
+  subjectTemplate String         @map("subject_template") @db.VarChar(500)
+  bodyTemplate    String         @map("body_template") @db.Text
+  enabled         Boolean        @default(true)
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+  reminderRules   ReminderRule[]
+
+  @@map("renewal_templates")
+}
+
+model ReminderRule {
+  id             String                @id @default(uuid()) @db.VarChar(36)
+  code           String                @unique @db.VarChar(80)
+  name           String                @db.VarChar(150)
+  daysBeforeDue  Int                   @map("days_before_due")
+  templateId     String                @map("template_id") @db.VarChar(36)
+  enabled        Boolean               @default(true)
+  createdAt      DateTime              @default(now()) @map("created_at")
+  updatedAt      DateTime              @updatedAt @map("updated_at")
+  template       RenewalTemplate       @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  outboxMessages CommunicationOutbox[]
+
+  @@unique([daysBeforeDue])
+  @@index([daysBeforeDue, enabled])
+  @@index([templateId])
+  @@map("reminder_rules")
+}
+
+model NotificationRule {
+  id                     String                @id @default(uuid()) @db.VarChar(36)
+  code                   String                @unique @db.VarChar(80)
+  name                   String                @db.VarChar(150)
+  daysBeforeDue          Int                   @map("days_before_due")
+  recipientRoles         Json                  @default("[]") @map("recipient_roles")
+  recipientEmails        Json                  @default("[]") @map("recipient_emails")
+  subjectTemplate        String                @map("subject_template") @db.VarChar(500)
+  bodyTemplate           String                @map("body_template") @db.Text
+  suppressOnWorkflowHold Boolean               @default(true) @map("suppress_on_workflow_hold")
+  enabled                Boolean               @default(true)
+  createdAt              DateTime              @default(now()) @map("created_at")
+  updatedAt              DateTime              @updatedAt @map("updated_at")
+  outboxMessages         CommunicationOutbox[]
+
+  @@index([daysBeforeDue, enabled])
+  @@map("notification_rules")
+}
+
+model RenewalHold {
+  id                         String      @id @default(uuid()) @db.VarChar(36)
+  renewalCaseId              String      @map("renewal_case_id") @db.VarChar(36)
+  reason                     String      @db.Text
+  stopsCustomerReminders     Boolean     @default(true) @map("stops_customer_reminders")
+  stopsInternalNotifications Boolean     @default(true) @map("stops_internal_notifications")
+  expiresAt                  DateTime?   @map("expires_at")
+  active                     Boolean     @default(true)
+  createdById                String      @map("created_by_id") @db.VarChar(36)
+  releasedById               String?     @map("released_by_id") @db.VarChar(36)
+  releasedAt                 DateTime?   @map("released_at")
+  createdAt                  DateTime    @default(now()) @map("created_at")
+  renewalCase                RenewalCase @relation(fields: [renewalCaseId], references: [id], onDelete: Restrict)
+  createdBy                  User        @relation("RenewalHoldCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  releasedBy                 User?       @relation("RenewalHoldReleaser", fields: [releasedById], references: [id], onDelete: Restrict)
+
+  @@index([renewalCaseId, active, expiresAt])
+  @@index([createdById])
+  @@index([releasedById])
+  @@map("renewal_holds")
+}
+
+model CommunicationOutbox {
+  id                 String                    @id @default(uuid()) @db.VarChar(36)
+  customerId         String                    @map("customer_id") @db.VarChar(36)
+  subscriptionId     String                    @map("subscription_id") @db.VarChar(36)
+  renewalCaseId      String                    @map("renewal_case_id") @db.VarChar(36)
+  reminderRuleId     String?                   @map("reminder_rule_id") @db.VarChar(36)
+  notificationRuleId String?                   @map("notification_rule_id") @db.VarChar(36)
+  auditEventId       String                    @unique @map("audit_event_id") @db.VarChar(36)
+  audience           ReminderAudience
+  recipient          String                    @db.VarChar(320)
+  subject            String                    @db.VarChar(500)
+  body               String                    @db.Text
+  daysBeforeDue      Int                       @map("days_before_due")
+  status             CommunicationOutboxStatus @default(QUEUED)
+  scheduledAt        DateTime                  @map("scheduled_at")
+  queuedAt           DateTime                  @default(now()) @map("queued_at")
+  attempts           Int                       @default(0)
+  lastAttemptAt      DateTime?                 @map("last_attempt_at")
+  lastError          String?                   @map("last_error") @db.Text
+  idempotencyKey     String                    @unique @map("idempotency_key") @db.VarChar(191)
+  createdAt          DateTime                  @default(now()) @map("created_at")
+  updatedAt          DateTime                  @updatedAt @map("updated_at")
+  customer           Customer                  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  subscription       Subscription              @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  renewalCase        RenewalCase               @relation(fields: [renewalCaseId], references: [id], onDelete: Restrict)
+  reminderRule       ReminderRule?             @relation(fields: [reminderRuleId], references: [id], onDelete: Restrict)
+  notificationRule   NotificationRule?         @relation(fields: [notificationRuleId], references: [id], onDelete: Restrict)
+  auditEvent         AuditEvent                @relation(fields: [auditEventId], references: [id], onDelete: Restrict)
+
+  @@index([renewalCaseId, status])
+  @@index([status, scheduledAt])
+  @@index([customerId])
+  @@index([subscriptionId])
+  @@index([reminderRuleId])
+  @@index([notificationRuleId])
+  @@map("communication_outbox")
+}
+
+model RenewalEvaluationDecision {
+  id            String                 @id @default(uuid()) @db.VarChar(36)
+  renewalCaseId String                 @map("renewal_case_id") @db.VarChar(36)
+  decisionKey   String                 @unique @map("decision_key") @db.VarChar(191)
+  outcome       RenewalDecisionOutcome
+  daysBeforeDue Int?                   @map("days_before_due")
+  reason        String?                @db.VarChar(500)
+  createdAt     DateTime               @default(now()) @map("created_at")
+  renewalCase   RenewalCase            @relation(fields: [renewalCaseId], references: [id], onDelete: Restrict)
+
+  @@index([renewalCaseId, createdAt])
+  @@map("renewal_evaluation_decisions")
+}
