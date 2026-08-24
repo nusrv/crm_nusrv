@@ -23,11 +23,10 @@ export function LoginForm() {
         body: JSON.stringify({
           email: data.get('email'),
           password: data.get('password'),
-          captchaToken: data.get('captchaToken'),
         }),
       });
       const result = (await response.json()) as { mfaRequired?: boolean; message?: string };
-      if (!response.ok) throw new Error('Sign-in failed. Check your credentials and CAPTCHA.');
+      if (!response.ok) throw new Error('Sign-in failed. Check your credentials.');
       if (result.mfaRequired) {
         throw new Error(
           'This account requires MFA. MFA verification UI is reserved for the identity phase.',
@@ -63,20 +62,6 @@ export function LoginForm() {
           autoComplete="current-password"
           required
         />
-      </label>
-      <label className="block text-sm font-medium">
-        CAPTCHA token
-        <input
-          className="mt-2 w-full rounded-xl border border-[var(--line)] px-4 py-3 outline-none focus:border-[var(--accent)]"
-          name="captchaToken"
-          type="text"
-          autoComplete="off"
-          required
-        />
-        <span className="mt-2 block text-xs font-normal text-[var(--muted)]">
-          Phase 0 uses the configured development token. A provider widget can replace this field
-          later.
-        </span>
       </label>
       {error ? <p className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
       <button

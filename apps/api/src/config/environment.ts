@@ -43,7 +43,7 @@ const environmentSchema = z
     JWT_ACCESS_TTL: duration.default('15m'),
     JWT_REFRESH_TTL: duration.default('7d'),
     ENCRYPTION_KEY_BASE64: base64Key,
-    CAPTCHA_PROVIDER: z.enum(['mock', 'turnstile', 'recaptcha']).default('mock'),
+    CAPTCHA_PROVIDER: z.enum(['none', 'mock', 'turnstile', 'recaptcha']).default('mock'),
     CAPTCHA_TEST_TOKEN: z.string().min(8).optional(),
     CAPTCHA_SITE_KEY: z.string().optional(),
     CAPTCHA_SECRET: z.string().optional(),
@@ -78,7 +78,10 @@ const environmentSchema = z
         message: 'is required for mock CAPTCHA',
       });
     }
-    if (value.CAPTCHA_PROVIDER !== 'mock' && (!value.CAPTCHA_SITE_KEY || !value.CAPTCHA_SECRET)) {
+    if (
+      ['turnstile', 'recaptcha'].includes(value.CAPTCHA_PROVIDER) &&
+      (!value.CAPTCHA_SITE_KEY || !value.CAPTCHA_SECRET)
+    ) {
       context.addIssue({
         code: 'custom',
         path: ['CAPTCHA_SECRET'],

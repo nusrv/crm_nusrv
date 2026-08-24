@@ -53,6 +53,47 @@ describe('environment validation', () => {
     expect(() => validateEnvironment(withoutRedis)).toThrow('Invalid environment configuration');
   });
 
+  it('accepts CAPTCHA_PROVIDER=none in production without CAPTCHA credentials', () => {
+    expect(
+      validateEnvironment({
+        ...valid,
+        NODE_ENV: 'production',
+        CAPTCHA_PROVIDER: 'none',
+        CAPTCHA_TEST_TOKEN: undefined,
+      }),
+    ).toMatchObject({ NODE_ENV: 'production', CAPTCHA_PROVIDER: 'none' });
+  });
+
+  it.each(['turnstile', 'recaptcha'] as const)(
+    'requires credentials for %s and accepts them when both are supplied',
+    (provider) => {
+      expect(() =>
+        validateEnvironment({
+          ...valid,
+          NODE_ENV: 'production',
+          CAPTCHA_PROVIDER: provider,
+          CAPTCHA_TEST_TOKEN: undefined,
+        }),
+      ).toThrow('Invalid environment configuration');
+      expect(
+        validateEnvironment({
+          ...valid,
+          NODE_ENV: 'production',
+          CAPTCHA_PROVIDER: provider,
+          CAPTCHA_TEST_TOKEN: undefined,
+          CAPTCHA_SITE_KEY: 'site-key',
+          CAPTCHA_SECRET: 'secret-key',
+        }),
+      ).toMatchObject({ CAPTCHA_PROVIDER: provider });
+    },
+  );
+
+  it('keeps mock CAPTCHA prohibited in production', () => {
+    expect(() => validateEnvironment({ ...valid, NODE_ENV: 'production' })).toThrow(
+      'Invalid environment configuration',
+    );
+  });
+
   it('rejects an invalid business timezone', () => {
     expect(() => validateEnvironment({ ...valid, BUSINESS_TIMEZONE: 'Not/A_Zone' })).toThrow(
       'Invalid environment configuration',
@@ -65,9 +106,15 @@ describe('environment validation', () => {
     ).toThrow('Invalid environment configuration');
   });
 
-  it('rejects short signing secrets and mock CAPTCHA in production', () => {
+  it('rejects short signing secrets independently of CAPTCHA configuration', () => {
     expect(() =>
-      validateEnvironment({ ...valid, NODE_ENV: 'production', JWT_ACCESS_SECRET: 'short' }),
+      validateEnvironment({
+        ...valid,
+        NODE_ENV: 'production',
+        CAPTCHA_PROVIDER: 'none',
+        CAPTCHA_TEST_TOKEN: undefined,
+        JWT_ACCESS_SECRET: 'short',
+      }),
     ).toThrow('Invalid environment configuration');
   });
 });

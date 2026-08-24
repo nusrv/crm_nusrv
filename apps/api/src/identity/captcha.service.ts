@@ -9,8 +9,10 @@ interface CaptchaProviderResponse {
 export class CaptchaService {
   constructor(private readonly config: ConfigService) {}
 
-  async verify(token: string, remoteAddress?: string): Promise<boolean> {
+  async verify(token: string | undefined, remoteAddress?: string): Promise<boolean> {
     const provider = this.config.getOrThrow<string>('CAPTCHA_PROVIDER');
+    if (provider === 'none') return true;
+    if (!token) return false;
     if (provider === 'mock') {
       return (
         this.config.get<string>('NODE_ENV') !== 'production' &&

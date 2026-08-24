@@ -51,7 +51,8 @@ port 3000 and the API hostname reaches port 3001. Issue valid HTTPS certificates
 Copy `deploy/staging/.env.staging.example` to the secured server-side environment path and replace
 every placeholder. Never commit the completed file. Required settings include `NODE_ENV`,
 `APP_URL`, `WEB_URL`, `API_URL`, `NEXT_PUBLIC_API_URL`, `DATABASE_URL`, Redis URL or host settings,
-`BUSINESS_TIMEZONE`, JWT/session secrets, the encryption key, and a real staging CAPTCHA provider.
+`BUSINESS_TIMEZONE`, JWT/session secrets, and the encryption key. This internal staff-only CP uses
+`CAPTCHA_PROVIDER=none`; no CAPTCHA keys or test token are configured.
 
 Keep these Phase 3+ switches disabled:
 
@@ -194,9 +195,9 @@ login, dashboard, customers, subscriptions, renewals, settings, outbox, holds, a
 trigger. Technical Connection list/detail must return success only for Admin/IT and denial for all
 other representative roles. Credentials must remain masked.
 
-Also verify secure cookies, origin enforcement, lockout, real staging CAPTCHA, sanitized health
-responses, absence of secrets in API responses/logs, private database/Redis network access, and no
-real customer communication.
+Also verify secure cookies, origin enforcement, lockout, the approved disabled-CAPTCHA setting,
+sanitized health responses, absence of secrets in API responses/logs, private database/Redis network
+access, and no real customer communication.
 
 ## 10. Logs, updates, and rollback
 

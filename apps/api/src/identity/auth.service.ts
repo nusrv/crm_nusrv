@@ -37,7 +37,11 @@ export class AuthService {
   ) {}
 
   async login(input: LoginDto, remoteAddress?: string): Promise<LoginResult> {
-    if (!(await this.captcha.verify(input.captchaToken, remoteAddress))) {
+    const captchaProvider = this.config.getOrThrow<string>('CAPTCHA_PROVIDER');
+    if (
+      captchaProvider !== 'none' &&
+      !(await this.captcha.verify(input.captchaToken, remoteAddress))
+    ) {
       throw new UnauthorizedException('Authentication failed.');
     }
 
