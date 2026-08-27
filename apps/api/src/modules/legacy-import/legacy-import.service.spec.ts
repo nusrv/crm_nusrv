@@ -4,11 +4,29 @@ import {
   LegacyCustomerResolution,
   LegacyImportRowStatus,
 } from '../../generated/prisma/enums';
-import { LegacyImportService } from './legacy-import.service';
+import {
+  isActiveSubscriptionSheet,
+  LegacyImportService,
+  OUT_OF_SCOPE_REASON,
+} from './legacy-import.service';
 
 const actor = { actorId: '10000000-0000-4000-8000-000000000001' };
 
 describe('LegacyImportService', () => {
+  it('keeps all workbook rows traceable while limiting review to Active_Subscriptions', () => {
+    const sheets = [
+      ...Array.from({ length: 214 }, () => 'Active_Subscriptions'),
+      ...Array.from({ length: 388 }, () => 'Suspended_Subscriptions'),
+      'Sheet3',
+      'Sheet4',
+    ];
+    const active = sheets.filter(isActiveSubscriptionSheet);
+    const skipped = sheets.filter((sheet) => !isActiveSubscriptionSheet(sheet));
+
+    expect(active).toHaveLength(214);
+    expect(skipped).toHaveLength(390);
+    expect(OUT_OF_SCOPE_REASON).toContain('excluded from the active-subscription migration scope');
+  });
   it('reuses an existing file-hash batch instead of staging duplicate rows', async () => {
     const existing = { id: 'batch-id', sourceFileHash: 'known', _count: { rows: 12 } };
     const prisma = {

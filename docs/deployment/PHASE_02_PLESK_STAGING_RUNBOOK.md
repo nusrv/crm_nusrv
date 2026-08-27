@@ -83,12 +83,13 @@ npm run db:migrate:deploy
 npm run db:seed
 ```
 
-Verify Prisma reports all three canonical migrations as applied:
+Verify Prisma reports all four canonical migrations as applied:
 
 ```text
 20260823000000_mariadb_phase_0_1_foundation
 20260824000000_phase_2_renewal_engine
 20260827000000_phase_2_1_operational_data
+20260827010000_scope_legacy_import_active_sheet
 ```
 
 Run the guarded suite only against a separate disposable database ending `_test`:

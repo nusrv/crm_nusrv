@@ -49,6 +49,14 @@ interface ApprovedMapping {
   subscriptions: LegacySubscriptionMappingDto[];
 }
 
+export const ACTIVE_SUBSCRIPTIONS_SHEET = 'Active_Subscriptions';
+export const OUT_OF_SCOPE_REASON =
+  'Preserved from the source workbook but excluded from the active-subscription migration scope.';
+
+export function isActiveSubscriptionSheet(sheetName: string): boolean {
+  return sheetName === ACTIVE_SUBSCRIPTIONS_SHEET;
+}
+
 @Injectable()
 export class LegacyImportService {
   constructor(
@@ -90,6 +98,8 @@ export class LegacyImportService {
     }
     if (!parsedRows.length)
       throw new BadRequestException('The workbook contains no stageable rows.');
+    const activeRows = parsedRows.filter((row) => isActiveSubscriptionSheet(row.sheetName)).length;
+    const skippedRows = parsedRows.length - activeRows;
 
     const [customers, billingEntities, serviceTypes, servicePackages] = await Promise.all([
       this.prisma.customer.findMany({
@@ -135,7 +145,10 @@ export class LegacyImportService {
         },
       });
       for (const row of parsedRows) {
-        const duplicateCandidates = this.findDuplicates(row.suggestions, customers);
+        const activeScope = isActiveSubscriptionSheet(row.sheetName);
+        const duplicateCandidates = activeScope
+          ? this.findDuplicates(row.suggestions, customers)
+          : [];
         const billingEntity = billingEntities.find(
           (entry) => normalize(entry.name) === normalize(row.suggestions.billingEntityName),
         );
@@ -145,11 +158,11 @@ export class LegacyImportService {
         const servicePackage = servicePackages.find(
           (entry) => entry.code === row.suggestions.servicePackageCode,
         );
-        const issues = [...row.suggestions.issues];
-        if (row.suggestions.servicePackageCode && !servicePackage) {
+        const issues = activeScope ? [...row.suggestions.issues] : [OUT_OF_SCOPE_REASON];
+        if (activeScope && row.suggestions.servicePackageCode && !servicePackage) {
           issues.push('Suggested package is not present in the active catalog.');
         }
-        if (duplicateCandidates.length) {
+        if (activeScope && duplicateCandidates.length) {
           issues.push('Possible duplicate customer requires an explicit human resolution.');
         }
         const mappedCustomer = compactJson({
@@ -206,12 +219,17 @@ export class LegacyImportService {
             mappedSubscriptions: asJson(mappedSubscriptions),
             duplicateCandidates: asJson(duplicateCandidates),
             validationIssues: asJson(issues),
-            status: LegacyImportRowStatus.REQUIRES_MANUAL_REVIEW,
-            validationStatus: issues.some((issue) => /ambiguous/i.test(issue))
-              ? LegacyValidationStatus.AMBIGUOUS
-              : LegacyValidationStatus.INVALID,
+            status: activeScope
+              ? LegacyImportRowStatus.REQUIRES_MANUAL_REVIEW
+              : LegacyImportRowStatus.SKIPPED,
+            validationStatus: activeScope
+              ? issues.some((issue) => /ambiguous/i.test(issue))
+                ? LegacyValidationStatus.AMBIGUOUS
+                : LegacyValidationStatus.INVALID
+              : LegacyValidationStatus.PENDING,
             billingEntityId: billingEntity?.id,
-            manualReviewReason: issues.join(' '),
+            manualReviewReason: activeScope ? issues.join(' ') : null,
+            resolutionNotes: activeScope ? undefined : OUT_OF_SCOPE_REASON,
           },
         });
       }
@@ -226,6 +244,8 @@ export class LegacyImportService {
             sourceFileName: created.sourceFileName,
             sourceFileHash: created.sourceFileHash,
             totalRows: parsedRows.length,
+            activeRows,
+            skippedRows,
           },
           ipAddress: context.ipAddress,
         },

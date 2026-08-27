@@ -30,6 +30,12 @@ The non-mutating dry run reconciled all 214 `Active_Subscriptions` source rows:
 - 214 rows still require human approval
 - 0 rows were written to live Customer/Subscription tables
 
+The operational importer preserves all 604 source rows for traceability while limiting human review
+to the 214 `Active_Subscriptions` rows. The 388 `Suspended_Subscriptions` rows and two
+miscellaneous-sheet rows are marked `SKIPPED` as out of scope. Migration
+`20260827010000_scope_legacy_import_active_sheet` repairs already-staged batches idempotently
+without deleting raw data or touching approved rows.
+
 Every row requires confirmed start and renewal dates. The source `Renewal / date (-15days)`
 value is preserved as evidence but is not treated as a proven renewal date. The 72 Custom and 57
 conflicting rows require explicit package decisions; split/merge decisions are never automatic.
