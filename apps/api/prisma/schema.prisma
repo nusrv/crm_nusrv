@@ -291,7 +291,7 @@ model ServicePackageTerm {
   updatedAt            DateTime       @updatedAt @map("updated_at")
   servicePackage       ServicePackage @relation(fields: [servicePackageId], references: [id], onDelete: Restrict)
 
-  @@unique([servicePackageId, termMonths, currency])
+  @@unique([servicePackageId, termMonths, currency], map: "service_package_terms_package_term_currency_key")
   @@index([active])
   @@map("service_package_terms")
 }

@@ -37,4 +37,14 @@ describe('Phase 2.1 MariaDB migration contract', () => {
     expect(migration).toContain('DECIMAL(14, 3)');
     expect(migration).toContain('ON DELETE RESTRICT');
   });
+
+  it('keeps MariaDB index and constraint identifiers within 64 characters', () => {
+    const identifiers = Array.from(
+      migration.matchAll(/(?:INDEX|CONSTRAINT)\s+`([^`]+)`/gi),
+      (match) => match[1] ?? '',
+    );
+
+    expect(identifiers.length).toBeGreaterThan(0);
+    expect(identifiers.filter((identifier) => identifier.length > 64)).toEqual([]);
+  });
 });

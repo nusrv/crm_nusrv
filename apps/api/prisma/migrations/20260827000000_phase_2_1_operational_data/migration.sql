@@ -49,7 +49,7 @@ CREATE TABLE `service_package_terms` (
     `updated_at` DATETIME(3) NOT NULL,
 
     INDEX `service_package_terms_active_idx`(`active`),
-    UNIQUE INDEX `service_package_terms_service_package_id_term_months_currency_key`(`service_package_id`, `term_months`, `currency`),
+    UNIQUE INDEX `service_package_terms_package_term_currency_key`(`service_package_id`, `term_months`, `currency`),
     CONSTRAINT `service_package_terms_term_months_check` CHECK (`term_months` BETWEEN 1 AND 120),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
