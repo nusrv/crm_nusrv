@@ -1,11 +1,13 @@
-import { Type, Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsBoolean,
   IsDateString,
   IsEmail,
   IsEnum,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -18,9 +20,12 @@ import {
 } from 'class-validator';
 import {
   BillingFrequency,
+  CustomerContactRole,
   LegacyCustomerResolution,
   LegacyImportBatchStatus,
   LegacyImportRowStatus,
+  PackageClassificationStatus,
+  SubscriptionIdentifierType,
   SubscriptionStatus,
 } from '../../generated/prisma/enums';
 import { PageQueryDto } from '../../common/page-query.dto';
@@ -41,6 +46,30 @@ export class ImportRowListQueryDto extends PageQueryDto {
   @IsOptional()
   @IsString()
   sheetName?: string;
+}
+
+export class LegacyContactMappingDto {
+  @IsEnum(CustomerContactRole)
+  role!: CustomerContactRole;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  name?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => (value ? String(value).trim().toLowerCase() : undefined))
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  phone?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  primary = false;
 }
 
 export class LegacyCustomerMappingDto {
@@ -91,14 +120,38 @@ export class LegacyCustomerMappingDto {
   billingEntityId!: string;
 
   @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => LegacyContactMappingDto)
+  @ArrayMaxSize(20)
+  contacts: LegacyContactMappingDto[] = [];
+
+  @IsOptional()
   @IsString()
   @MaxLength(5000)
   notes?: string;
 }
 
+export class LegacySubscriptionIdentifierDto {
+  @IsEnum(SubscriptionIdentifierType)
+  type!: SubscriptionIdentifierType;
+
+  @IsString()
+  @Length(1, 500)
+  value!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  label?: string;
+}
+
 export class LegacySubscriptionMappingDto {
   @IsUUID()
   serviceTypeId!: string;
+
+  @IsOptional()
+  @IsUUID()
+  servicePackageId?: string;
 
   @IsString()
   @Length(2, 250)
@@ -117,6 +170,17 @@ export class LegacySubscriptionMappingDto {
 
   @IsEnum(BillingFrequency)
   billingFrequency!: BillingFrequency;
+
+  @IsInt()
+  @Min(1)
+  @Max(120)
+  renewalIntervalMonths!: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(120)
+  contractTermMonths?: number;
 
   @IsOptional()
   @Matches(MONEY)
@@ -143,6 +207,38 @@ export class LegacySubscriptionMappingDto {
   @IsOptional()
   @IsEnum(SubscriptionStatus)
   status: SubscriptionStatus = SubscriptionStatus.ACTIVE;
+
+  @IsString()
+  @MaxLength(191)
+  sourceRegistration!: string;
+
+  @IsString()
+  @Length(2, 191)
+  packageNameSnapshot!: string;
+
+  @IsOptional()
+  @IsObject()
+  packageSpecificationsSnapshot?: Record<string, unknown>;
+
+  @IsBoolean()
+  customPackage!: boolean;
+
+  @IsEnum(PackageClassificationStatus)
+  classificationStatus!: PackageClassificationStatus;
+
+  @IsObject()
+  classificationEvidence!: Record<string, unknown>;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(5000)
+  priceOverrideReason?: string;
+
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => LegacySubscriptionIdentifierDto)
+  @ArrayMaxSize(50)
+  identifiers: LegacySubscriptionIdentifierDto[] = [];
 
   @IsOptional()
   @IsString()

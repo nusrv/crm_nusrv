@@ -13,6 +13,7 @@ const result = spawnSync(
     '../../node_modules/jest/bin/jest.js',
     'prisma/mariadb-live.spec.ts',
     'prisma/mariadb-phase2-live.spec.ts',
+    'prisma/mariadb-phase21-live.spec.ts',
     '--runInBand',
   ],
   { stdio: 'inherit', env: process.env },

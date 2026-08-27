@@ -1,7 +1,52 @@
 import { Transform } from 'class-transformer';
-import { IsEmail, IsEnum, IsOptional, IsString, IsUUID, Length, MaxLength } from 'class-validator';
-import { CustomerStatus } from '../../generated/prisma/enums';
+import {
+  IsBoolean,
+  IsEmail,
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Length,
+  MaxLength,
+} from 'class-validator';
+import { CustomerContactRole, CustomerStatus } from '../../generated/prisma/enums';
 import { PageQueryDto } from '../../common/page-query.dto';
+
+export class CreateCustomerContactDto {
+  @IsEnum(CustomerContactRole)
+  role!: CustomerContactRole;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  name?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => (value ? String(value).trim().toLowerCase() : undefined))
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  phone?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  primary = false;
+}
+
+export class UpdateCustomerContactDto {
+  @IsOptional() @IsEnum(CustomerContactRole) role?: CustomerContactRole;
+  @IsOptional() @IsString() @MaxLength(191) name?: string;
+  @IsOptional()
+  @Transform(({ value }) => (value ? String(value).trim().toLowerCase() : undefined))
+  @IsEmail()
+  email?: string;
+  @IsOptional() @IsString() @MaxLength(80) phone?: string;
+  @IsOptional() @IsBoolean() primary?: boolean;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
 
 export class CustomerListQueryDto extends PageQueryDto {
   @IsOptional()

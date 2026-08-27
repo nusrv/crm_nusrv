@@ -15,6 +15,7 @@ import { CustomersModule } from './modules/customers/customers.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { LegacyImportModule } from './modules/legacy-import/legacy-import.module';
 import { RenewalCasesModule } from './modules/renewal-cases/renewal-cases.module';
+import { ServicePackagesModule } from './modules/service-packages/service-packages.module';
 import { ServiceTypesModule } from './modules/service-types/service-types.module';
 import { SubscriptionConnectionsModule } from './modules/subscription-connections/subscription-connections.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
@@ -37,6 +38,7 @@ import { TimeModule } from './time/time.module';
     BillingEntitiesModule,
     CustomersModule,
     ServiceTypesModule,
+    ServicePackagesModule,
     SubscriptionsModule,
     TechnicalConnectionsModule,
     SubscriptionConnectionsModule,

@@ -30,6 +30,15 @@ interface Customer {
   billingEntityId: string;
   billingEntity: BillingEntity;
   _count: { subscriptions: number };
+  contacts?: Array<{
+    id: string;
+    role: string;
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+    primary: boolean;
+    active: boolean;
+  }>;
   subscriptions?: Array<{
     id: string;
     subscriptionCode: string;
@@ -85,6 +94,30 @@ export function CustomersManager() {
       setError(cause instanceof Error ? cause.message : 'Load failed.'),
     );
   }, [load]);
+
+  async function addContact(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!detail) return;
+    const form = new FormData(event.currentTarget);
+    const value = (name: string) => String(form.get(name) ?? '').trim();
+    try {
+      await apiRequest(`/customers/${detail.id}/contacts`, {
+        method: 'POST',
+        body: JSON.stringify({
+          role: value('role'),
+          name: value('name') || undefined,
+          email: value('email') || undefined,
+          phone: value('phone') || undefined,
+          primary: value('primary') === 'true',
+        }),
+      });
+      setDetail(await apiRequest<Customer>(`/customers/${detail.id}`));
+      setSuccess('Customer contact saved and audited.');
+      event.currentTarget.reset();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Contact save failed.');
+    }
+  }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -346,7 +379,55 @@ export function CustomersManager() {
       </section>
       {detail && (
         <section className="panel mt-6">
-          <h3 className="font-semibold">{detail.companyName} subscriptions</h3>
+          <h3 className="font-semibold">{detail.companyName}</h3>
+          <h4 className="mt-4 font-medium">Contacts</h4>
+          <div className="mt-2 space-y-2">
+            {detail.contacts
+              ?.filter((contact) => contact.active)
+              .map((contact) => (
+                <div
+                  className="rounded-lg border border-[var(--line)] p-3 text-sm"
+                  key={contact.id}
+                >
+                  <strong>
+                    {contact.role}
+                    {contact.primary ? ' · Primary' : ''}
+                  </strong>{' '}
+                  · {contact.name ?? 'Unnamed'} · {contact.email ?? 'No email'} ·{' '}
+                  {contact.phone ?? 'No phone'}
+                </div>
+              ))}
+          </div>
+          {canManage && (
+            <form className="form-grid mt-4" onSubmit={(event) => void addContact(event)}>
+              <label className="field">
+                <span>Contact role</span>
+                <select name="role">
+                  <option>PRIMARY</option>
+                  <option>BILLING</option>
+                  <option>TECHNICAL</option>
+                  <option>MANAGEMENT</option>
+                  <option>OTHER</option>
+                </select>
+              </label>
+              <Field label="Contact name" name="name" value="" />
+              <Field label="Contact email" name="email" value="" type="email" />
+              <Field label="Contact phone" name="phone" value="" />
+              <label className="field">
+                <span>Primary</span>
+                <select name="primary">
+                  <option value="false">No</option>
+                  <option value="true">Yes</option>
+                </select>
+              </label>
+              <div className="field-wide">
+                <button className="button-small" type="submit">
+                  Add contact
+                </button>
+              </div>
+            </form>
+          )}
+          <h4 className="mt-6 font-medium">Subscriptions</h4>
           <div className="mt-3 space-y-2">
             {detail.subscriptions?.length ? (
               detail.subscriptions.map((subscription) => (

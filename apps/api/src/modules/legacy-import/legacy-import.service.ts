@@ -91,7 +91,7 @@ export class LegacyImportService {
     if (!parsedRows.length)
       throw new BadRequestException('The workbook contains no stageable rows.');
 
-    const [customers, billingEntities, serviceTypes] = await Promise.all([
+    const [customers, billingEntities, serviceTypes, servicePackages] = await Promise.all([
       this.prisma.customer.findMany({
         select: {
           id: true,
@@ -110,6 +110,17 @@ export class LegacyImportService {
       this.prisma.serviceType.findMany({
         where: { active: true },
         select: { id: true, name: true },
+      }),
+      this.prisma.servicePackage.findMany({
+        where: { active: true },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          kind: true,
+          serviceTypeId: true,
+          specifications: true,
+        },
       }),
     ]);
 
@@ -131,7 +142,13 @@ export class LegacyImportService {
         const serviceType = serviceTypes.find(
           (entry) => normalize(entry.name) === normalize(row.suggestions.serviceTypeName),
         );
+        const servicePackage = servicePackages.find(
+          (entry) => entry.code === row.suggestions.servicePackageCode,
+        );
         const issues = [...row.suggestions.issues];
+        if (row.suggestions.servicePackageCode && !servicePackage) {
+          issues.push('Suggested package is not present in the active catalog.');
+        }
         if (duplicateCandidates.length) {
           issues.push('Possible duplicate customer requires an explicit human resolution.');
         }
@@ -144,20 +161,35 @@ export class LegacyImportService {
           address: row.suggestions.address,
           billingEntityId: billingEntity?.id,
           preferredLanguage: 'en',
+          contacts: row.suggestions.contacts,
         });
         const mappedSubscriptions = serviceType
           ? [
               compactJson({
                 serviceTypeId: serviceType.id,
-                name: row.suggestions.serviceTypeName,
+                servicePackageId: servicePackage?.id,
+                name: row.suggestions.servicePackageName ?? row.suggestions.serviceTypeName,
                 description: row.suggestions.description,
                 startDate: null,
-                renewalDate: row.suggestions.renewalDate,
+                renewalDate: null,
                 billingFrequency: row.suggestions.billingFrequency,
+                renewalIntervalMonths: row.suggestions.renewalIntervalMonths,
+                contractTermMonths: row.suggestions.renewalIntervalMonths,
                 sellingPrice: row.suggestions.sellingPrice,
                 currency: row.suggestions.currency,
                 providerAutoRenews: true,
                 graceHours: 24,
+                sourceRegistration: row.suggestions.sourceRegistration,
+                packageNameSnapshot:
+                  row.suggestions.servicePackageName ?? row.suggestions.sourcePackageName,
+                packageSpecificationsSnapshot: servicePackage?.specifications,
+                customPackage: row.suggestions.classificationStatus === 'CUSTOM',
+                classificationStatus: row.suggestions.classificationStatus,
+                classificationEvidence: {
+                  ...row.suggestions.classificationEvidence,
+                  sourceRenewalReminderDate: row.suggestions.sourceRenewalReminderDate,
+                },
+                identifiers: row.suggestions.identifiers,
               }),
             ]
           : [];
@@ -410,12 +442,21 @@ export class LegacyImportService {
         customerId = customer.id;
       } else {
         if (!mapping.customer) throw new BadRequestException('Mapped customer data is required.');
+        const { contacts, ...customerInput } = mapping.customer;
         const customer = await tx.customer.create({
           data: {
-            ...mapping.customer,
+            ...customerInput,
             customerCode: this.generatedCode('LEG-C', row.sourceReference),
             sourceLegacyReference: row.sourceReference,
             status: CustomerStatus.ACTIVE,
+            contacts: contacts?.length
+              ? {
+                  create: contacts.map((contact) => ({
+                    ...contact,
+                    sourceLegacyReference: row.sourceReference,
+                  })),
+                }
+              : undefined,
           },
         });
         customerId = customer.id;
@@ -436,9 +477,16 @@ export class LegacyImportService {
 
       const subscriptions = [];
       for (const [index, subscriptionInput] of mapping.subscriptions.entries()) {
+        const { identifiers, ...liveSubscriptionInput } = subscriptionInput;
         const subscription = await tx.subscription.create({
           data: {
-            ...subscriptionInput,
+            ...liveSubscriptionInput,
+            packageSpecificationsSnapshot: liveSubscriptionInput.packageSpecificationsSnapshot
+              ? asJson(liveSubscriptionInput.packageSpecificationsSnapshot)
+              : undefined,
+            classificationEvidence: liveSubscriptionInput.classificationEvidence
+              ? asJson(liveSubscriptionInput.classificationEvidence)
+              : undefined,
             customerId,
             subscriptionCode: this.generatedCode(
               'LEG-S',
@@ -447,6 +495,7 @@ export class LegacyImportService {
             startDate: new Date(subscriptionInput.startDate),
             renewalDate: new Date(subscriptionInput.renewalDate),
             sourceLegacyReference: row.sourceReference,
+            identifiers: identifiers?.length ? { create: identifiers } : undefined,
           },
         });
         await tx.legacyImportSubscriptionLink.create({
@@ -510,6 +559,13 @@ export class LegacyImportService {
         throw new BadRequestException('Each renewal date must be after its start date.');
       }
     }
+    if (
+      input.subscriptions.some((subscription) =>
+        ['UNCLASSIFIED', 'MANUAL_REVIEW'].includes(subscription.classificationStatus),
+      )
+    ) {
+      throw new BadRequestException('Resolve every package classification before approval.');
+    }
     const serviceTypes = await this.prisma.serviceType.findMany({
       where: {
         id: { in: input.subscriptions.map((subscription) => subscription.serviceTypeId) },
@@ -521,6 +577,32 @@ export class LegacyImportService {
       serviceTypes.length !== new Set(input.subscriptions.map((entry) => entry.serviceTypeId)).size
     ) {
       throw new BadRequestException('Every mapped Service Type must exist and be active.');
+    }
+    const packageIds = input.subscriptions
+      .map((entry) => entry.servicePackageId)
+      .filter((id): id is string => Boolean(id));
+    const servicePackages = await this.prisma.servicePackage.findMany({
+      where: { id: { in: packageIds }, active: true },
+      select: { id: true, serviceTypeId: true, kind: true },
+    });
+    const packagesById = new Map(servicePackages.map((entry) => [entry.id, entry]));
+    for (const subscription of input.subscriptions) {
+      const servicePackage = subscription.servicePackageId
+        ? packagesById.get(subscription.servicePackageId)
+        : undefined;
+      if (!servicePackage || servicePackage.serviceTypeId !== subscription.serviceTypeId) {
+        throw new BadRequestException(
+          'Select an active package belonging to the mapped Service Type.',
+        );
+      }
+      if (
+        subscription.classificationStatus === 'CUSTOM' &&
+        (servicePackage.kind !== 'CUSTOM_TEMPLATE' || !subscription.customPackage)
+      ) {
+        throw new BadRequestException(
+          'Custom classification requires the service-specific Custom package.',
+        );
+      }
     }
 
     if (input.customerResolution === LegacyCustomerResolution.ATTACH_EXISTING) {

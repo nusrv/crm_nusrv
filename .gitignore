@@ -56,3 +56,6 @@ tmp/
 
 # The owner-supplied legacy workbook contains real migration data and credential material.
 SOURCE/Project monitoring report.xls
+
+# Owner working data and database-preparation files must never enter source control.
+dont_push_to_git/

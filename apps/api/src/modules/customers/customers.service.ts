@@ -5,10 +5,17 @@ import { pageMetadata } from '../../common/page-query.dto';
 import { throwMappedPrismaError } from '../../common/prisma-errors';
 import { PrismaService } from '../../database/prisma.service';
 import { ActorType, CustomerStatus } from '../../generated/prisma/enums';
-import type { CreateCustomerDto, CustomerListQueryDto, UpdateCustomerDto } from './customers.dto';
+import type {
+  CreateCustomerContactDto,
+  CreateCustomerDto,
+  CustomerListQueryDto,
+  UpdateCustomerContactDto,
+  UpdateCustomerDto,
+} from './customers.dto';
 
 const customerInclude = {
   billingEntity: { select: { id: true, code: true, name: true, active: true } },
+  contacts: { orderBy: { createdAt: 'asc' as const } },
   _count: { select: { subscriptions: true } },
 } as const;
 
@@ -123,6 +130,65 @@ export class CustomersService {
     } catch (error) {
       throwMappedPrismaError(error);
     }
+  }
+
+  async createContact(
+    customerId: string,
+    input: CreateCustomerContactDto,
+    context: MutationContext,
+  ) {
+    if (
+      !(await this.prisma.customer.findUnique({ where: { id: customerId }, select: { id: true } }))
+    ) {
+      throw new NotFoundException('Customer not found.');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const contact = await tx.customerContact.create({ data: { ...input, customerId } });
+      await this.audit.record(
+        {
+          actorType: ActorType.USER,
+          actorId: context.actorId,
+          eventKey: 'customer.contact_created',
+          subjectType: 'CustomerContact',
+          subjectId: contact.id,
+          newState: contact,
+          metadata: { customerId },
+          ipAddress: context.ipAddress,
+        },
+        tx,
+      );
+      return contact;
+    });
+  }
+
+  async updateContact(
+    customerId: string,
+    contactId: string,
+    input: UpdateCustomerContactDto,
+    context: MutationContext,
+  ) {
+    const oldState = await this.prisma.customerContact.findFirst({
+      where: { id: contactId, customerId },
+    });
+    if (!oldState) throw new NotFoundException('Customer contact not found.');
+    return this.prisma.$transaction(async (tx) => {
+      const contact = await tx.customerContact.update({ where: { id: contactId }, data: input });
+      await this.audit.record(
+        {
+          actorType: ActorType.USER,
+          actorId: context.actorId,
+          eventKey: 'customer.contact_updated',
+          subjectType: 'CustomerContact',
+          subjectId: contact.id,
+          oldState,
+          newState: contact,
+          metadata: { customerId },
+          ipAddress: context.ipAddress,
+        },
+        tx,
+      );
+      return contact;
+    });
   }
 
   async deactivate(id: string, context: MutationContext) {

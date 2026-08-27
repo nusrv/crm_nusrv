@@ -145,6 +145,35 @@ enum RenewalDecisionOutcome {
   DUPLICATE_PREVENTED
 }
 
+enum PackageKind {
+  STANDARD
+  ADD_ON
+  CUSTOM_TEMPLATE
+}
+
+enum PackageClassificationStatus {
+  UNCLASSIFIED
+  MATCHED_OFFICIAL
+  CUSTOM
+  MANUAL_REVIEW
+}
+
+enum CustomerContactRole {
+  PRIMARY
+  BILLING
+  TECHNICAL
+  MANAGEMENT
+  OTHER
+}
+
+enum SubscriptionIdentifierType {
+  DOMAIN
+  HOSTNAME
+  MAIL_DOMAIN
+  SERVER_ACCOUNT
+  OTHER
+}
+
 model BillingEntity {
   id                     String            @id @default(uuid()) @db.VarChar(36)
   name                   String
@@ -185,6 +214,7 @@ model Customer {
   updatedAt             DateTime              @updatedAt @map("updated_at")
   billingEntity         BillingEntity         @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
   subscriptions         Subscription[]
+  contacts              CustomerContact[]
   communicationOutbox   CommunicationOutbox[]
   legacyCandidateRows   LegacyImportRow[]     @relation("LegacyCandidateCustomer")
   legacyApprovedRows    LegacyImportRow[]     @relation("LegacyApprovedCustomer")
@@ -195,51 +225,137 @@ model Customer {
   @@map("customers")
 }
 
+model CustomerContact {
+  id                    String              @id @default(uuid()) @db.VarChar(36)
+  customerId            String              @map("customer_id") @db.VarChar(36)
+  role                  CustomerContactRole @default(OTHER)
+  name                  String?             @db.VarChar(191)
+  email                 String?             @db.VarChar(320)
+  phone                 String?             @db.VarChar(80)
+  primary               Boolean             @default(false)
+  active                Boolean             @default(true)
+  sourceLegacyReference String?             @map("source_legacy_reference") @db.VarChar(500)
+  createdAt             DateTime            @default(now()) @map("created_at")
+  updatedAt             DateTime            @updatedAt @map("updated_at")
+  customer              Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, active])
+  @@index([email])
+  @@map("customer_contacts")
+}
+
 model ServiceType {
-  id                   String         @id @default(uuid()) @db.VarChar(36)
-  code                 String         @unique
+  id                   String           @id @default(uuid()) @db.VarChar(36)
+  code                 String           @unique
   name                 String
   description          String?
-  active               Boolean        @default(true)
-  defaultSuspendPolicy Json?          @map("default_suspend_policy")
-  createdAt            DateTime       @default(now()) @map("created_at")
-  updatedAt            DateTime       @updatedAt @map("updated_at")
+  active               Boolean          @default(true)
+  defaultSuspendPolicy Json?            @map("default_suspend_policy")
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
   subscriptions        Subscription[]
+  packages             ServicePackage[]
 
   @@map("service_types")
 }
 
+model ServicePackage {
+  id              String               @id @default(uuid()) @db.VarChar(36)
+  serviceTypeId   String               @map("service_type_id") @db.VarChar(36)
+  code            String               @unique @db.VarChar(100)
+  name            String               @db.VarChar(191)
+  kind            PackageKind          @default(STANDARD)
+  description     String?              @db.Text
+  specifications  Json?
+  sourceReference String?              @map("source_reference") @db.VarChar(500)
+  active          Boolean              @default(true)
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+  serviceType     ServiceType          @relation(fields: [serviceTypeId], references: [id], onDelete: Restrict)
+  terms           ServicePackageTerm[]
+  subscriptions   Subscription[]
+
+  @@index([serviceTypeId, active])
+  @@map("service_packages")
+}
+
+model ServicePackageTerm {
+  id                   String         @id @default(uuid()) @db.VarChar(36)
+  servicePackageId     String         @map("service_package_id") @db.VarChar(36)
+  termMonths           Int            @map("term_months")
+  currency             String         @db.VarChar(3)
+  standardSellingPrice Decimal        @map("standard_selling_price") @db.Decimal(14, 3)
+  standardSupplierCost Decimal?       @map("standard_supplier_cost") @db.Decimal(14, 3)
+  active               Boolean        @default(true)
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
+  servicePackage       ServicePackage @relation(fields: [servicePackageId], references: [id], onDelete: Restrict)
+
+  @@unique([servicePackageId, termMonths, currency])
+  @@index([active])
+  @@map("service_package_terms")
+}
+
 model Subscription {
-  id                    String                        @id @default(uuid()) @db.VarChar(36)
-  customerId            String                        @map("customer_id") @db.VarChar(36)
-  serviceTypeId         String                        @map("service_type_id") @db.VarChar(36)
-  subscriptionCode      String                        @unique @map("subscription_code")
-  name                  String
-  description           String?
-  startDate             DateTime                      @map("start_date") @db.Date
-  renewalDate           DateTime                      @map("renewal_date") @db.Date
-  billingFrequency      BillingFrequency              @map("billing_frequency")
-  supplierCost          Decimal?                      @map("supplier_cost") @db.Decimal(14, 3)
-  sellingPrice          Decimal                       @map("selling_price") @db.Decimal(14, 3)
-  currency              String                        @db.VarChar(3)
-  providerAutoRenews    Boolean                       @default(true) @map("provider_auto_renews")
-  status                SubscriptionStatus            @default(ACTIVE)
-  graceHours            Int                           @default(24) @map("grace_hours")
-  sourceLegacyReference String?                       @map("source_legacy_reference")
-  notes                 String?                       @db.Text
-  createdAt             DateTime                      @default(now()) @map("created_at")
-  updatedAt             DateTime                      @updatedAt @map("updated_at")
-  customer              Customer                      @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  serviceType           ServiceType                   @relation(fields: [serviceTypeId], references: [id], onDelete: Restrict)
-  connections           SubscriptionConnection[]
-  renewalCases          RenewalCase[]
-  communicationOutbox   CommunicationOutbox[]
-  legacyImportSource    LegacyImportSubscriptionLink?
+  id                            String                        @id @default(uuid()) @db.VarChar(36)
+  customerId                    String                        @map("customer_id") @db.VarChar(36)
+  serviceTypeId                 String                        @map("service_type_id") @db.VarChar(36)
+  servicePackageId              String?                       @map("service_package_id") @db.VarChar(36)
+  subscriptionCode              String                        @unique @map("subscription_code")
+  name                          String
+  description                   String?
+  startDate                     DateTime                      @map("start_date") @db.Date
+  renewalDate                   DateTime                      @map("renewal_date") @db.Date
+  billingFrequency              BillingFrequency              @map("billing_frequency")
+  renewalIntervalMonths         Int?                          @map("renewal_interval_months")
+  contractTermMonths            Int?                          @map("contract_term_months")
+  supplierCost                  Decimal?                      @map("supplier_cost") @db.Decimal(14, 3)
+  sellingPrice                  Decimal                       @map("selling_price") @db.Decimal(14, 3)
+  currency                      String                        @db.VarChar(3)
+  providerAutoRenews            Boolean                       @default(true) @map("provider_auto_renews")
+  status                        SubscriptionStatus            @default(ACTIVE)
+  graceHours                    Int                           @default(24) @map("grace_hours")
+  sourceLegacyReference         String?                       @map("source_legacy_reference")
+  sourceRegistration            String?                       @map("source_registration") @db.VarChar(191)
+  packageNameSnapshot           String?                       @map("package_name_snapshot") @db.VarChar(191)
+  packageSpecificationsSnapshot Json?                         @map("package_specifications_snapshot")
+  customPackage                 Boolean                       @default(false) @map("custom_package")
+  classificationStatus          PackageClassificationStatus   @default(UNCLASSIFIED) @map("classification_status")
+  classificationEvidence        Json?                         @map("classification_evidence")
+  priceOverrideReason           String?                       @map("price_override_reason") @db.Text
+  notes                         String?                       @db.Text
+  createdAt                     DateTime                      @default(now()) @map("created_at")
+  updatedAt                     DateTime                      @updatedAt @map("updated_at")
+  customer                      Customer                      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  serviceType                   ServiceType                   @relation(fields: [serviceTypeId], references: [id], onDelete: Restrict)
+  servicePackage                ServicePackage?               @relation(fields: [servicePackageId], references: [id], onDelete: Restrict)
+  identifiers                   SubscriptionIdentifier[]
+  connections                   SubscriptionConnection[]
+  renewalCases                  RenewalCase[]
+  communicationOutbox           CommunicationOutbox[]
+  legacyImportSource            LegacyImportSubscriptionLink?
 
   @@index([customerId])
   @@index([serviceTypeId])
+  @@index([servicePackageId])
   @@index([renewalDate, status])
   @@map("subscriptions")
+}
+
+model SubscriptionIdentifier {
+  id             String                     @id @default(uuid()) @db.VarChar(36)
+  subscriptionId String                     @map("subscription_id") @db.VarChar(36)
+  type           SubscriptionIdentifierType
+  value          String                     @db.VarChar(500)
+  label          String?                    @db.VarChar(191)
+  active         Boolean                    @default(true)
+  createdAt      DateTime                   @default(now()) @map("created_at")
+  updatedAt      DateTime                   @updatedAt @map("updated_at")
+  subscription   Subscription               @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+
+  @@unique([subscriptionId, type, value])
+  @@index([value])
+  @@map("subscription_identifiers")
 }
 
 model TechnicalConnection {

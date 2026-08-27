@@ -26,6 +26,7 @@ const liveDescribe = databaseUrl ? describe : describe.skip;
 const migrations = [
   '20260823000000_mariadb_phase_0_1_foundation',
   '20260824000000_phase_2_renewal_engine',
+  '20260827000000_phase_2_1_operational_data',
 ]
   .map((directory) =>
     readFileSync(join(process.cwd(), 'prisma', 'migrations', directory, 'migration.sql'), 'utf8'),

@@ -14,6 +14,8 @@ import type {
 const subscriptionInclude = {
   customer: { select: { id: true, customerCode: true, companyName: true, status: true } },
   serviceType: { select: { id: true, code: true, name: true, active: true } },
+  servicePackage: { include: { terms: { orderBy: { termMonths: 'asc' as const } } } },
+  identifiers: { orderBy: { createdAt: 'asc' as const } },
   connections: {
     include: {
       technicalConnection: {
@@ -78,14 +80,31 @@ export class SubscriptionsService {
 
   async create(input: CreateSubscriptionDto, context: MutationContext) {
     this.validateDates(input.startDate, input.renewalDate);
-    await this.requireParents(input.customerId, input.serviceTypeId);
+    const servicePackage = await this.requireParents(
+      input.customerId,
+      input.serviceTypeId,
+      input.servicePackageId,
+    );
+    const { identifiers, ...subscriptionInput } = input;
     try {
       return await this.prisma.$transaction(async (tx) => {
         const subscription = await tx.subscription.create({
           data: {
-            ...input,
+            ...subscriptionInput,
             startDate: new Date(input.startDate),
             renewalDate: new Date(input.renewalDate),
+            packageNameSnapshot: servicePackage?.name,
+            packageSpecificationsSnapshot: servicePackage?.specifications ?? undefined,
+            customPackage: servicePackage?.kind === 'CUSTOM_TEMPLATE',
+            classificationStatus: servicePackage
+              ? servicePackage.kind === 'CUSTOM_TEMPLATE'
+                ? 'CUSTOM'
+                : 'MATCHED_OFFICIAL'
+              : 'UNCLASSIFIED',
+            classificationEvidence: servicePackage
+              ? { selectedByUser: context.actorId, packageCode: servicePackage.code }
+              : undefined,
+            identifiers: identifiers?.length ? { create: identifiers } : undefined,
           },
           include: subscriptionInclude,
         });
@@ -113,16 +132,35 @@ export class SubscriptionsService {
     const startDate = input.startDate ?? oldState.startDate.toISOString();
     const renewalDate = input.renewalDate ?? oldState.renewalDate.toISOString();
     this.validateDates(startDate, renewalDate);
-    if (input.customerId || input.serviceTypeId) {
-      await this.requireParents(
-        input.customerId ?? oldState.customerId,
-        input.serviceTypeId ?? oldState.serviceTypeId,
-      );
-    }
+    const parentChanged = input.customerId || input.serviceTypeId || input.servicePackageId;
+    const servicePackage = parentChanged
+      ? await this.requireParents(
+          input.customerId ?? oldState.customerId,
+          input.serviceTypeId ?? oldState.serviceTypeId,
+          input.servicePackageId ?? oldState.servicePackageId ?? undefined,
+        )
+      : oldState.servicePackage;
+    const { identifiers, ...subscriptionInput } = input;
     const data = {
-      ...input,
+      ...subscriptionInput,
       startDate: input.startDate ? new Date(input.startDate) : undefined,
       renewalDate: input.renewalDate ? new Date(input.renewalDate) : undefined,
+      packageNameSnapshot: input.servicePackageId ? servicePackage?.name : undefined,
+      packageSpecificationsSnapshot: input.servicePackageId
+        ? (servicePackage?.specifications ?? undefined)
+        : undefined,
+      customPackage: input.servicePackageId
+        ? servicePackage?.kind === 'CUSTOM_TEMPLATE'
+        : undefined,
+      classificationStatus: input.servicePackageId
+        ? servicePackage?.kind === 'CUSTOM_TEMPLATE'
+          ? ('CUSTOM' as const)
+          : ('MATCHED_OFFICIAL' as const)
+        : undefined,
+      classificationEvidence: input.servicePackageId
+        ? { selectedByUser: context.actorId, packageCode: servicePackage?.code }
+        : undefined,
+      identifiers: identifiers ? { deleteMany: {}, create: identifiers } : undefined,
     };
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -157,15 +195,40 @@ export class SubscriptionsService {
     }
   }
 
-  private async requireParents(customerId: string, serviceTypeId: string): Promise<void> {
-    const [customer, serviceType] = await Promise.all([
+  private async requireParents(
+    customerId: string,
+    serviceTypeId: string,
+    servicePackageId?: string,
+  ) {
+    const [customer, serviceType, servicePackage] = await Promise.all([
       this.prisma.customer.findUnique({ where: { id: customerId }, select: { status: true } }),
       this.prisma.serviceType.findUnique({
         where: { id: serviceTypeId },
         select: { active: true },
       }),
+      servicePackageId
+        ? this.prisma.servicePackage.findUnique({
+            where: { id: servicePackageId },
+            select: {
+              id: true,
+              code: true,
+              name: true,
+              kind: true,
+              specifications: true,
+              serviceTypeId: true,
+              active: true,
+            },
+          })
+        : null,
     ]);
     if (!customer) throw new BadRequestException('Customer does not exist.');
     if (!serviceType?.active) throw new BadRequestException('An active Service Type is required.');
+    if (
+      servicePackageId &&
+      (!servicePackage?.active || servicePackage.serviceTypeId !== serviceTypeId)
+    ) {
+      throw new BadRequestException('Select an active package belonging to the Service Type.');
+    }
+    return servicePackage;
   }
 }

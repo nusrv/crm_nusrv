@@ -22,6 +22,8 @@ describe('Phase 0 seed data', () => {
       'DEDICATED_SERVER',
       'SUPPORT',
       'ANTIVIRUS',
+      'DNS_HOSTING',
+      'APP_SUBSCRIPTION',
     ]);
     expect(roleSeeds.map(({ code }) => code)).toEqual(ROLE_CODES);
     expect(reminderRuleSeeds.map(({ daysBeforeDue }) => daysBeforeDue)).toEqual([

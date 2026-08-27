@@ -18,7 +18,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "test:db:mariadb": "node scripts/run-mariadb-integration.mjs",
     "dev:worker": "nest start --watch --entryFile worker-main",
-    "start:worker": "node dist/worker-main.js"
+    "start:worker": "node dist/worker-main.js",
+    "dry-run:phase21": "tsx scripts/phase21-workbook-dry-run.ts"
   },
   "dependencies": {
     "@cp/shared": "*",

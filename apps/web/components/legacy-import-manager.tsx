@@ -13,7 +13,6 @@ interface Batch {
   status: string;
   totalRows: number;
   createdAt: string;
-  _count?: { rows: number };
   summary?: Record<string, number>;
 }
 interface DuplicateCandidate {
@@ -23,14 +22,77 @@ interface DuplicateCandidate {
   reasons: string[];
   score: number;
 }
+interface ServiceType {
+  id: string;
+  name: string;
+  active: boolean;
+}
+interface BillingEntity {
+  id: string;
+  name: string;
+  active: boolean;
+}
+interface CustomerOption {
+  id: string;
+  customerCode: string;
+  companyName: string;
+}
+interface PackageOption {
+  id: string;
+  serviceTypeId: string;
+  code: string;
+  name: string;
+  kind: string;
+  specifications: Record<string, unknown> | null;
+}
+interface CustomerDraft {
+  companyName?: string;
+  contactName?: string;
+  primaryEmail?: string;
+  secondaryEmail?: string;
+  phone?: string;
+  address?: string;
+  country?: string;
+  taxNumber?: string;
+  preferredLanguage?: string;
+  billingEntityId?: string;
+  notes?: string;
+  contacts?: Array<Record<string, unknown>>;
+}
+interface SubscriptionDraft {
+  serviceTypeId?: string;
+  servicePackageId?: string;
+  name?: string;
+  description?: string;
+  startDate?: string | null;
+  renewalDate?: string | null;
+  billingFrequency?: string;
+  renewalIntervalMonths?: number | null;
+  contractTermMonths?: number | null;
+  supplierCost?: string;
+  sellingPrice?: string;
+  currency?: string;
+  providerAutoRenews?: boolean;
+  graceHours?: number;
+  status?: string;
+  sourceRegistration?: string;
+  packageNameSnapshot?: string;
+  packageSpecificationsSnapshot?: Record<string, unknown>;
+  customPackage?: boolean;
+  classificationStatus?: string;
+  classificationEvidence?: Record<string, unknown>;
+  priceOverrideReason?: string;
+  identifiers?: Array<{ type: string; value: string; label?: string }>;
+  notes?: string;
+}
 interface ImportRow {
   id: string;
   sheetName: string;
   sourceRowNumber: number;
   sourceReference: string;
   rawPreview: Record<string, unknown>;
-  mappedCustomer: Record<string, unknown> | null;
-  mappedSubscriptions: Array<Record<string, unknown>> | null;
+  mappedCustomer: CustomerDraft | null;
+  mappedSubscriptions: SubscriptionDraft[] | null;
   duplicateCandidates: DuplicateCandidate[];
   validationIssues: string[];
   status: string;
@@ -42,6 +104,25 @@ interface ImportRow {
   subscriptionLinks: Array<{ subscription: { subscriptionCode: string; name: string } }>;
 }
 
+const emptySubscription = (): SubscriptionDraft => ({
+  startDate: '',
+  renewalDate: '',
+  billingFrequency: 'ANNUAL',
+  renewalIntervalMonths: 12,
+  contractTermMonths: 12,
+  sellingPrice: '',
+  currency: 'JOD',
+  providerAutoRenews: true,
+  graceHours: 24,
+  status: 'ACTIVE',
+  sourceRegistration: '',
+  packageNameSnapshot: '',
+  customPackage: false,
+  classificationStatus: 'MANUAL_REVIEW',
+  classificationEvidence: {},
+  identifiers: [],
+});
+
 export function LegacyImportManager() {
   const { can } = useControlPanel();
   const canReview = can('ADMIN', 'SALES_DEVELOPMENT');
@@ -49,9 +130,18 @@ export function LegacyImportManager() {
   const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [editing, setEditing] = useState<ImportRow | null>(null);
+  const [customer, setCustomer] = useState<CustomerDraft>({});
+  const [subscriptions, setSubscriptions] = useState<SubscriptionDraft[]>([]);
+  const [resolution, setResolution] = useState('CREATE_NEW');
+  const [candidateCustomerId, setCandidateCustomerId] = useState('');
+  const [types, setTypes] = useState<ServiceType[]>([]);
+  const [packages, setPackages] = useState<PackageOption[]>([]);
+  const [entities, setEntities] = useState<BillingEntity[]>([]);
+  const [customers, setCustomers] = useState<CustomerOption[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [status, setStatus] = useState('REQUIRES_MANUAL_REVIEW');
+
   const loadBatches = useCallback(async () => {
     const result = await apiRequest<PageResult<Batch>>('/legacy-import/batches?pageSize=50');
     setBatches(result.data);
@@ -70,25 +160,40 @@ export function LegacyImportManager() {
     },
     [status],
   );
+
   useEffect(() => {
-    void loadBatches().catch((cause: unknown) =>
-      setError(cause instanceof Error ? cause.message : 'Load failed.'),
-    );
+    void Promise.all([
+      loadBatches(),
+      apiRequest<ServiceType[]>('/service-types').then(setTypes),
+      apiRequest<PackageOption[]>('/service-packages?active=true').then(setPackages),
+      apiRequest<BillingEntity[]>('/billing-entities').then(setEntities),
+      apiRequest<PageResult<CustomerOption>>('/customers?pageSize=100').then((value) =>
+        setCustomers(value.data),
+      ),
+    ]).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'));
   }, [loadBatches]);
+
+  function inspect(row: ImportRow) {
+    setEditing(row);
+    setCustomer(row.mappedCustomer ?? {});
+    setSubscriptions(
+      row.mappedSubscriptions?.length ? row.mappedSubscriptions : [emptySubscription()],
+    );
+    setResolution(row.customerResolution ?? 'CREATE_NEW');
+    setCandidateCustomerId(row.candidateCustomerId ?? '');
+  }
 
   async function upload(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    setError('');
     try {
       const result = await apiRequest<{ batch: Batch; reused: boolean }>('/legacy-import/batches', {
         method: 'POST',
-        body: form,
+        body: new FormData(event.currentTarget),
       });
       setMessage(
         result.reused
           ? 'This exact workbook was already staged; the existing batch was reused.'
-          : 'Workbook staged. Raw rows were encrypted and require human review.',
+          : 'Workbook staged. Raw rows remain encrypted and require human approval.',
       );
       await loadBatches();
       await openBatch(result.batch, '');
@@ -101,27 +206,18 @@ export function LegacyImportManager() {
     event.preventDefault();
     if (!editing) return;
     const form = new FormData(event.currentTarget);
-    const resolution = String(form.get('customerResolution'));
     try {
-      const customerText = String(form.get('mappedCustomer') ?? '').trim();
-      const subscriptionsText = String(form.get('mappedSubscriptions') ?? '').trim();
-      const body = {
-        customerResolution: resolution,
-        candidateCustomerId:
-          resolution === 'ATTACH_EXISTING' ? String(form.get('candidateCustomerId')) : undefined,
-        customer:
-          resolution === 'ATTACH_EXISTING'
-            ? undefined
-            : (JSON.parse(customerText) as Record<string, unknown>),
-        subscriptions: JSON.parse(subscriptionsText) as Array<Record<string, unknown>>,
-        resolutionNotes: String(form.get('resolutionNotes') ?? '').trim() || undefined,
-      };
       await apiRequest(`/legacy-import/rows/${editing.id}/review`, {
         method: 'PATCH',
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          customerResolution: resolution,
+          candidateCustomerId: resolution === 'ATTACH_EXISTING' ? candidateCustomerId : undefined,
+          customer: resolution === 'ATTACH_EXISTING' ? undefined : customer,
+          subscriptions,
+          resolutionNotes: String(form.get('resolutionNotes') ?? '').trim() || undefined,
+        }),
       });
-      setMessage('Staged row validated and queued for authorized approval.');
-      setError('');
+      setMessage('Structured review validated and queued for Admin approval.');
       if (selectedBatch) await openBatch(selectedBatch, status);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Review failed.');
@@ -140,11 +236,39 @@ export function LegacyImportManager() {
     }
   }
 
+  function patchSubscription(index: number, patch: Partial<SubscriptionDraft>) {
+    setSubscriptions((current) =>
+      current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)),
+    );
+  }
+  function selectPackage(index: number, packageId: string) {
+    const selected = packages.find((item) => item.id === packageId);
+    patchSubscription(
+      index,
+      selected
+        ? {
+            servicePackageId: selected.id,
+            serviceTypeId: selected.serviceTypeId,
+            name: selected.name,
+            packageNameSnapshot: selected.name,
+            packageSpecificationsSnapshot: selected.specifications ?? {},
+            customPackage: selected.kind === 'CUSTOM_TEMPLATE',
+            classificationStatus:
+              selected.kind === 'CUSTOM_TEMPLATE' ? 'CUSTOM' : 'MATCHED_OFFICIAL',
+            classificationEvidence: {
+              ...(subscriptions[index]?.classificationEvidence ?? {}),
+              humanSelectedPackageCode: selected.code,
+            },
+          }
+        : { servicePackageId: undefined, classificationStatus: 'MANUAL_REVIEW' },
+    );
+  }
+
   return (
     <>
       <PageHeading
         title="Legacy Excel import"
-        description="Raw workbook rows are staged, encrypted, validated, and explicitly approved. Suggestions never merge customers or fabricate missing service data."
+        description="Source rows are staged intact. Package, date, price, contact, duplicate, split, and merge decisions are explicit and audited."
       />
       <Notice message={error} />
       <Notice message={message} tone="success" />
@@ -154,7 +278,7 @@ export function LegacyImportManager() {
           onSubmit={(event) => void upload(event)}
         >
           <label className="field min-w-[280px]">
-            <span>Legacy Excel workbook (.xls or .xlsx, maximum 10 MB)</span>
+            <span>Untouched legacy workbook (.xls/.xlsx, max 10 MB)</span>
             <input accept=".xls,.xlsx" name="file" required type="file" />
           </label>
           <button className="button-primary" type="submit">
@@ -210,9 +334,8 @@ export function LegacyImportManager() {
                   <select
                     aria-label="Row status"
                     onChange={(event) => {
-                      const next = event.target.value;
-                      setStatus(next);
-                      void openBatch(selectedBatch, next);
+                      setStatus(event.target.value);
+                      void openBatch(selectedBatch, event.target.value);
                     }}
                     value={status}
                   >
@@ -230,6 +353,7 @@ export function LegacyImportManager() {
                       <tr>
                         <th>Source</th>
                         <th>Candidate</th>
+                        <th>Package status</th>
                         <th>Duplicates</th>
                         <th>Status</th>
                         <th />
@@ -241,13 +365,16 @@ export function LegacyImportManager() {
                           <td>
                             {row.sheetName}!{row.sourceRowNumber}
                           </td>
-                          <td>{String(row.mappedCustomer?.companyName ?? 'Unmapped')}</td>
+                          <td>{row.mappedCustomer?.companyName ?? 'Unmapped'}</td>
+                          <td>
+                            {row.mappedSubscriptions?.[0]?.classificationStatus ?? 'UNCLASSIFIED'}
+                          </td>
                           <td>{row.duplicateCandidates.length}</td>
                           <td>{row.status}</td>
                           <td>
                             <button
                               className="button-small"
-                              onClick={() => setEditing(row)}
+                              onClick={() => inspect(row)}
                               type="button"
                             >
                               Inspect
@@ -267,14 +394,11 @@ export function LegacyImportManager() {
                     </tbody>
                   </table>
                 </div>
-                {!rows.length && <p className="muted mt-4 text-sm">No rows match this filter.</p>}
               </section>
             </>
           ) : (
             <section className="panel">
-              <p className="muted text-sm">
-                Select an import batch to review its traceable rows and report.
-              </p>
+              <p className="muted text-sm">Select an import batch.</p>
             </section>
           )}
         </div>
@@ -285,7 +409,7 @@ export function LegacyImportManager() {
             <div>
               <h3 className="text-lg font-semibold">Review {editing.sourceReference}</h3>
               <p className="muted mt-1 text-sm">
-                Raw values are a redacted preview; the preserved original is encrypted at rest.
+                Redacted preview is shown; encrypted raw values remain unchanged and traceable.
               </p>
             </div>
             <button className="button-secondary" onClick={() => setEditing(null)} type="button">
@@ -294,7 +418,7 @@ export function LegacyImportManager() {
           </div>
           <div className="mt-5 grid gap-6 xl:grid-cols-2">
             <div>
-              <h4 className="font-medium">Raw source preview</h4>
+              <h4 className="font-medium">Raw source evidence</h4>
               <dl className="raw-grid mt-3">
                 {Object.entries(editing.rawPreview).map(([key, value]) => (
                   <div key={key}>
@@ -303,9 +427,9 @@ export function LegacyImportManager() {
                   </div>
                 ))}
               </dl>
-              {editing.validationIssues.length > 0 && (
+              {!!editing.validationIssues.length && (
                 <div className="notice notice-error mt-4">
-                  <strong>Validation issues</strong>
+                  <strong>Human decisions required</strong>
                   <ul className="mt-2 list-disc pl-5">
                     {editing.validationIssues.map((issue) => (
                       <li key={issue}>{issue}</li>
@@ -313,14 +437,14 @@ export function LegacyImportManager() {
                   </ul>
                 </div>
               )}
-              {editing.duplicateCandidates.length > 0 && (
+              {!!editing.duplicateCandidates.length && (
                 <div className="notice mt-4">
-                  <strong>Duplicate suggestions — human decision required</strong>
-                  {editing.duplicateCandidates.map((candidate) => (
-                    <p className="mt-2 text-sm" key={candidate.customerId}>
-                      {candidate.customerCode} · {candidate.companyName}
+                  <strong>Duplicate suggestions — no automatic merge</strong>
+                  {editing.duplicateCandidates.map((item) => (
+                    <p className="mt-2 text-sm" key={item.customerId}>
+                      {item.customerCode} · {item.companyName}
                       <br />
-                      {candidate.reasons.join(', ')}
+                      {item.reasons.join(', ')}
                     </p>
                   ))}
                 </div>
@@ -328,54 +452,279 @@ export function LegacyImportManager() {
             </div>
             <div>
               {canReview && editing.status !== 'APPROVED' ? (
-                <form className="space-y-4" onSubmit={(event) => void review(event)}>
-                  <label className="field">
-                    <span>Customer resolution</span>
-                    <select
-                      defaultValue={editing.customerResolution ?? 'CREATE_NEW'}
-                      name="customerResolution"
-                    >
-                      <option value="CREATE_NEW">Create new customer</option>
-                      <option value="NOT_DUPLICATE">Create new — suggestions rejected</option>
-                      <option value="ATTACH_EXISTING">Attach existing customer</option>
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Existing duplicate candidate (required only when attaching)</span>
-                    <select
-                      defaultValue={editing.candidateCustomerId ?? ''}
-                      name="candidateCustomerId"
-                    >
-                      <option value="">Select…</option>
-                      {editing.duplicateCandidates.map((candidate) => (
-                        <option key={candidate.customerId} value={candidate.customerId}>
-                          {candidate.customerCode} · {candidate.companyName}
+                <form className="space-y-5" onSubmit={(event) => void review(event)}>
+                  <fieldset className="space-y-3 rounded-lg border border-[var(--line)] p-4">
+                    <legend className="px-2 font-medium">Customer resolution</legend>
+                    <label className="field">
+                      <span>Decision</span>
+                      <select
+                        onChange={(event) => setResolution(event.target.value)}
+                        value={resolution}
+                      >
+                        <option value="CREATE_NEW">Create new customer</option>
+                        <option value="NOT_DUPLICATE">
+                          Create new — reject duplicate suggestions
                         </option>
-                      ))}
-                    </select>
-                  </label>
+                        <option value="ATTACH_EXISTING">Attach existing customer</option>
+                      </select>
+                    </label>
+                    {resolution === 'ATTACH_EXISTING' ? (
+                      <label className="field">
+                        <span>Existing customer</span>
+                        <select
+                          onChange={(event) => setCandidateCustomerId(event.target.value)}
+                          required
+                          value={candidateCustomerId}
+                        >
+                          <option value="">Select…</option>
+                          {customers.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.customerCode} · {item.companyName}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <>
+                        <Text
+                          label="Company name"
+                          required
+                          value={customer.companyName}
+                          onChange={(value) => setCustomer({ ...customer, companyName: value })}
+                        />
+                        <Text
+                          label="Contact name"
+                          value={customer.contactName}
+                          onChange={(value) => setCustomer({ ...customer, contactName: value })}
+                        />
+                        <Text
+                          label="Primary email"
+                          required
+                          type="email"
+                          value={customer.primaryEmail}
+                          onChange={(value) => setCustomer({ ...customer, primaryEmail: value })}
+                        />
+                        <Text
+                          label="Secondary email"
+                          type="email"
+                          value={customer.secondaryEmail}
+                          onChange={(value) => setCustomer({ ...customer, secondaryEmail: value })}
+                        />
+                        <Text
+                          label="Phone"
+                          value={customer.phone}
+                          onChange={(value) => setCustomer({ ...customer, phone: value })}
+                        />
+                        <Text
+                          label="Address"
+                          value={customer.address}
+                          onChange={(value) => setCustomer({ ...customer, address: value })}
+                        />
+                        <label className="field">
+                          <span>Billing Entity</span>
+                          <select
+                            onChange={(event) =>
+                              setCustomer({ ...customer, billingEntityId: event.target.value })
+                            }
+                            required
+                            value={customer.billingEntityId ?? ''}
+                          >
+                            <option value="">Select…</option>
+                            {entities
+                              .filter((item) => item.active)
+                              .map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.name}
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                      </>
+                    )}
+                  </fieldset>
+                  {subscriptions.map((subscription, index) => (
+                    <fieldset
+                      className="space-y-3 rounded-lg border border-[var(--line)] p-4"
+                      key={index}
+                    >
+                      <legend className="px-2 font-medium">Subscription {index + 1}</legend>
+                      <label className="field">
+                        <span>Service Type</span>
+                        <select
+                          onChange={(event) =>
+                            patchSubscription(index, {
+                              serviceTypeId: event.target.value,
+                              servicePackageId: undefined,
+                              classificationStatus: 'MANUAL_REVIEW',
+                            })
+                          }
+                          required
+                          value={subscription.serviceTypeId ?? ''}
+                        >
+                          <option value="">Select…</option>
+                          {types
+                            .filter((item) => item.active)
+                            .map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.name}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Package decision</span>
+                        <select
+                          onChange={(event) => selectPackage(index, event.target.value)}
+                          required
+                          value={subscription.servicePackageId ?? ''}
+                        >
+                          <option value="">Human selection required…</option>
+                          {packages
+                            .filter(
+                              (item) =>
+                                !subscription.serviceTypeId ||
+                                item.serviceTypeId === subscription.serviceTypeId,
+                            )
+                            .map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.name} · {item.kind}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <Text
+                        label="Sold package snapshot"
+                        required
+                        value={subscription.packageNameSnapshot}
+                        onChange={(value) =>
+                          patchSubscription(index, { packageNameSnapshot: value, name: value })
+                        }
+                      />
+                      <Text
+                        label="Source registration (preserved)"
+                        required
+                        value={subscription.sourceRegistration}
+                        onChange={(value) =>
+                          patchSubscription(index, { sourceRegistration: value })
+                        }
+                      />
+                      <Text
+                        label="Start date (confirmed)"
+                        required
+                        type="date"
+                        value={subscription.startDate ?? ''}
+                        onChange={(value) => patchSubscription(index, { startDate: value })}
+                      />
+                      <Text
+                        label="Renewal date (confirmed)"
+                        required
+                        type="date"
+                        value={subscription.renewalDate ?? ''}
+                        onChange={(value) => patchSubscription(index, { renewalDate: value })}
+                      />
+                      <label className="field">
+                        <span>Renewal interval</span>
+                        <select
+                          onChange={(event) =>
+                            patchSubscription(index, {
+                              renewalIntervalMonths: Number(event.target.value),
+                              contractTermMonths: Number(event.target.value),
+                              billingFrequency: frequency(Number(event.target.value)),
+                            })
+                          }
+                          value={String(subscription.renewalIntervalMonths ?? 12)}
+                        >
+                          <option value="12">12 months</option>
+                          <option value="24">24 months</option>
+                          <option value="36">36 months</option>
+                          <option value="60">60 months</option>
+                          {subscription.renewalIntervalMonths &&
+                            ![12, 24, 36, 60].includes(subscription.renewalIntervalMonths) && (
+                              <option value={subscription.renewalIntervalMonths}>
+                                Custom: {subscription.renewalIntervalMonths} months
+                              </option>
+                            )}
+                        </select>
+                      </label>
+                      <Text
+                        label="Custom interval months (1–120)"
+                        type="number"
+                        value={String(subscription.renewalIntervalMonths ?? '')}
+                        onChange={(value) =>
+                          patchSubscription(index, {
+                            renewalIntervalMonths: Number(value),
+                            billingFrequency: frequency(Number(value)),
+                          })
+                        }
+                      />
+                      <Text
+                        label="Selling price (actual)"
+                        required
+                        type="number"
+                        value={subscription.sellingPrice}
+                        onChange={(value) => patchSubscription(index, { sellingPrice: value })}
+                      />
+                      <Text
+                        label="Currency"
+                        required
+                        value={subscription.currency}
+                        onChange={(value) =>
+                          patchSubscription(index, { currency: value.toUpperCase() })
+                        }
+                      />
+                      <Text
+                        label="Negotiated price reason"
+                        value={subscription.priceOverrideReason}
+                        onChange={(value) =>
+                          patchSubscription(index, { priceOverrideReason: value })
+                        }
+                      />
+                      <label className="field">
+                        <span>Domains / identifiers (one per line)</span>
+                        <textarea
+                          onChange={(event) =>
+                            patchSubscription(index, {
+                              identifiers: event.target.value
+                                .split(/\r?\n/)
+                                .map((value) => value.trim())
+                                .filter(Boolean)
+                                .map((value) => ({ type: 'DOMAIN', value })),
+                            })
+                          }
+                          rows={3}
+                          value={(subscription.identifiers ?? [])
+                            .map((item) => item.value)
+                            .join('\n')}
+                        />
+                      </label>
+                      {subscriptions.length > 1 && (
+                        <button
+                          className="button-small danger"
+                          onClick={() =>
+                            setSubscriptions((current) =>
+                              current.filter((_, itemIndex) => itemIndex !== index),
+                            )
+                          }
+                          type="button"
+                        >
+                          Remove this explicitly split subscription
+                        </button>
+                      )}
+                    </fieldset>
+                  ))}
+                  <button
+                    className="button-secondary"
+                    onClick={() => setSubscriptions((current) => [...current, emptySubscription()])}
+                    type="button"
+                  >
+                    Add another subscription (explicit split)
+                  </button>
                   <label className="field">
-                    <span>Mapped customer JSON</span>
-                    <textarea
-                      defaultValue={JSON.stringify(editing.mappedCustomer ?? {}, null, 2)}
-                      name="mappedCustomer"
-                      rows={12}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Mapped subscriptions JSON (one or more)</span>
-                    <textarea
-                      defaultValue={JSON.stringify(editing.mappedSubscriptions ?? [], null, 2)}
-                      name="mappedSubscriptions"
-                      rows={14}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Resolution notes</span>
-                    <textarea name="resolutionNotes" rows={3} />
+                    <span>Resolution notes / human rationale</span>
+                    <textarea name="resolutionNotes" required rows={3} />
                   </label>
                   <button className="button-primary" type="submit">
-                    Validate review
+                    Validate structured review
                   </button>
                 </form>
               ) : (
@@ -401,6 +750,44 @@ export function LegacyImportManager() {
   );
 }
 
+function Text({
+  label,
+  value,
+  onChange,
+  required,
+  type = 'text',
+}: {
+  label: string;
+  value?: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+  type?: string;
+}) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        onChange={(event) => onChange(event.target.value)}
+        required={required}
+        type={type}
+        value={value ?? ''}
+      />
+    </label>
+  );
+}
 function humanize(value: string) {
   return value.replace(/([A-Z])/g, ' $1').replace(/^./, (letter) => letter.toUpperCase());
+}
+function frequency(months: number) {
+  return months === 1
+    ? 'MONTHLY'
+    : months === 3
+      ? 'QUARTERLY'
+      : months === 6
+        ? 'SEMI_ANNUAL'
+        : months === 12
+          ? 'ANNUAL'
+          : months === 24
+            ? 'BIENNIAL'
+            : 'CUSTOM';
 }

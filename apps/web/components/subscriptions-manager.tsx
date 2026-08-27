@@ -17,6 +17,21 @@ interface ServiceTypeOption {
   name: string;
   active: boolean;
 }
+interface PackageOption {
+  id: string;
+  serviceTypeId: string;
+  code: string;
+  name: string;
+  kind: string;
+  active: boolean;
+  terms: Array<{ termMonths: number; currency: string; standardSellingPrice: string }>;
+}
+interface SubscriptionIdentifier {
+  id: string;
+  type: string;
+  value: string;
+  label: string | null;
+}
 interface ConnectionOption {
   id: string;
   code: string;
@@ -37,12 +52,15 @@ interface Subscription {
   id: string;
   customerId: string;
   serviceTypeId: string;
+  servicePackageId: string | null;
   subscriptionCode: string;
   name: string;
   description: string | null;
   startDate: string;
   renewalDate: string;
   billingFrequency: string;
+  renewalIntervalMonths: number | null;
+  contractTermMonths: number | null;
   supplierCost: string | null;
   sellingPrice: string;
   currency: string;
@@ -52,6 +70,11 @@ interface Subscription {
   notes: string | null;
   customer: CustomerOption;
   serviceType: ServiceTypeOption;
+  servicePackage: PackageOption | null;
+  packageNameSnapshot: string | null;
+  classificationStatus: string;
+  priceOverrideReason: string | null;
+  identifiers: SubscriptionIdentifier[];
   connections: Mapping[];
 }
 
@@ -62,6 +85,7 @@ export function SubscriptionsManager() {
   const [result, setResult] = useState<PageResult<Subscription> | null>(null);
   const [customers, setCustomers] = useState<CustomerOption[]>([]);
   const [types, setTypes] = useState<ServiceTypeOption[]>([]);
+  const [packages, setPackages] = useState<PackageOption[]>([]);
   const [connections, setConnections] = useState<ConnectionOption[]>([]);
   const [editing, setEditing] = useState<Subscription | null>(null);
   const [search, setSearch] = useState('');
@@ -72,17 +96,20 @@ export function SubscriptionsManager() {
     const params = new URLSearchParams({ page: '1', pageSize: '100' });
     if (search) params.set('search', search);
     if (status) params.set('status', status);
-    const [subscriptions, customerPage, serviceTypes, technicalConnections] = await Promise.all([
-      apiRequest<PageResult<Subscription>>(`/subscriptions?${params.toString()}`),
-      apiRequest<PageResult<CustomerOption>>('/customers?pageSize=100'),
-      apiRequest<ServiceTypeOption[]>('/service-types'),
-      apiRequest<ConnectionOption[]>('/technical-connections'),
-    ]);
+    const [subscriptions, customerPage, serviceTypes, packageOptions, technicalConnections] =
+      await Promise.all([
+        apiRequest<PageResult<Subscription>>(`/subscriptions?${params.toString()}`),
+        apiRequest<PageResult<CustomerOption>>('/customers?pageSize=100'),
+        apiRequest<ServiceTypeOption[]>('/service-types'),
+        apiRequest<PackageOption[]>('/service-packages?active=true'),
+        canMap ? apiRequest<ConnectionOption[]>('/technical-connections') : Promise.resolve([]),
+      ]);
     setResult(subscriptions);
     setCustomers(customerPage.data);
     setTypes(serviceTypes);
+    setPackages(packageOptions);
     setConnections(technicalConnections);
-  }, [search, status]);
+  }, [canMap, search, status]);
   useEffect(() => {
     void load().catch((cause: unknown) =>
       setError(cause instanceof Error ? cause.message : 'Load failed.'),
@@ -97,11 +124,22 @@ export function SubscriptionsManager() {
       ...(editing ? {} : { subscriptionCode: value('subscriptionCode') }),
       customerId: value('customerId'),
       serviceTypeId: value('serviceTypeId'),
+      servicePackageId: value('servicePackageId') || undefined,
       name: value('name'),
       description: value('description') || undefined,
       startDate: value('startDate'),
       renewalDate: value('renewalDate'),
       billingFrequency: value('billingFrequency'),
+      renewalIntervalMonths: Number(value('renewalIntervalMonths')),
+      contractTermMonths: value('contractTermMonths')
+        ? Number(value('contractTermMonths'))
+        : undefined,
+      identifiers: value('domains')
+        .split(/\r?\n/)
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .map((entry) => ({ type: 'DOMAIN', value: entry })),
+      priceOverrideReason: value('priceOverrideReason') || undefined,
       supplierCost: value('supplierCost') || undefined,
       sellingPrice: value('sellingPrice'),
       currency: value('currency'),
@@ -213,7 +251,25 @@ export function SubscriptionsManager() {
                   ))}
               </select>
             </label>
-            <Field label="Name" name="name" required value={editing?.name} />
+            <label className="field">
+              <span>Package</span>
+              <select defaultValue={editing?.servicePackageId ?? ''} name="servicePackageId">
+                <option value="">Unclassified</option>
+                {packages
+                  .filter((item) => !editing || item.serviceTypeId === editing.serviceTypeId)
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} · {item.kind}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <Field
+              label="Name / sold package snapshot"
+              name="name"
+              required
+              value={editing?.name}
+            />
             <Field
               label="Start date"
               name="startDate"
@@ -238,6 +294,30 @@ export function SubscriptionsManager() {
                 )}
               </select>
             </label>
+            <label className="field">
+              <span>Renewal interval</span>
+              <select
+                defaultValue={String(editing?.renewalIntervalMonths ?? 12)}
+                name="renewalIntervalMonths"
+              >
+                <option value="12">12 months</option>
+                <option value="24">24 months</option>
+                <option value="36">36 months</option>
+                <option value="60">60 months</option>
+                {editing?.renewalIntervalMonths &&
+                  ![12, 24, 36, 60].includes(editing.renewalIntervalMonths) && (
+                    <option value={editing.renewalIntervalMonths}>
+                      Custom: {editing.renewalIntervalMonths} months
+                    </option>
+                  )}
+              </select>
+            </label>
+            <Field
+              label="Historical contract term (months)"
+              name="contractTermMonths"
+              type="number"
+              value={String(editing?.contractTermMonths ?? '')}
+            />
             <Field
               label="Supplier cost"
               name="supplierCost"
@@ -280,6 +360,27 @@ export function SubscriptionsManager() {
             <label className="field field-wide">
               <span>Description</span>
               <textarea defaultValue={editing?.description ?? ''} name="description" rows={2} />
+            </label>
+            <label className="field field-wide">
+              <span>Domains / identifiers (one domain per line)</span>
+              <textarea
+                defaultValue={
+                  editing?.identifiers
+                    .filter((item) => item.type === 'DOMAIN')
+                    .map((item) => item.value)
+                    .join('\n') ?? ''
+                }
+                name="domains"
+                rows={3}
+              />
+            </label>
+            <label className="field field-wide">
+              <span>Price difference / negotiated-price reason</span>
+              <textarea
+                defaultValue={editing?.priceOverrideReason ?? ''}
+                name="priceOverrideReason"
+                rows={2}
+              />
             </label>
             <label className="field field-wide">
               <span>Notes</span>
@@ -335,7 +436,16 @@ export function SubscriptionsManager() {
                     <span className="muted">{subscription.name}</span>
                   </td>
                   <td>{subscription.customer.companyName}</td>
-                  <td>{subscription.serviceType.name}</td>
+                  <td>
+                    {subscription.serviceType.name}
+                    <br />
+                    <span className="muted text-xs">
+                      {subscription.packageNameSnapshot ??
+                        subscription.servicePackage?.name ??
+                        'Unclassified'}{' '}
+                      · {subscription.classificationStatus}
+                    </span>
+                  </td>
                   <td>
                     {date(subscription.startDate)} → {date(subscription.renewalDate)}
                   </td>

@@ -83,11 +83,12 @@ npm run db:migrate:deploy
 npm run db:seed
 ```
 
-Verify Prisma reports both migrations as applied:
+Verify Prisma reports all three canonical migrations as applied:
 
 ```text
 20260823000000_mariadb_phase_0_1_foundation
 20260824000000_phase_2_renewal_engine
+20260827000000_phase_2_1_operational_data
 ```
 
 Run the guarded suite only against a separate disposable database ending `_test`:
@@ -98,6 +99,15 @@ MARIADB_TEST_DATABASE_URL='mysql://.../customer_lifecycle_cp_staging_test' npm r
 
 Verify foreign keys, the audit update/delete rejection triggers, and application connectivity. Do
 not point the guarded reset suite at the staging application database.
+
+Before importing operational data, run the Phase 2.1 classifier against the untouched source and review its separate outputs. Never upload the source workbook to Git:
+
+```bash
+cd apps/api
+npx tsx scripts/phase21-workbook-dry-run.ts --workbook /secure/path/Project20report20Filled.xlsx --output /secure/path/Phase_2_1_Dry_Run_Report.json --review-workbook /secure/path/Phase_2_1_Human_Review.xlsx
+```
+
+The review gate requires 214 rows, explicit confirmation of start/renewal dates, and human decisions for all custom/conflicting records before live approval. Re-run the same workbook to verify the existing hash batch is reused and no live records are duplicated.
 
 ## 5. Redis
 

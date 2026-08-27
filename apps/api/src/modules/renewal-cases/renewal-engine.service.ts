@@ -245,6 +245,7 @@ export class RenewalEngineService {
               subscription.startDate,
               subscription.renewalDate,
               subscription.billingFrequency,
+              subscription.renewalIntervalMonths,
             ),
             dueDate: subscription.renewalDate,
             lastEvaluatedAt: asOf,

@@ -57,15 +57,18 @@ export function cycleStartDate(
   startDate: Date,
   dueDate: Date,
   billingFrequency: BillingFrequency,
+  renewalIntervalMonths?: number | null,
 ): Date {
-  const months = {
-    [BillingFrequency.MONTHLY]: 1,
-    [BillingFrequency.QUARTERLY]: 3,
-    [BillingFrequency.SEMI_ANNUAL]: 6,
-    [BillingFrequency.ANNUAL]: 12,
-    [BillingFrequency.BIENNIAL]: 24,
-    [BillingFrequency.CUSTOM]: 0,
-  }[billingFrequency];
+  const months =
+    renewalIntervalMonths ??
+    {
+      [BillingFrequency.MONTHLY]: 1,
+      [BillingFrequency.QUARTERLY]: 3,
+      [BillingFrequency.SEMI_ANNUAL]: 6,
+      [BillingFrequency.ANNUAL]: 12,
+      [BillingFrequency.BIENNIAL]: 24,
+      [BillingFrequency.CUSTOM]: 0,
+    }[billingFrequency];
   if (!months) return startDate;
   const calculated = new Date(dueDate);
   calculated.setUTCMonth(calculated.getUTCMonth() - months);

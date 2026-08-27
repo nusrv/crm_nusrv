@@ -2,6 +2,7 @@ import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import { hash } from 'argon2';
 import { toMariaDbDriverUrl } from '../src/database/mariadb-url';
 import { PrismaClient } from '../src/generated/prisma/client';
+import { packageCatalogSeeds } from './package-catalog.seed-data';
 import {
   billingEntitySeeds,
   notificationRuleSeeds,
@@ -36,6 +37,40 @@ async function main(): Promise<void> {
         update: { name: serviceType.name, active: true },
         create: serviceType,
       });
+    }
+
+    const serviceTypes = await tx.serviceType.findMany({ select: { id: true, code: true } });
+    const serviceTypeIds = new Map(serviceTypes.map((type) => [type.code, type.id]));
+    for (const packageSeed of packageCatalogSeeds) {
+      const serviceTypeId = serviceTypeIds.get(packageSeed.serviceTypeCode);
+      if (!serviceTypeId) throw new Error(`Missing service type ${packageSeed.serviceTypeCode}.`);
+      const { terms } = packageSeed;
+      const catalogData = {
+        code: packageSeed.code,
+        name: packageSeed.name,
+        kind: packageSeed.kind,
+        description: packageSeed.description,
+        specifications: packageSeed.specifications,
+        sourceReference: 'Packages.docx',
+      };
+      const servicePackage = await tx.servicePackage.upsert({
+        where: { code: packageSeed.code },
+        update: { ...catalogData, serviceTypeId, active: true },
+        create: { ...catalogData, serviceTypeId },
+      });
+      for (const term of terms) {
+        await tx.servicePackageTerm.upsert({
+          where: {
+            servicePackageId_termMonths_currency: {
+              servicePackageId: servicePackage.id,
+              termMonths: term.termMonths,
+              currency: term.currency,
+            },
+          },
+          update: { standardSellingPrice: term.standardSellingPrice, active: true },
+          create: { ...term, servicePackageId: servicePackage.id },
+        });
+      }
     }
 
     const templateIds = new Map<string, string>();

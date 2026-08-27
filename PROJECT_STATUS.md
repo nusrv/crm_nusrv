@@ -2,12 +2,49 @@
 
 ## Current status
 
-- Phase 0: COMPLETE / APPROVED
-- Phase 1: COMPLETE / APPROVED
-- Phase 2: COMPLETE / APPROVED (2026-08-24)
-- Staging Runtime Gate: BLOCKED - awaiting deployment/access to crm.nusrv.com
-- Phase 3: LOCKED / awaiting owner authorization after the staging gate
+- Phase 0: COMPLETE / OWNER APPROVED
+- Phase 1: COMPLETE / OWNER APPROVED
+- Phase 2: COMPLETE / OWNER APPROVED
+- Phase 2.1 Operational Data Correction: IMPLEMENTED LOCALLY / awaiting human data decisions and staging verification
+- Staging Runtime Gate: BLOCKED — awaiting deployment/access to `crm.nusrv.com`
+- Phase 3: LOCKED
 - Phase 4+: LOCKED
+
+## Phase 2.1 operational data correction
+
+The codebase now has a MariaDB package catalog and term model, subscription package/specification
+snapshots, explicit renewal intervals, structured customer contacts and subscription identifiers,
+deterministic legacy classification, and a structured import review UI. Catalog pricing is separate
+from actual subscription selling prices. All classification evidence and original registration
+values remain traceable.
+
+The official seed contains 19 offers/add-ons taken from `Packages.docx` plus eight
+service-specific Custom templates. Supported standard term choices are 12, 24, 36, and 60 months;
+explicit custom intervals from 1 through 120 months are supported.
+
+The non-mutating dry run reconciled all 214 `Active_Subscriptions` source rows:
+
+- 85 suggested official-package matches
+- 72 suggested Custom classifications
+- 57 ambiguous/conflicting classifications
+- 214 rows still require human approval
+- 0 rows were written to live Customer/Subscription tables
+
+Every row requires confirmed start and renewal dates. The source `Renewal / date (-15days)`
+value is preserved as evidence but is not treated as a proven renewal date. The 72 Custom and 57
+conflicting rows require explicit package decisions; split/merge decisions are never automatic.
+Private review artifacts are under the Git-ignored `dont_push_to_git/` directory.
+
+Local verification passes Prisma generation, strict type checking, lint, formatting, the NestJS
+production build, the Next.js production build, and 113 default automated tests across 37 suites.
+Twelve guarded tests across three live MariaDB suites are skipped unless MARIADB_TEST_DATABASE_URL
+targets a disposable test database. The 214-row workbook dry run was repeated with identical results
+while the source workbook hash remained unchanged.
+
+Open dependency advisory: a clean npm audit reports three high-severity findings in the Prisma CLI
+configuration chain (@prisma/config to deepmerge-ts). Prisma 7.10.0 still uses the affected
+dependency, while npm proposes a prohibited forced downgrade to Prisma 6. The lockfile was not
+mutated; this upstream Prisma 7 advisory must be monitored before production promotion.
 
 ## Staging CAPTCHA deployment patch
 
@@ -16,72 +53,45 @@ requires only email and password; credential validation, lockout, secure cookies
 protection, RBAC, and audit behavior remain unchanged. Turnstile and reCAPTCHA retain credential
 validation, and mock CAPTCHA remains prohibited in production.
 
-Verification on Node.js 22.23.2 passed: 93 automated tests across 29 suites, lint, formatting,
-strict typecheck, NestJS production build, and Next.js production build. The 10 guarded live
-MariaDB tests remain excluded from the default suite and were not rerun for this schema-neutral
-patch.
+## Phase 2 renewal behavior
 
-## Phase 2 final workflow-hold correction
-
-The renewal engine evaluates every active, unexpired hold for a Renewal Case. Customer reminder
-suppression and internal notification suppression are aggregated independently with `some(...)`.
-Released and expired holds are ignored. Deduplicated hold decisions use sorted category-relevant
-hold IDs and include those IDs in sanitized audit metadata.
-
-Verification passed:
-
-- Focused hold/policy tests: 21/21
-- Guarded MariaDB 11.7.2 suites: 10/10
-- Default automated suite: 83/83 across 27 suites; the 10 guarded live tests are skipped by default
-- Prisma generation, lint, formatting, strict typecheck, NestJS build, and Next.js build: passed
-
-Phase 2 is approved. No Phase 3 code or integration was started.
-
-## Staging readiness prepared
-
-- Staging configuration validates `APP_URL`, web/API URLs, MariaDB, business timezone, secrets,
-  optional CAPTCHA (disabled for the internal staging CP), and either Redis URL or granular
-  host/port/username/password/database/TLS settings.
-- The renewal worker has a separate non-HTTP NestJS entry point and no longer runs inside the API
-  process. The API registers the daily scheduler and accepts the Admin manual trigger; the
-  independently supervised worker consumes the same BullMQ queue.
-- Staging environment, host-inspection, systemd API/web/worker examples, and a Plesk deployment
-  runbook are provided under `deploy/staging/` and `docs/deployment/`.
-- SMTP, IMAP, SmarterMail synchronization, LLM, Fawtara, collection, retention, suspension,
-  reactivation, technical provider actions, MCP, and customer reply handling remain absent/locked.
+The approved deterministic renewal engine remains unchanged except for additive support for an
+explicit renewal interval. Existing frequency behavior remains the fallback. Reminder milestones,
+outbox idempotency, BullMQ worker separation, business timezone, multi-hold aggregation, RBAC, and
+audit behavior remain covered by the full test suite. No SMTP delivery or Phase 3 integration exists.
 
 ## Staging Runtime Gate blocker
 
-The staging target is crm.nusrv.com on Plesk 18.0.80 with Node.js 22.23.2, MariaDB 11.4.7, and
-Redis 7.4.11. No SSH/Plesk deployment access, staging database credentials, or Redis runtime
-access is available in the current environment. Therefore the following cannot truthfully be verified yet:
+The target is `crm.nusrv.com` on Plesk 18.0.80 with Node.js 22.23.2, MariaDB 11.4.7, and Redis
+7.4.11. This environment has no authorized SSH/Plesk deployment access, staging database
+credentials, or Redis runtime access. Therefore it cannot truthfully run or verify:
 
-- server OS, Node.js Toolkit state, SSH privilege, or Plesk document-root configuration
-- dedicated staging database/user, grants, connectivity, trigger support, or Redis availability
-- SSH privilege level, systemd/process-supervisor access, Plesk document roots, TLS, or staging DNS
-- migration/seed execution on Plesk, Redis readiness, persistent worker, or registered scheduler
-- deployed UI/API health, staging milestone/outbox/idempotency behavior, RBAC, or security smoke tests
+- the canonical three-migration MariaDB deployment and idempotent seed on staging;
+- live MariaDB constraints and Phase 2.1 CRUD/import approval;
+- Redis readiness, persistent worker, and registered scheduler;
+- the deployed UI/API, role matrix, security checks, and renewal/outbox idempotency.
 
-The gate remains `BLOCKED`, not failed. The application has not been deployed and no server-side
-claim is made.
+The staging gate remains BLOCKED, not failed.
 
-## Required owner/server-admin action
+## Required owner/operator actions
 
-Provide authorized SSH/Plesk deployment access for crm.nusrv.com, or have the server administrator run
-`deploy/staging/inspect-plesk-host.sh` with `STAGING_DOMAIN` set and return its output. The configured application runtime is Node.js 22.23.2. Also provide or provision a
-dedicated MariaDB 10.6+ staging database/user and private authenticated Redis accessible to the API
-and independent worker. Actual secrets must remain in Plesk/server configuration and must not be
-committed.
+1. Complete the 214 human decisions using the structured CP review UI or
+   `dont_push_to_git/Phase_2_1_Human_Review.xlsx`, including confirmed dates and every
+   ambiguous/custom package decision.
+2. Provide authorized Plesk/SSH access (or have the server administrator execute the runbook),
+   a dedicated staging MariaDB database/user, and private authenticated Redis access.
+3. Run the live MariaDB suite, migrations/seed, Phase 2 renewal regression, RBAC/security smoke
+   tests, and worker/scheduler verification on staging.
 
 ## Integration status
 
-- MariaDB: migrations/live tests pass locally on MariaDB 11.7.2; Plesk staging execution blocked
-- Redis/BullMQ: scheduler/worker code and tests pass; real staging Redis/runtime blocked
+- MariaDB: Phase 2.1 schema/migration and guarded tests prepared; staging execution blocked
+- Redis/BullMQ: approved Phase 2 scheduler/worker preserved; real staging runtime blocked
 - Communication outbox: durable queue records only; no delivery transport
 - Technical Connections: secure configuration/mapping only; no external provider calls
-- Phase 3 integrations: locked and not started
+- Phase 3 integrations: LOCKED and not started
 
 ## Next allowed work
 
-Resume only the Phase 02 staging runtime gate after authorized server access/environment inventory
-is supplied. Phase 3 remains locked until explicit owner authorization.
+Only Phase 2.1 human data resolution and the Phase 02/2.1 staging runtime gate are allowed. Phase 3
+remains locked until Phase 2.1 is fully completed, verified, and explicitly authorized by the owner.

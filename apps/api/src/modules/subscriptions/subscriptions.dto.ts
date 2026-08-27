@@ -1,4 +1,4 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsDateString,
@@ -7,13 +7,19 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  ArrayMaxSize,
+  ValidateNested,
   Length,
   Matches,
   Max,
   MaxLength,
   Min,
 } from 'class-validator';
-import { BillingFrequency, SubscriptionStatus } from '../../generated/prisma/enums';
+import {
+  BillingFrequency,
+  SubscriptionIdentifierType,
+  SubscriptionStatus,
+} from '../../generated/prisma/enums';
 import { PageQueryDto } from '../../common/page-query.dto';
 
 const MONEY = /^\d{1,11}(?:\.\d{1,3})?$/;
@@ -40,12 +46,30 @@ export class SubscriptionListQueryDto extends PageQueryDto {
   renewalTo?: string;
 }
 
+export class SubscriptionIdentifierDto {
+  @IsEnum(SubscriptionIdentifierType)
+  type!: SubscriptionIdentifierType;
+
+  @IsString()
+  @Length(1, 500)
+  value!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  label?: string;
+}
+
 export class CreateSubscriptionDto {
   @IsUUID()
   customerId!: string;
 
   @IsUUID()
   serviceTypeId!: string;
+
+  @IsOptional()
+  @IsUUID()
+  servicePackageId?: string;
 
   @Transform(({ value }) => String(value).trim().toUpperCase())
   @IsString()
@@ -69,6 +93,18 @@ export class CreateSubscriptionDto {
 
   @IsEnum(BillingFrequency)
   billingFrequency!: BillingFrequency;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(120)
+  renewalIntervalMonths?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(120)
+  contractTermMonths?: number;
 
   @IsOptional()
   @Matches(MONEY)
@@ -99,6 +135,17 @@ export class CreateSubscriptionDto {
   @IsOptional()
   @IsString()
   @MaxLength(5000)
+  priceOverrideReason?: string;
+
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => SubscriptionIdentifierDto)
+  @ArrayMaxSize(50)
+  identifiers?: SubscriptionIdentifierDto[] = [];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(5000)
   notes?: string;
 
   @IsOptional()
@@ -108,6 +155,10 @@ export class CreateSubscriptionDto {
 }
 
 export class UpdateSubscriptionDto {
+  @IsOptional()
+  @IsUUID()
+  servicePackageId?: string;
+
   @IsOptional()
   @IsUUID()
   customerId?: string;
@@ -139,6 +190,18 @@ export class UpdateSubscriptionDto {
   billingFrequency?: BillingFrequency;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(120)
+  renewalIntervalMonths?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(120)
+  contractTermMonths?: number;
+
+  @IsOptional()
   @Matches(MONEY)
   supplierCost?: string;
 
@@ -165,6 +228,17 @@ export class UpdateSubscriptionDto {
   @IsOptional()
   @IsEnum(SubscriptionStatus)
   status?: SubscriptionStatus;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(5000)
+  priceOverrideReason?: string;
+
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => SubscriptionIdentifierDto)
+  @ArrayMaxSize(50)
+  identifiers?: SubscriptionIdentifierDto[];
 
   @IsOptional()
   @IsString()

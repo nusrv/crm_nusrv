@@ -1,7 +1,13 @@
 import { Body, Controller, Get, Ip, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../../identity/auth-user';
 import { Roles } from '../../identity/roles.decorator';
-import { CreateCustomerDto, CustomerListQueryDto, UpdateCustomerDto } from './customers.dto';
+import {
+  CreateCustomerContactDto,
+  CreateCustomerDto,
+  CustomerListQueryDto,
+  UpdateCustomerContactDto,
+  UpdateCustomerDto,
+} from './customers.dto';
 import { CustomersService } from './customers.service';
 
 @Controller('customers')
@@ -33,6 +39,32 @@ export class CustomersController {
     @Ip() ip: string,
   ) {
     return this.customers.update(id, input, { actorId: request.user.id, ipAddress: ip });
+  }
+
+  @Roles('ADMIN', 'SALES_DEVELOPMENT')
+  @Post(':id/contacts')
+  createContact(
+    @Param('id') id: string,
+    @Body() input: CreateCustomerContactDto,
+    @Req() request: AuthenticatedRequest,
+    @Ip() ip: string,
+  ) {
+    return this.customers.createContact(id, input, { actorId: request.user.id, ipAddress: ip });
+  }
+
+  @Roles('ADMIN', 'SALES_DEVELOPMENT')
+  @Patch(':id/contacts/:contactId')
+  updateContact(
+    @Param('id') id: string,
+    @Param('contactId') contactId: string,
+    @Body() input: UpdateCustomerContactDto,
+    @Req() request: AuthenticatedRequest,
+    @Ip() ip: string,
+  ) {
+    return this.customers.updateContact(id, contactId, input, {
+      actorId: request.user.id,
+      ipAddress: ip,
+    });
   }
 
   @Roles('ADMIN')

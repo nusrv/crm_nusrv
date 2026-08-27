@@ -22,6 +22,8 @@ export const serviceTypeSeeds = [
   { code: 'DEDICATED_SERVER', name: 'Dedicated Server' },
   { code: 'SUPPORT', name: 'Support' },
   { code: 'ANTIVIRUS', name: 'Antivirus' },
+  { code: 'DNS_HOSTING', name: 'DNS Hosting' },
+  { code: 'APP_SUBSCRIPTION', name: 'App Subscription' },
 ] as const;
 
 export const roleSeeds: ReadonlyArray<{
