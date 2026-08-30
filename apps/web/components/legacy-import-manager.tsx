@@ -245,6 +245,7 @@ export function LegacyImportManager() {
         }),
       });
       setMessage('Structured review validated and queued for Admin approval.');
+      setEditing((prev) => (prev ? { ...prev, status: 'READY_FOR_APPROVAL' } : null));
       if (selectedBatch) await openBatch(selectedBatch, status);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Review failed.');
@@ -256,6 +257,7 @@ export function LegacyImportManager() {
     try {
       await apiRequest(`/legacy-import/rows/${row.id}/approve`, { method: 'POST' });
       setMessage('Staged row approved into traceable live records.');
+      setEditing(null);
       if (selectedBatch) await openBatch(selectedBatch, status);
       await loadBatches();
     } catch (cause) {
@@ -492,7 +494,19 @@ export function LegacyImportManager() {
               )}
             </div>
             <div>
-              {canReview && editing.status !== 'APPROVED' ? (
+              {editing.status === 'READY_FOR_APPROVAL' && can('ADMIN') ? (
+                <div className="notice">
+                  <strong>Validated — ready for approval</strong>
+                  <p className="mt-2 text-sm">All decisions recorded. Approve to create live customer and subscription records.</p>
+                  <button
+                    className="button-primary mt-4"
+                    onClick={() => void approve(editing)}
+                    type="button"
+                  >
+                    Approve into live records
+                  </button>
+                </div>
+              ) : canReview && editing.status !== 'APPROVED' ? (
                 <form className="space-y-5" onSubmit={(event) => void review(event)}>
                   <fieldset className="space-y-3 rounded-lg border border-[var(--line)] p-4">
                     <legend className="px-2 font-medium">Customer resolution</legend>
