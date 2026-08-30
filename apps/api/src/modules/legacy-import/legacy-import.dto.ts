@@ -40,6 +40,13 @@ export class ImportBatchListQueryDto extends PageQueryDto {
 
 export class ImportRowListQueryDto extends PageQueryDto {
   @IsOptional()
+  @Transform(({ value }) => Number(value))
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  override pageSize = 20;
+
+  @IsOptional()
   @IsEnum(LegacyImportRowStatus)
   status?: LegacyImportRowStatus;
 
