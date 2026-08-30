@@ -441,11 +441,11 @@ export function LegacyImportManager() {
       </section>
       {editing && (
         <div
-          className="fixed inset-0 z-50 overflow-y-auto bg-black/60"
+          style={{ position: 'fixed', inset: 0, zIndex: 50, overflowY: 'auto', background: 'rgba(0,0,0,0.6)' }}
           onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}
         >
-          <div className="flex min-h-full items-start justify-center p-4 py-10">
-          <section className="panel w-full max-w-5xl">
+          <div style={{ display: 'flex', minHeight: '100%', alignItems: 'flex-start', justifyContent: 'center', padding: '2.5rem 1rem' }}>
+          <section className="panel" style={{ width: '100%', maxWidth: '64rem' }}>
           <div className="flex justify-between gap-4">
             <div>
               <h3 className="text-lg font-semibold">Review {editing.sourceReference}</h3>
