@@ -26,7 +26,11 @@ import type {
   LegacySubscriptionMappingDto,
   ReviewLegacyRowDto,
 } from './legacy-import.dto';
-import { parseLegacyWorkbook } from './legacy-workbook.parser';
+import {
+  parseLegacyWorkbook,
+  type LegacySuggestions,
+  type ParsedLegacyRow,
+} from './legacy-workbook.parser';
 
 export interface UploadedLegacyFile {
   originalname: string;
@@ -73,24 +77,7 @@ export class LegacyImportService {
       throw new BadRequestException('Only .xls and .xlsx files are accepted.');
     }
     const sourceFileHash = createHash('sha256').update(file.buffer).digest('hex');
-    const existing = await this.prisma.legacyImportBatch.findUnique({
-      where: { sourceFileHash },
-      include: { _count: { select: { rows: true } } },
-    });
-    if (existing) {
-      await this.audit.record({
-        actorType: ActorType.USER,
-        actorId: context.actorId,
-        eventKey: 'legacy_import.reimport_detected',
-        subjectType: 'LegacyImportBatch',
-        subjectId: existing.id,
-        metadata: { sourceFileName: file.originalname, sourceFileHash, reused: true },
-        ipAddress: context.ipAddress,
-      });
-      return { batch: existing, reused: true };
-    }
-
-    let parsedRows;
+    let parsedRows: ParsedLegacyRow[];
     try {
       parsedRows = parseLegacyWorkbook(file.buffer, file.originalname);
     } catch {
@@ -98,6 +85,20 @@ export class LegacyImportService {
     }
     if (!parsedRows.length)
       throw new BadRequestException('The workbook contains no stageable rows.');
+
+    const existing = await this.prisma.legacyImportBatch.findUnique({
+      where: { sourceFileHash },
+      include: { _count: { select: { rows: true } } },
+    });
+    if (existing) {
+      const refreshedRows = await this.refreshExistingBatchDates(
+        existing,
+        file.originalname,
+        parsedRows,
+        context,
+      );
+      return { batch: existing, reused: true, refreshedRows };
+    }
     const activeRows = parsedRows.filter((row) => isActiveSubscriptionSheet(row.sheetName)).length;
     const skippedRows = parsedRows.length - activeRows;
 
@@ -183,8 +184,8 @@ export class LegacyImportService {
                 servicePackageId: servicePackage?.id,
                 name: row.suggestions.servicePackageName ?? row.suggestions.serviceTypeName,
                 description: row.suggestions.description,
-                startDate: null,
-                renewalDate: null,
+                startDate: row.suggestions.startDate ?? null,
+                renewalDate: row.suggestions.renewalDate ?? null,
                 billingFrequency: row.suggestions.billingFrequency,
                 renewalIntervalMonths: row.suggestions.renewalIntervalMonths,
                 contractTermMonths: row.suggestions.renewalIntervalMonths,
@@ -200,6 +201,8 @@ export class LegacyImportService {
                 classificationStatus: row.suggestions.classificationStatus,
                 classificationEvidence: {
                   ...row.suggestions.classificationEvidence,
+                  sourceStartDate: row.suggestions.sourceStartDate,
+                  sourceEndDate: row.suggestions.sourceEndDate,
                   sourceRenewalReminderDate: row.suggestions.sourceRenewalReminderDate,
                 },
                 identifiers: row.suggestions.identifiers,
@@ -254,6 +257,104 @@ export class LegacyImportService {
       return created;
     });
     return { batch, reused: false };
+  }
+
+  private async refreshExistingBatchDates(
+    batch: { id: string; sourceFileHash: string },
+    sourceFileName: string,
+    parsedRows: ParsedLegacyRow[],
+    context: MutationContext,
+  ): Promise<number> {
+    const parsedBySourcePosition = new Map(
+      parsedRows
+        .filter((row) => isActiveSubscriptionSheet(row.sheetName))
+        .map((row) => [`${row.sheetName}:${String(row.sourceRowNumber)}`, row]),
+    );
+
+    return this.prisma.$transaction(async (tx) => {
+      const untouchedRows = await tx.legacyImportRow.findMany({
+        where: {
+          batchId: batch.id,
+          sheetName: ACTIVE_SUBSCRIPTIONS_SHEET,
+          status: LegacyImportRowStatus.REQUIRES_MANUAL_REVIEW,
+        },
+        select: {
+          id: true,
+          sheetName: true,
+          sourceRowNumber: true,
+          mappedSubscriptions: true,
+          validationIssues: true,
+          validationStatus: true,
+        },
+      });
+      let refreshedRows = 0;
+      for (const stagedRow of untouchedRows) {
+        const parsedRow = parsedBySourcePosition.get(
+          `${stagedRow.sheetName}:${String(stagedRow.sourceRowNumber)}`,
+        );
+        if (
+          !parsedRow ||
+          (!parsedRow.suggestions.sourceStartDate && !parsedRow.suggestions.sourceEndDate)
+        ) {
+          continue;
+        }
+        const mappedSubscriptions = mergeSuggestedDates(
+          stagedRow.mappedSubscriptions,
+          parsedRow.suggestions,
+        );
+        const existingIssues = Array.isArray(stagedRow.validationIssues)
+          ? stagedRow.validationIssues.filter((issue): issue is string => typeof issue === 'string')
+          : [];
+        const dateIssues = parsedRow.suggestions.issues.filter(isSourceDateIssue);
+        const validationIssues = [
+          ...new Set([
+            ...existingIssues.filter((issue) => !isSourceDateIssue(issue)),
+            ...dateIssues,
+          ]),
+        ];
+        const validationStatus = validationIssues.some((issue) => /ambiguous/i.test(issue))
+          ? LegacyValidationStatus.AMBIGUOUS
+          : validationIssues.length
+            ? LegacyValidationStatus.INVALID
+            : LegacyValidationStatus.PENDING;
+        if (
+          stableJson(stagedRow.mappedSubscriptions) === stableJson(mappedSubscriptions) &&
+          stableJson(stagedRow.validationIssues) === stableJson(validationIssues) &&
+          stagedRow.validationStatus === validationStatus
+        ) {
+          continue;
+        }
+        await tx.legacyImportRow.update({
+          where: { id: stagedRow.id },
+          data: {
+            mappedSubscriptions: asJson(mappedSubscriptions),
+            validationIssues: asJson(validationIssues),
+            validationStatus,
+            manualReviewReason: validationIssues.length ? validationIssues.join(' ') : null,
+          },
+        });
+        refreshedRows += 1;
+      }
+      await this.audit.record(
+        {
+          actorType: ActorType.USER,
+          actorId: context.actorId,
+          eventKey: 'legacy_import.reimport_detected',
+          subjectType: 'LegacyImportBatch',
+          subjectId: batch.id,
+          metadata: {
+            sourceFileName,
+            sourceFileHash: batch.sourceFileHash,
+            reused: true,
+            refreshedRows,
+            preservedReviewedRows: true,
+          },
+          ipAddress: context.ipAddress,
+        },
+        tx,
+      );
+      return refreshedRows;
+    });
   }
 
   async listBatches(query: ImportBatchListQueryDto) {
@@ -779,6 +880,44 @@ export class LegacyImportService {
   private generatedCode(prefix: string, source: string): string {
     return `${prefix}-${createHash('sha256').update(source).digest('hex').slice(0, 16).toUpperCase()}`;
   }
+}
+
+function mergeSuggestedDates(
+  mappedSubscriptions: unknown,
+  suggestions: LegacySuggestions,
+): unknown[] {
+  if (!Array.isArray(mappedSubscriptions)) return [];
+  return Array.from<unknown>(mappedSubscriptions).map((subscription, index) => {
+    if (index !== 0 || !isRecord(subscription)) return subscription;
+    const classificationEvidence = isRecord(subscription.classificationEvidence)
+      ? subscription.classificationEvidence
+      : {};
+    return {
+      ...subscription,
+      startDate: suggestions.startDate ?? null,
+      renewalDate: suggestions.renewalDate ?? null,
+      classificationEvidence: {
+        ...classificationEvidence,
+        sourceStartDate: suggestions.sourceStartDate,
+        sourceEndDate: suggestions.sourceEndDate,
+        sourceRenewalReminderDate: suggestions.sourceRenewalReminderDate,
+      },
+    };
+  });
+}
+
+function isSourceDateIssue(issue: string): boolean {
+  return /start date requires human confirmation|source reminder-date column.*actual renewal date|start date column is missing or invalid|end date column is missing or invalid|start date must be earlier than end date|start date and end date do not match the recorded renewal interval/i.test(
+    issue,
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value) ?? 'null';
 }
 
 function asJson(value: unknown): Prisma.InputJsonValue {

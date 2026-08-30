@@ -36,13 +36,17 @@ miscellaneous-sheet rows are marked `SKIPPED` as out of scope. Migration
 `20260827010000_scope_legacy_import_active_sheet` repairs already-staged batches idempotently
 without deleting raw data or touching approved rows.
 
-Every row requires confirmed start and renewal dates. The source `Renewal / date (-15days)`
-value is preserved as evidence but is not treated as a proven renewal date. The 72 Custom and 57
-conflicting rows require explicit package decisions; split/merge decisions are never automatic.
-Private review artifacts are under the Git-ignored `dont_push_to_git/` directory.
+Explicit `Start Date` and `End Date` workbook columns are now preserved as source evidence,
+validated against the recorded term, and prefilled into untouched subscription-review drafts. Excel
+calendar dates are parsed without an operating-system timezone shift. Missing, invalid, reversed, or
+term-conflicting dates remain flagged for human correction. Re-importing the identical workbook
+refreshes only untouched manual-review rows and preserves corrected, ready, and approved rows. The
+source `Renewal / date (-15days)` value remains separate evidence. The 72 Custom and 57 conflicting
+rows still require explicit package decisions; split/merge decisions are never automatic. Private
+review artifacts are under the Git-ignored `dont_push_to_git/` directory.
 
 Local verification passes Prisma generation, strict type checking, lint, formatting, the NestJS
-production build, the Next.js production build, and 113 default automated tests across 37 suites.
+production build, the Next.js production build, and 119 default automated tests across 38 suites.
 Twelve guarded tests across three live MariaDB suites are skipped unless MARIADB_TEST_DATABASE_URL
 targets a disposable test database. The 214-row workbook dry run was repeated with identical results
 while the source workbook hash remained unchanged.
@@ -81,9 +85,10 @@ The staging gate remains BLOCKED, not failed.
 
 ## Required owner/operator actions
 
-1. Complete the 214 human decisions using the structured CP review UI or
-   `dont_push_to_git/Phase_2_1_Human_Review.xlsx`, including confirmed dates and every
-   ambiguous/custom package decision.
+1. After deploying the explicit-date importer patch, re-upload
+   `dont_push_to_git/Project20report20Filled_With_Start_End_Dates.xlsx`. The identical existing
+   batch is reused and untouched rows receive the validated dates. Confirm the prefilled dates and
+   complete every ambiguous/custom package decision in the structured review UI.
 2. Provide authorized Plesk/SSH access (or have the server administrator execute the runbook),
    a dedicated staging MariaDB database/user, and private authenticated Redis access.
 3. Run the live MariaDB suite, migrations/seed, Phase 2 renewal regression, RBAC/security smoke

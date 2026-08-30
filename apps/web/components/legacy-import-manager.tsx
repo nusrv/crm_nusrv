@@ -186,14 +186,17 @@ export function LegacyImportManager() {
   async function upload(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     try {
-      const result = await apiRequest<{ batch: Batch; reused: boolean }>('/legacy-import/batches', {
-        method: 'POST',
-        body: new FormData(event.currentTarget),
-      });
+      const result = await apiRequest<{ batch: Batch; reused: boolean; refreshedRows?: number }>(
+        '/legacy-import/batches',
+        {
+          method: 'POST',
+          body: new FormData(event.currentTarget),
+        },
+      );
       setMessage(
         result.reused
-          ? 'This exact workbook was already staged; the existing batch was reused.'
-          : 'Workbook staged. Raw rows remain encrypted and require human approval.',
+          ? `This exact workbook was already staged; ${result.refreshedRows ?? 0} untouched review rows were refreshed from its explicit dates.`
+          : 'Workbook staged. Explicit dates were prefilled when valid; raw rows remain encrypted and require human approval.',
       );
       await loadBatches();
       await openBatch(result.batch, '');

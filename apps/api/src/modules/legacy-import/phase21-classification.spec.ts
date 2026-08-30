@@ -52,14 +52,36 @@ describe('Phase 2.1 deterministic legacy classification', () => {
     expect(bundle.classificationEvidence.detectedServiceTypes.length).toBeGreaterThan(1);
   });
 
-  it('preserves reminder-date evidence but never invents normalized renewal/start dates', () => {
+  it('keeps the reminder as evidence without mistaking a new Start Date column for it', () => {
     const result = classifyLegacyValues({
-      'A — Renewal / date (-15days)': new Date('2026-09-01T00:00:00Z'),
-      'H — Registration Type': 'Domain',
-      'I — Package': 'Custom domain',
+      'A - Start Date': new Date('2026-01-16T00:00:00Z'),
+      'B - End Date': new Date('2027-01-15T00:00:00Z'),
+      'C - Renewal / date (-15days)': new Date('2026-12-31T00:00:00Z'),
+      'D - Renwal Frequancy': '1 Year',
+      'H - Registration Type': 'Domain',
+      'I - Package': 'Custom domain',
     });
-    expect(result.sourceRenewalReminderDate).toBe('2026-09-01');
-    expect(result).not.toHaveProperty('renewalDate');
-    expect(result.issues.join(' ')).toMatch(/actual renewal date requires human confirmation/i);
+    expect(result).toMatchObject({
+      sourceStartDate: '2026-01-16',
+      sourceEndDate: '2027-01-15',
+      sourceRenewalReminderDate: '2026-12-31',
+      startDate: '2026-01-16',
+      renewalDate: '2027-01-15',
+    });
+    expect(result.issues.join(' ')).not.toMatch(/Start Date column|End Date column|do not match/i);
+  });
+
+  it('prefills but flags explicit dates that conflict with the recorded term', () => {
+    const result = classifyLegacyValues({
+      'A - Start Date': new Date('2026-02-01T00:00:00Z'),
+      'B - End Date': new Date('2027-01-15T00:00:00Z'),
+      'C - Renewal / date (-15days)': new Date('2026-12-31T00:00:00Z'),
+      'D - Renwal Frequancy': '1 Year',
+      'H - Registration Type': 'Domain',
+      'I - Package': 'Custom domain',
+    });
+    expect(result.startDate).toBe('2026-02-01');
+    expect(result.renewalDate).toBe('2027-01-15');
+    expect(result.issues.join(' ')).toMatch(/do not match the recorded renewal interval/i);
   });
 });

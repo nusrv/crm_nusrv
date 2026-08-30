@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import * as XLSX from '@e965/xlsx';
 import {
   BillingFrequency,
   LegacyCustomerResolution,
@@ -9,8 +10,46 @@ import {
   LegacyImportService,
   OUT_OF_SCOPE_REASON,
 } from './legacy-import.service';
+import { parseLegacyWorkbook } from './legacy-workbook.parser';
 
 const actor = { actorId: '10000000-0000-4000-8000-000000000001' };
+
+function explicitDateWorkbookFixture(): Buffer {
+  const workbook = XLSX.utils.book_new();
+  const rows: unknown[][] = [
+    [
+      'Start Date',
+      'End Date',
+      'Renewal date (-15days)',
+      'Renewal Frequency',
+      'Company Name',
+      'E-mail Address',
+      'Registration Type',
+      'Package',
+      'Billing Company',
+      'Price JD',
+      'Information',
+    ],
+    [
+      new Date('2026-01-16T00:00:00Z'),
+      new Date('2027-01-15T00:00:00Z'),
+      new Date('2026-12-31T00:00:00Z'),
+      '1 Year',
+      'SAFE REIMPORT COMPANY',
+      'safe-reimport@example.test',
+      'Hosting',
+      'PREMIUM PLAN',
+      'New Serve for Digital Data Transformation',
+      250,
+      'Web Space 30GB; Mail Space 8GB; Monthly Transfer 250GB',
+    ],
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Active_Subscriptions');
+  const output: unknown = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  if (Buffer.isBuffer(output)) return output;
+  if (output instanceof Uint8Array) return Buffer.from(output);
+  throw new Error('The XLSX writer returned an unexpected fixture type.');
+}
 
 describe('LegacyImportService', () => {
   it('keeps all workbook rows traceable while limiting review to Active_Subscriptions', () => {
@@ -27,32 +66,82 @@ describe('LegacyImportService', () => {
     expect(skipped).toHaveLength(390);
     expect(OUT_OF_SCOPE_REASON).toContain('excluded from the active-subscription migration scope');
   });
-  it('reuses an existing file-hash batch instead of staging duplicate rows', async () => {
-    const existing = { id: 'batch-id', sourceFileHash: 'known', _count: { rows: 12 } };
-    const prisma = {
-      legacyImportBatch: { findUnique: jest.fn(() => Promise.resolve(existing)) },
-    };
-    const audit = {
-      record: jest.fn<(event: { eventKey: string }, client?: unknown) => Promise<{ id: string }>>(
-        () => Promise.resolve({ id: 'audit-id' }),
-      ),
-    };
-    const service = new LegacyImportService(prisma as never, {} as never, audit as never);
-    const buffer = Buffer.from('same workbook');
-    const hash = await import('node:crypto').then(({ createHash }) =>
+  it('refreshes explicit dates in an untouched reused batch and remains idempotent', async () => {
+    const buffer = explicitDateWorkbookFixture();
+    const parsedRow = parseLegacyWorkbook(buffer, 'dated.xlsx')[0];
+    expect(parsedRow).toBeDefined();
+    const sourceFileHash = await import('node:crypto').then(({ createHash }) =>
       createHash('sha256').update(buffer).digest('hex'),
     );
-    existing.sourceFileHash = hash;
+    const existing = { id: 'batch-id', sourceFileHash, _count: { rows: 1 } };
+    let persistedRow = {
+      id: 'row-id',
+      sheetName: 'Active_Subscriptions',
+      sourceRowNumber: parsedRow!.sourceRowNumber,
+      mappedSubscriptions: [
+        {
+          name: 'PREMIUM PLAN',
+          startDate: null,
+          renewalDate: null,
+          classificationEvidence: { sourceRegistration: 'Hosting' },
+        },
+      ],
+      validationIssues: [
+        'Start date requires human confirmation; it is not safely normalized from free text.',
+        'The source reminder-date column is preserved but the actual renewal date requires human confirmation.',
+        'Package confirmation remains required.',
+      ],
+      validationStatus: 'INVALID',
+    };
+    const tx = {
+      legacyImportRow: {
+        findMany: jest.fn(() => Promise.resolve([persistedRow])),
+        update: jest.fn((input: { data: Record<string, unknown> }) => {
+          persistedRow = { ...persistedRow, ...input.data };
+          return Promise.resolve(persistedRow);
+        }),
+      },
+    };
+    const prisma = {
+      legacyImportBatch: { findUnique: jest.fn(() => Promise.resolve(existing)) },
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const audit = {
+      record: jest.fn<
+        (
+          event: { eventKey: string; metadata?: Record<string, unknown> },
+          client?: unknown,
+        ) => Promise<{
+          id: string;
+        }>
+      >(() => Promise.resolve({ id: 'audit-id' })),
+    };
+    const service = new LegacyImportService(prisma as never, {} as never, audit as never);
 
-    const result = await service.createBatch(
-      { originalname: 'legacy.xls', size: buffer.length, buffer },
+    const first = await service.createBatch(
+      { originalname: 'dated.xlsx', size: buffer.length, buffer },
+      actor,
+    );
+    const second = await service.createBatch(
+      { originalname: 'dated.xlsx', size: buffer.length, buffer },
       actor,
     );
 
-    expect(result).toEqual({ batch: existing, reused: true });
+    expect(first).toEqual({ batch: existing, reused: true, refreshedRows: 1 });
+    expect(second).toEqual({ batch: existing, reused: true, refreshedRows: 0 });
+    expect(tx.legacyImportRow.update).toHaveBeenCalledTimes(1);
+    expect(persistedRow.mappedSubscriptions[0]).toEqual(
+      expect.objectContaining({ startDate: '2026-01-16', renewalDate: '2027-01-15' }),
+    );
+    expect(persistedRow.validationIssues).toEqual(['Package confirmation remains required.']);
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ eventKey: 'legacy_import.reimport_detected' }),
+      tx,
     );
+    expect(audit.record.mock.calls[0]?.[0].metadata).toMatchObject({
+      refreshedRows: 1,
+      preservedReviewedRows: true,
+    });
   });
 
   it('approves validated staging into traceable live records and is repeat-safe', async () => {

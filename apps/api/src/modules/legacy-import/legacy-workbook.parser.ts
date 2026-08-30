@@ -36,7 +36,11 @@ export interface LegacySuggestions {
   servicePackageName?: string;
   classificationStatus: 'MATCHED_OFFICIAL' | 'CUSTOM' | 'MANUAL_REVIEW';
   classificationEvidence: ClassificationEvidence;
+  sourceStartDate?: string;
+  sourceEndDate?: string;
   sourceRenewalReminderDate?: string;
+  startDate?: string;
+  renewalDate?: string;
   sellingPrice?: string;
   currency?: string;
   billingFrequency?: string;
@@ -335,6 +339,9 @@ export function classifyLegacyValues(values: Record<string, unknown>): LegacySug
 
   const frequencyText = cleanText(get(/renwal.*frequancy|renewal.*frequency/i));
   const renewalIntervalMonths = parseTermMonths(frequencyText);
+  const sourceStartDate = toIsoDate(get(/start\s*date/i));
+  const sourceEndDate = toIsoDate(get(/end\s*date/i));
+  const sourceRenewalReminderDate = toIsoDate(get(/renewal.*date/i));
   const priceJod = parseMoney(get(/price.*jd/i));
   const priceUsd = parseMoney(get(/price.*usd/i));
   const issues = [...conflicts];
@@ -343,12 +350,7 @@ export function classifyLegacyValues(values: Record<string, unknown>): LegacySug
   if (!cleanText(get(/billing.*company/i))) issues.push('Billing Entity requires confirmation.');
   if (!strongestServiceType) issues.push('Service Type is missing or ambiguous.');
   if (!servicePackageCode) issues.push('Package requires human classification.');
-  issues.push(
-    'Start date requires human confirmation; it is not safely normalized from free text.',
-  );
-  issues.push(
-    'The source reminder-date column is preserved but the actual renewal date requires human confirmation.',
-  );
+  issues.push(...validateSourceDates(sourceStartDate, sourceEndDate, renewalIntervalMonths));
   if (priceJod === undefined && priceUsd === undefined) {
     issues.push('Selling price and currency require human confirmation.');
   } else if (priceJod !== undefined && priceUsd !== undefined) {
@@ -383,7 +385,11 @@ export function classifyLegacyValues(values: Record<string, unknown>): LegacySug
       matchedRules,
       conflicts,
     },
-    sourceRenewalReminderDate: toIsoDate(get(/^A\b|renewal.*date/i)),
+    sourceStartDate,
+    sourceEndDate,
+    sourceRenewalReminderDate,
+    startDate: sourceStartDate,
+    renewalDate: sourceEndDate,
     sellingPrice: priceJod ?? priceUsd,
     currency:
       priceJod !== undefined && priceUsd === undefined
@@ -568,6 +574,41 @@ function intervalToFrequency(months?: number): string | undefined {
               : undefined;
 }
 
+function validateSourceDates(
+  startDate: string | undefined,
+  endDate: string | undefined,
+  renewalIntervalMonths: number | undefined,
+): string[] {
+  const issues: string[] = [];
+  if (!startDate) {
+    issues.push('Start Date column is missing or invalid; human confirmation is required.');
+  }
+  if (!endDate) {
+    issues.push('End Date column is missing or invalid; human confirmation is required.');
+  }
+  if (!startDate || !endDate) return issues;
+  if (startDate >= endDate) {
+    issues.push('Start Date must be earlier than End Date; human correction is required.');
+    return issues;
+  }
+  if (renewalIntervalMonths && inclusiveTermStart(endDate, renewalIntervalMonths) !== startDate) {
+    issues.push(
+      'Start Date and End Date do not match the recorded renewal interval; human confirmation is required.',
+    );
+  }
+  return issues;
+}
+
+function inclusiveTermStart(endDate: string, months: number): string {
+  const date = new Date(`${endDate}T00:00:00.000Z`);
+  const originalDay = date.getUTCDate();
+  date.setUTCDate(1);
+  date.setUTCMonth(date.getUTCMonth() - months);
+  const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  date.setUTCDate(Math.min(originalDay, lastDay) + 1);
+  return date.toISOString().slice(0, 10);
+}
+
 function extractDomains(values: Array<string | undefined>): string[] {
   const result = new Set<string>();
   for (const value of values) {
@@ -606,8 +647,7 @@ function parseMoney(value: unknown): string | undefined {
 }
 
 function toIsoDate(value: unknown): string | undefined {
-  if (value instanceof Date && !Number.isNaN(value.getTime()))
-    return value.toISOString().slice(0, 10);
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return localCalendarDate(value);
   if (typeof value === 'string') {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? undefined : date.toISOString().slice(0, 10);
@@ -617,6 +657,13 @@ function toIsoDate(value: unknown): string | undefined {
     return Number.isNaN(date.getTime()) ? undefined : date.toISOString().slice(0, 10);
   }
   return undefined;
+}
+
+function localCalendarDate(value: Date): string {
+  const year = String(value.getFullYear()).padStart(4, '0');
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function findHeaderRow(rows: unknown[][]): number {
@@ -666,13 +713,13 @@ function rowToObject(row: unknown[], headers: string[]): Record<string, unknown>
 }
 
 function normalizeValue(value: unknown): unknown {
-  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Date) return localCalendarDate(value);
   if (typeof value === 'number' && !Number.isFinite(value)) return String(value);
   return value;
 }
 
 function redactValue(value: unknown): unknown {
-  if (typeof value !== 'string') return value instanceof Date ? value.toISOString() : value;
+  if (typeof value !== 'string') return value instanceof Date ? localCalendarDate(value) : value;
   return value
     .replace(
       /(^|\n)\s*(user(?:name)?|login|pass(?:word)?|token|secret|credential|api.?key)\s*[:=]\s*[^\r\n]*/gi,
@@ -683,7 +730,7 @@ function redactValue(value: unknown): unknown {
 
 function displayCell(value: unknown): string {
   if (value === null || value === undefined) return '';
-  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Date) return localCalendarDate(value);
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
     return String(value);
   return JSON.stringify(value) ?? '';
