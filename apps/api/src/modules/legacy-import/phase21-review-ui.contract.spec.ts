@@ -19,6 +19,8 @@ describe('structured legacy import review UI contract', () => {
     expect(source).toContain('Source registration (preserved)');
     expect(source).toContain('Renewal date (confirmed)');
     expect(source).toContain('Add another subscription (explicit split)');
+    expect(source).toContain('Delete staged batch');
+    expect(source).toContain('This cannot be undone.');
     expect(source).toContain('Duplicate suggestions — no automatic merge');
   });
 });

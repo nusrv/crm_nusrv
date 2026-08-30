@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Ip,
   Param,
@@ -52,6 +53,12 @@ export class LegacyImportController {
     @Ip() ip: string,
   ) {
     return this.imports.createBatch(file, { actorId: req.user.id, ipAddress: ip });
+  }
+
+  @Roles('ADMIN')
+  @Delete('batches/:id')
+  deleteBatch(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Ip() ip: string) {
+    return this.imports.deleteBatch(id, { actorId: req.user.id, ipAddress: ip });
   }
 
   @Roles('ADMIN', 'SALES_DEVELOPMENT')

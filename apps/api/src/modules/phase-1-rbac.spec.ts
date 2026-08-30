@@ -51,4 +51,14 @@ describe('Phase 1 RBAC metadata and enforcement', () => {
     expectRoleAccess(required, 'ACCOUNTANT', false);
     expectRoleAccess(required, 'ADMIN', true);
   });
+
+  it('restricts import batch deletion to Admin', () => {
+    const required = methodRoles(LegacyImportController, 'deleteBatch');
+    expect(required).toEqual(['ADMIN']);
+    expectRoleAccess(required, 'ADMIN', true);
+    expectRoleAccess(required, 'ACCOUNTANT', false);
+    expectRoleAccess(required, 'IT', false);
+    expectRoleAccess(required, 'SALES_DEVELOPMENT', false);
+    expectRoleAccess(required, 'MANAGEMENT', false);
+  });
 });

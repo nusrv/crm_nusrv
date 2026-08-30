@@ -205,6 +205,30 @@ export function LegacyImportManager() {
     }
   }
 
+  async function deleteBatch(batch: Batch) {
+    const confirmed = window.confirm(
+      `Delete staged import ${batch.sourceFileName} and all unapproved staging rows? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+    setError('');
+    try {
+      const result = await apiRequest<{ deletedRows: number }>(
+        `/legacy-import/batches/${batch.id}`,
+        { method: 'DELETE' },
+      );
+      setSelectedBatch(null);
+      setRows([]);
+      setEditing(null);
+      setMessage(
+        `Import batch deleted. ${result.deletedRows} unapproved staging rows were removed; the workbook can now be staged again.`,
+      );
+      await loadBatches();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Import batch deletion failed.');
+    }
+  }
+
+
   async function review(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editing) return;
@@ -319,6 +343,15 @@ export function LegacyImportManager() {
                     <p className="muted mt-1 text-xs">SHA-256 {selectedBatch.sourceFileHash}</p>
                   </div>
                   <span className="status-pill">{selectedBatch.status}</span>
+                  {can('ADMIN') && (
+                    <button
+                      className='button-small danger'
+                      onClick={() => void deleteBatch(selectedBatch)}
+                      type='button'
+                    >
+                      Delete staged batch
+                    </button>
+                  )}
                 </div>
                 {selectedBatch.summary && (
                   <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">

@@ -144,6 +144,86 @@ describe('LegacyImportService', () => {
     });
   });
 
+  it('deletes an unapproved staging batch transactionally and audits the deletion', async () => {
+    const batch = {
+      id: 'batch-id',
+      sourceFileName: 'legacy.xlsx',
+      sourceFileHash: 'source-hash',
+      status: 'STAGED',
+      totalRows: 604,
+      _count: { rows: 604 },
+    };
+    const tx = {
+      legacyImportBatch: {
+        findUnique: jest.fn(() => Promise.resolve(batch)),
+        delete: jest.fn(() => Promise.resolve(batch)),
+      },
+      legacyImportRow: {
+        count: jest.fn(() => Promise.resolve(0)),
+        deleteMany: jest.fn(() => Promise.resolve({ count: 604 })),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const audit = {
+      record: jest.fn(() => Promise.resolve({ id: 'audit-id' })),
+    };
+    const service = new LegacyImportService(prisma as never, {} as never, audit as never);
+
+    await expect(service.deleteBatch('batch-id', actor)).resolves.toEqual({
+      id: 'batch-id',
+      deleted: true,
+      deletedRows: 604,
+    });
+    expect(tx.legacyImportRow.deleteMany).toHaveBeenCalledWith({
+      where: { batchId: 'batch-id' },
+    });
+    expect(tx.legacyImportBatch.delete).toHaveBeenCalledWith({ where: { id: 'batch-id' } });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventKey: 'legacy_import.batch_deleted',
+        subjectId: 'batch-id',
+        metadata: expect.objectContaining({ deletedRows: 604 }),
+      }),
+      tx,
+    );
+  });
+
+  it('refuses to delete a batch containing approved or live-linked rows', async () => {
+    const tx = {
+      legacyImportBatch: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({
+            id: 'batch-id',
+            sourceFileName: 'legacy.xlsx',
+            sourceFileHash: 'source-hash',
+            status: 'IN_REVIEW',
+            totalRows: 604,
+            _count: { rows: 604 },
+          }),
+        ),
+        delete: jest.fn(),
+      },
+      legacyImportRow: {
+        count: jest.fn(() => Promise.resolve(1)),
+        deleteMany: jest.fn(),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const audit = { record: jest.fn() };
+    const service = new LegacyImportService(prisma as never, {} as never, audit as never);
+
+    await expect(service.deleteBatch('batch-id', actor)).rejects.toThrow(
+      'contains approved or live-linked records',
+    );
+    expect(tx.legacyImportRow.deleteMany).not.toHaveBeenCalled();
+    expect(tx.legacyImportBatch.delete).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
   it('approves validated staging into traceable live records and is repeat-safe', async () => {
     const readyRow = {
       id: 'row-id',

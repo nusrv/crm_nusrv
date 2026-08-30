@@ -259,6 +259,67 @@ export class LegacyImportService {
     return { batch, reused: false };
   }
 
+  async deleteBatch(id: string, context: MutationContext) {
+    return this.prisma.$transaction(async (tx) => {
+      const batch = await tx.legacyImportBatch.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          sourceFileName: true,
+          sourceFileHash: true,
+          status: true,
+          totalRows: true,
+          _count: { select: { rows: true } },
+        },
+      });
+      if (!batch) throw new NotFoundException('Import batch not found.');
+
+      const protectedRows = await tx.legacyImportRow.count({
+        where: {
+          batchId: id,
+          OR: [
+            { status: LegacyImportRowStatus.APPROVED },
+            { approvedAt: { not: null } },
+            { approvedCustomerId: { not: null } },
+            { subscriptionLinks: { some: {} } },
+          ],
+        },
+      });
+      if (protectedRows > 0) {
+        throw new ConflictException(
+          'This import batch cannot be deleted because it contains approved or live-linked records.',
+        );
+      }
+
+      const deletedRows = await tx.legacyImportRow.deleteMany({ where: { batchId: id } });
+      await tx.legacyImportBatch.delete({ where: { id } });
+      await this.audit.record(
+        {
+          actorType: ActorType.USER,
+          actorId: context.actorId,
+          eventKey: 'legacy_import.batch_deleted',
+          subjectType: 'LegacyImportBatch',
+          subjectId: id,
+          oldState: {
+            sourceFileName: batch.sourceFileName,
+            sourceFileHash: batch.sourceFileHash,
+            status: batch.status,
+            totalRows: batch.totalRows,
+          },
+          newState: { deleted: true },
+          metadata: {
+            deletedRows: deletedRows.count,
+            stagedRowCount: batch._count.rows,
+            approvedOrLiveLinkedRows: protectedRows,
+          },
+          ipAddress: context.ipAddress,
+        },
+        tx,
+      );
+      return { id, deleted: true, deletedRows: deletedRows.count };
+    });
+  }
+
   private async refreshExistingBatchDates(
     batch: { id: string; sourceFileHash: string },
     sourceFileName: string,
