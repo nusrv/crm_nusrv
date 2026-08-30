@@ -151,7 +151,7 @@ export function LegacyImportManager() {
       const [detail, result] = await Promise.all([
         apiRequest<Batch>(`/legacy-import/batches/${batch.id}`),
         apiRequest<PageResult<ImportRow>>(
-          `/legacy-import/batches/${batch.id}/rows?pageSize=100${rowStatus ? `&status=${rowStatus}` : ''}`,
+          `/legacy-import/batches/${batch.id}/rows?pageSize=300${rowStatus ? `&status=${rowStatus}` : ''}`,
         ),
       ]);
       setSelectedBatch(detail);
