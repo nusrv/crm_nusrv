@@ -761,8 +761,8 @@ export function LegacyImportManager() {
                     Add another subscription (explicit split)
                   </button>
                   <label className="field">
-                    <span>Resolution notes / human rationale</span>
-                    <textarea name="resolutionNotes" required rows={3} />
+                    <span>Resolution notes / human rationale (optional)</span>
+                    <textarea name="resolutionNotes" rows={3} />
                   </label>
                   <button className="button-primary" type="submit">
                     Validate structured review
