@@ -244,9 +244,7 @@ export function LegacyImportManager() {
           resolutionNotes: String(form.get('resolutionNotes') ?? '').trim() || undefined,
         }),
       });
-      setMessage('Structured review validated and queued for Admin approval.');
       setEditing((prev) => (prev ? { ...prev, status: 'READY_FOR_APPROVAL' } : null));
-      if (selectedBatch) await openBatch(selectedBatch, status);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Review failed.');
     }
