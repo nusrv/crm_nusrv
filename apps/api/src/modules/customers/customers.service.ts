@@ -203,18 +203,20 @@ export class CustomersService {
       });
       if (!customer) throw new NotFoundException('Customer not found.');
 
-      const activeRenewalCases = await tx.renewalCase.count({
-        where: { customerId: id, status: { notIn: ['CLOSED', 'ERROR'] } },
-      });
+      const subscriptionIds = (
+        await tx.subscription.findMany({ where: { customerId: id }, select: { id: true } })
+      ).map((s) => s.id);
+
+      const activeRenewalCases = subscriptionIds.length
+        ? await tx.renewalCase.count({
+            where: { subscriptionId: { in: subscriptionIds }, status: { notIn: ['CLOSED', 'ERROR'] } },
+          })
+        : 0;
       if (activeRenewalCases > 0) {
         throw new BadRequestException(
           'Cannot delete a customer with active renewal cases. Close or cancel them first.',
         );
       }
-
-      const subscriptionIds = (
-        await tx.subscription.findMany({ where: { customerId: id }, select: { id: true } })
-      ).map((s) => s.id);
 
       const renewalCaseIds = (
         await tx.renewalCase.findMany({
