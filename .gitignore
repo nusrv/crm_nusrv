@@ -8,6 +8,8 @@ coverage/
 .env
 .env.*
 !.env.example
+!apps/api/.env.example
+!apps/web/.env.production.example
 
 apps/api/src/generated/
 apps/api/prisma/dev.db

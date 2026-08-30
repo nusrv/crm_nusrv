@@ -68,6 +68,25 @@ Generate secrets on the host with an approved secret manager or OS cryptographic
 special characters embedded in `DATABASE_URL` or `REDIS_URL`. Restrict the environment file to the
 application system user (`chmod 600`).
 
+### Plesk npm workspace environment files
+
+When Plesk runs an npm script for the `@cp/api` workspace, npm changes the working directory to
+`apps/api`. A repository-root `.env` is therefore not discovered by Prisma's default dotenv
+loading. If the deployment uses files instead of Plesk Custom Environment Variables, create the
+ignored runtime files from the tracked templates:
+
+```bash
+cp apps/api/.env.example apps/api/.env
+cp apps/web/.env.production.example apps/web/.env.production
+chmod 600 apps/api/.env
+```
+
+Replace every masked API secret before running Prisma or starting the application. The web file
+must contain browser-safe `NEXT_PUBLIC_*` values only. Do not copy database, Redis, JWT, or
+encryption credentials into `apps/web/.env.production`. Plesk Custom Environment Variables may be
+left configured; process environment variables take precedence over values loaded from dotenv
+files.
+
 ## 4. MariaDB
 
 Create a dedicated staging database and user. Use `utf8mb4` with a conservative collation supported
