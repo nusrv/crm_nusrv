@@ -440,7 +440,12 @@ export function LegacyImportManager() {
         </div>
       </section>
       {editing && (
-        <section className="panel mt-6">
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-black/60"
+          onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}
+        >
+          <div className="flex min-h-full items-start justify-center p-4 py-10">
+          <section className="panel w-full max-w-5xl">
           <div className="flex justify-between gap-4">
             <div>
               <h3 className="text-lg font-semibold">Review {editing.sourceReference}</h3>
@@ -781,6 +786,8 @@ export function LegacyImportManager() {
             </div>
           </div>
         </section>
+          </div>
+        </div>
       )}
     </>
   );
