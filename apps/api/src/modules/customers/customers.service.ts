@@ -204,7 +204,7 @@ export class CustomersService {
       if (!customer) throw new NotFoundException('Customer not found.');
 
       const activeRenewalCases = await tx.renewalCase.count({
-        where: { customerId: id, status: { notIn: ['CLOSED', 'CANCELLED'] } },
+        where: { customerId: id, status: { notIn: ['CLOSED', 'ERROR'] } },
       });
       if (activeRenewalCases > 0) {
         throw new BadRequestException(
