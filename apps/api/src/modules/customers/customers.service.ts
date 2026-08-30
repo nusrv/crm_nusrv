@@ -195,6 +195,75 @@ export class CustomersService {
     return this.update(id, { status: CustomerStatus.INACTIVE }, context);
   }
 
+  async deleteCustomer(id: string, context: MutationContext) {
+    return this.prisma.$transaction(async (tx) => {
+      const customer = await tx.customer.findUnique({
+        where: { id },
+        select: { id: true, customerCode: true, companyName: true },
+      });
+      if (!customer) throw new NotFoundException('Customer not found.');
+
+      const activeRenewalCases = await tx.renewalCase.count({
+        where: { customerId: id, status: { notIn: ['CLOSED', 'CANCELLED'] } },
+      });
+      if (activeRenewalCases > 0) {
+        throw new BadRequestException(
+          'Cannot delete a customer with active renewal cases. Close or cancel them first.',
+        );
+      }
+
+      const subscriptionIds = (
+        await tx.subscription.findMany({ where: { customerId: id }, select: { id: true } })
+      ).map((s) => s.id);
+
+      const renewalCaseIds = (
+        await tx.renewalCase.findMany({
+          where: { subscriptionId: { in: subscriptionIds } },
+          select: { id: true },
+        })
+      ).map((r) => r.id);
+
+      await tx.communicationOutbox.deleteMany({ where: { renewalCaseId: { in: renewalCaseIds } } });
+      await tx.renewalEvaluationDecision.deleteMany({ where: { renewalCaseId: { in: renewalCaseIds } } });
+      await tx.renewalHold.deleteMany({ where: { renewalCaseId: { in: renewalCaseIds } } });
+      await tx.renewalCase.deleteMany({ where: { subscriptionId: { in: subscriptionIds } } });
+      await tx.legacyImportSubscriptionLink.deleteMany({ where: { subscriptionId: { in: subscriptionIds } } });
+      await tx.subscriptionIdentifier.deleteMany({ where: { subscriptionId: { in: subscriptionIds } } });
+      await tx.subscriptionConnection.deleteMany({ where: { subscriptionId: { in: subscriptionIds } } });
+      await tx.communicationOutbox.deleteMany({ where: { customerId: id } });
+      await tx.subscription.deleteMany({ where: { customerId: id } });
+      await tx.customerContact.deleteMany({ where: { customerId: id } });
+
+      await tx.legacyImportRow.updateMany({
+        where: { approvedCustomerId: id },
+        data: { approvedCustomerId: null, approvedById: null, approvedAt: null, status: 'REQUIRES_MANUAL_REVIEW' },
+      });
+      await tx.legacyImportRow.updateMany({
+        where: { candidateCustomerId: id },
+        data: { candidateCustomerId: null },
+      });
+
+      await tx.customer.delete({ where: { id } });
+
+      await this.audit.record(
+        {
+          actorType: ActorType.USER,
+          actorId: context.actorId,
+          eventKey: 'customer.deleted',
+          subjectType: 'Customer',
+          subjectId: id,
+          oldState: customer,
+          newState: { deleted: true },
+          metadata: { deletedSubscriptions: subscriptionIds.length },
+          ipAddress: context.ipAddress,
+        },
+        tx,
+      );
+
+      return { id, deleted: true, deletedSubscriptions: subscriptionIds.length };
+    });
+  }
+
   private async requireActiveBillingEntity(id: string): Promise<void> {
     const entity = await this.prisma.billingEntity.findUnique({
       where: { id },

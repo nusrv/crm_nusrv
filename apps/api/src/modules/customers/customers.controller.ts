@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Ip, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Ip, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../../identity/auth-user';
 import { Roles } from '../../identity/roles.decorator';
 import {
@@ -71,5 +71,11 @@ export class CustomersController {
   @Post(':id/deactivate')
   deactivate(@Param('id') id: string, @Req() request: AuthenticatedRequest, @Ip() ip: string) {
     return this.customers.deactivate(id, { actorId: request.user.id, ipAddress: ip });
+  }
+
+  @Roles('ADMIN')
+  @Delete(':id')
+  deleteCustomer(@Param('id') id: string, @Req() request: AuthenticatedRequest, @Ip() ip: string) {
+    return this.customers.deleteCustomer(id, { actorId: request.user.id, ipAddress: ip });
   }
 }

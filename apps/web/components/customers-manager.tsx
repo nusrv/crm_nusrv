@@ -175,6 +175,28 @@ export function CustomersManager() {
     }
   }
 
+  async function deleteCustomer(customer: Customer) {
+    if (
+      !window.confirm(
+        `Permanently delete ${customer.companyName} and all their subscriptions? This cannot be undone.`,
+      )
+    )
+      return;
+    try {
+      const result = await apiRequest<{ deletedSubscriptions: number }>(
+        `/customers/${customer.id}`,
+        { method: 'DELETE' },
+      );
+      setSuccess(
+        `Customer deleted along with ${result.deletedSubscriptions} subscription(s).`,
+      );
+      if (editing?.id === customer.id) setEditing(null);
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Delete failed.');
+    }
+  }
+
   const defaults = editing
     ? {
         ...emptyCustomer,
@@ -367,6 +389,15 @@ export function CustomersManager() {
                         type="button"
                       >
                         Deactivate
+                      </button>
+                    )}
+                    {can('ADMIN') && (
+                      <button
+                        className="button-small danger"
+                        onClick={() => void deleteCustomer(customer)}
+                        type="button"
+                      >
+                        Delete
                       </button>
                     )}
                   </td>
