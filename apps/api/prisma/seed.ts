@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import { hash } from 'argon2';
 import { toMariaDbDriverUrl } from '../src/database/mariadb-url';
