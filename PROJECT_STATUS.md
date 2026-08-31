@@ -46,7 +46,7 @@ rows still require explicit package decisions; split/merge decisions are never a
 review artifacts are under the Git-ignored `dont_push_to_git/` directory.
 
 Local verification passes Prisma generation, strict type checking, lint, formatting, the NestJS
-production build, the Next.js production build, and 119 default automated tests across 38 suites.
+production build, the Next.js production build, and 135 default automated tests across 40 suites.
 Twelve guarded tests across three live MariaDB suites are skipped unless MARIADB_TEST_DATABASE_URL
 targets a disposable test database. The 214-row workbook dry run was repeated with identical results
 while the source workbook hash remained unchanged.
@@ -55,6 +55,71 @@ Open dependency advisory: a clean npm audit reports three high-severity findings
 configuration chain (@prisma/config to deepmerge-ts). Prisma 7.10.0 still uses the affected
 dependency, while npm proposes a prohibited forced downgrade to Prisma 6. The lockfile was not
 mutated; this upstream Prisma 7 advisory must be monitored before production promotion.
+
+## Subscription currency conversion and customer contact channels
+
+Implemented locally (uncommitted) in response to an owner request covering three points: original
+subscription amount/currency with an automatic JOD equivalent, verifying that adding a new
+service/subscription to an existing customer does not require a duplicate customer record, and
+E.164-ready multi-email/multi-phone contact channels per customer.
+
+**Currency and JOD conversion.** A new `Currency` table (migration
+`20260831000000_currency_and_contact_channels`) stores one row per supported currency: ISO code,
+name, `rate_to_jod` (always expressed as "1 unit of this currency = X JOD"), the date that rate
+became effective, and an active flag. JOD itself is seeded and DB-constrained to stay active with a
+rate of exactly 1. A `currencies` module (`ADMIN`-only create/update, read open to all authenticated
+roles) backs a new "Currencies / Rates" settings page at `/dashboard/currencies` for adding
+currencies and editing/dating rate changes; every change is audited with the `1 X = Y JOD` direction
+recorded in the audit metadata.
+
+`Subscription.sellingPrice` and `Subscription.currency` keep storing the contract amount and
+currency exactly as entered — never overwritten by a rate change. Three new columns
+(`exchange_rate_to_jod`, `selling_price_jod`, `exchange_rate_effective_date`) capture a snapshot of
+the rate in effect at the moment the subscription was created or last had its price/currency edited.
+Every read additionally recomputes `currentSellingPriceJod`/`currentExchangeRateToJod` from the
+currency's _live_ rate, so the JOD figure shown always reflects the latest configured rate without
+ever mutating the original contract amount. Creating or editing a subscription now requires
+selecting an active currency that has a configured rate; the subscription form's currency field is a
+dropdown sourced from `/currencies?active=true`, and both the original amount/currency and the
+current JOD equivalent are shown on the list and edit views. Legacy-import approval performs the
+same rate lookup/snapshot when materializing a live subscription, and the workbook parser now
+recognizes explicit "Original Subscription Amount" / "Original Subscription Currency" columns,
+preferring them over the older Price JD / Price USD columns when present.
+
+**Multiple services per customer.** Confirmed the existing one-customer-to-many-subscriptions
+schema, and added a "Add another subscription to this customer" link on the customer detail view
+that opens the subscription form pre-selecting that customer (`/dashboard/subscriptions?customerId=`),
+so an additional service/plan is always attached to the existing customer record rather than
+prompting a new one. The subscription form's customer dropdown now loads up to 500 customers
+(previously capped at 100).
+
+**Customer contact channels.** New `CustomerEmailAddress` and `CustomerPhoneNumber` tables let a
+customer have any number of emails and phone numbers, each with its own holder/contact-person name,
+department/type (`PRIMARY`, `BILLING`, `TECHNICAL`, `MANAGEMENT`, `OTHER`), an optional label, and a
+primary flag that is exclusive per customer per channel type. Phone numbers are DB- and
+DTO-validated as E.164 (`+` plus 8–15 digits, must start with the supplied country calling code),
+ready for future messaging/SMTP integrations. A dedicated `customers/:id/channels` module
+(`ADMIN`/`SALES_DEVELOPMENT` to mutate, read open to all authenticated roles) backs a contact-methods
+panel on the customer detail view; creating a customer still requires one primary email and
+optionally one phone, which are also recorded as the first row in the new channel tables so existing
+single-value consumers (`Customer.primaryEmail`/`secondaryEmail`/`phone`) stay in sync with whichever
+address/number is marked primary. The migration backfills existing customers' legacy
+`primary_email`/`secondary_email`/`phone` (and structured `customer_contacts`) values into the new
+tables non-destructively; legacy phone values are only copied where they are already unambiguous
+E.164 (JO/SA/AE/US) — other legacy numbers stay in the old free-text column pending human
+normalization instead of being guessed at.
+
+Verification for this feature: Prisma generation, strict typecheck, lint, Prettier formatting, and
+the full test suite (135 tests / 40 suites, including new `currencies.service.spec.ts` and
+`customer-channels.service.spec.ts` unit tests, RBAC coverage for both new controllers, and a parser
+test for the new workbook columns) all pass, plus both the NestJS and Next.js production builds,
+which include the new `/dashboard/currencies` route. This work is **uncommitted** on `main` pending
+owner review.
+
+Known follow-up (not blocking, not yet implemented): legacy-import customer creation does not
+auto-populate the new `CustomerPhoneNumber` table from the workbook's free-text phone column (only
+email addresses are auto-seeded) — a human can add the E.164 number afterward through the contact
+channels panel, consistent with how every other ambiguous legacy value already requires confirmation.
 
 ## Staging CAPTCHA deployment patch
 

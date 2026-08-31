@@ -13,6 +13,7 @@ import type {
 
 const subscriptionInclude = {
   customer: { select: { id: true, customerCode: true, companyName: true, status: true } },
+  currencyDefinition: true,
   serviceType: { select: { id: true, code: true, name: true, active: true } },
   servicePackage: { include: { terms: { orderBy: { termMonths: 'asc' as const } } } },
   identifiers: { orderBy: { createdAt: 'asc' as const } },
@@ -66,7 +67,10 @@ export class SubscriptionsService {
       }),
       this.prisma.subscription.count({ where }),
     ]);
-    return { data, meta: pageMetadata(total, query.page, query.pageSize) };
+    return {
+      data: data.map((item) => this.withCurrentJod(item)),
+      meta: pageMetadata(total, query.page, query.pageSize),
+    };
   }
 
   async findOne(id: string) {
@@ -75,7 +79,7 @@ export class SubscriptionsService {
       include: subscriptionInclude,
     });
     if (!subscription) throw new NotFoundException('Subscription not found.');
-    return subscription;
+    return this.withCurrentJod(subscription);
   }
 
   async create(input: CreateSubscriptionDto, context: MutationContext) {
@@ -85,12 +89,18 @@ export class SubscriptionsService {
       input.serviceTypeId,
       input.servicePackageId,
     );
+    const currencyDefinition = await this.requireCurrency(input.currency);
     const { identifiers, ...subscriptionInput } = input;
     try {
       return await this.prisma.$transaction(async (tx) => {
         const subscription = await tx.subscription.create({
           data: {
             ...subscriptionInput,
+            exchangeRateToJod: currencyDefinition.rateToJod,
+            sellingPriceJod: currencyDefinition
+              .rateToJod!.mul(input.sellingPrice)
+              .toDecimalPlaces(3),
+            exchangeRateEffectiveDate: currencyDefinition.effectiveDate,
             startDate: new Date(input.startDate),
             renewalDate: new Date(input.renewalDate),
             packageNameSnapshot: servicePackage?.name,
@@ -120,7 +130,7 @@ export class SubscriptionsService {
           },
           tx,
         );
-        return subscription;
+        return this.withCurrentJod(subscription);
       });
     } catch (error) {
       throwMappedPrismaError(error);
@@ -140,9 +150,17 @@ export class SubscriptionsService {
           input.servicePackageId ?? oldState.servicePackageId ?? undefined,
         )
       : oldState.servicePackage;
+    const priceChanged = input.sellingPrice !== undefined || input.currency !== undefined;
+    const currencyDefinition = priceChanged
+      ? await this.requireCurrency(input.currency ?? oldState.currency)
+      : null;
+    const sellingPrice = input.sellingPrice ?? oldState.sellingPrice.toString();
     const { identifiers, ...subscriptionInput } = input;
     const data = {
       ...subscriptionInput,
+      exchangeRateToJod: currencyDefinition?.rateToJod,
+      sellingPriceJod: currencyDefinition?.rateToJod?.mul(sellingPrice).toDecimalPlaces(3),
+      exchangeRateEffectiveDate: currencyDefinition?.effectiveDate,
       startDate: input.startDate ? new Date(input.startDate) : undefined,
       renewalDate: input.renewalDate ? new Date(input.renewalDate) : undefined,
       packageNameSnapshot: input.servicePackageId ? servicePackage?.name : undefined,
@@ -182,11 +200,45 @@ export class SubscriptionsService {
           },
           tx,
         );
-        return subscription;
+        return this.withCurrentJod(subscription);
       });
     } catch (error) {
       throwMappedPrismaError(error);
     }
+  }
+
+  private withCurrentJod<
+    T extends {
+      sellingPrice: { toString(): string };
+      currencyDefinition: {
+        rateToJod: {
+          mul(value: string): { toDecimalPlaces(decimalPlaces: number): unknown };
+        } | null;
+        effectiveDate: Date | null;
+      };
+    },
+  >(subscription: T) {
+    const currentRate = subscription.currencyDefinition.rateToJod;
+    return {
+      ...subscription,
+      currentExchangeRateToJod: currentRate,
+      currentExchangeRateEffectiveDate: subscription.currencyDefinition.effectiveDate,
+      currentSellingPriceJod: currentRate
+        ? currentRate.mul(subscription.sellingPrice.toString()).toDecimalPlaces(3)
+        : null,
+    };
+  }
+
+  private async requireCurrency(code: string) {
+    const currency = await this.prisma.currency.findUnique({
+      where: { code: code.trim().toUpperCase() },
+    });
+    if (!currency?.active || !currency.rateToJod || !currency.effectiveDate) {
+      throw new BadRequestException(
+        'Select an active currency with a configured JOD exchange rate.',
+      );
+    }
+    return currency;
   }
 
   private validateDates(startDate: string, renewalDate: string): void {

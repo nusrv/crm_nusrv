@@ -344,6 +344,15 @@ export function classifyLegacyValues(values: Record<string, unknown>): LegacySug
   const sourceRenewalReminderDate = toIsoDate(get(/renewal.*date/i));
   const priceJod = parseMoney(get(/price.*jd/i));
   const priceUsd = parseMoney(get(/price.*usd/i));
+  const originalAmount = parseMoney(
+    get(/original.*subscription.*amount|subscription.*amount|original.*amount/i),
+  );
+  const originalCurrencyText = cleanText(
+    get(/original.*subscription.*currency|subscription.*currency|original.*currency|\bcurrency\b/i),
+  )?.toUpperCase();
+  const originalCurrency = /^[A-Z]{3}$/.test(originalCurrencyText ?? '')
+    ? originalCurrencyText
+    : undefined;
   const issues = [...conflicts];
   if (!companyName) issues.push('Missing or ambiguous company name.');
   if (!emails[0]) issues.push('Missing valid primary email.');
@@ -351,9 +360,11 @@ export function classifyLegacyValues(values: Record<string, unknown>): LegacySug
   if (!strongestServiceType) issues.push('Service Type is missing or ambiguous.');
   if (!servicePackageCode) issues.push('Package requires human classification.');
   issues.push(...validateSourceDates(sourceStartDate, sourceEndDate, renewalIntervalMonths));
-  if (priceJod === undefined && priceUsd === undefined) {
+  if ((originalAmount === undefined) !== (originalCurrency === undefined)) {
+    issues.push('Original subscription amount and currency must both be provided.');
+  } else if (originalAmount === undefined && priceJod === undefined && priceUsd === undefined) {
     issues.push('Selling price and currency require human confirmation.');
-  } else if (priceJod !== undefined && priceUsd !== undefined) {
+  } else if (originalAmount === undefined && priceJod !== undefined && priceUsd !== undefined) {
     issues.push('Both JOD and USD price values are present; currency requires human confirmation.');
   }
   if (!renewalIntervalMonths) issues.push('Renewal interval requires human confirmation.');
@@ -390,13 +401,15 @@ export function classifyLegacyValues(values: Record<string, unknown>): LegacySug
     sourceRenewalReminderDate,
     startDate: sourceStartDate,
     renewalDate: sourceEndDate,
-    sellingPrice: priceJod ?? priceUsd,
+    sellingPrice: originalAmount ?? priceJod ?? priceUsd,
     currency:
-      priceJod !== undefined && priceUsd === undefined
-        ? 'JOD'
-        : priceUsd !== undefined && priceJod === undefined
-          ? 'USD'
-          : undefined,
+      originalAmount !== undefined && originalCurrency
+        ? originalCurrency
+        : priceJod !== undefined && priceUsd === undefined
+          ? 'JOD'
+          : priceUsd !== undefined && priceJod === undefined
+            ? 'USD'
+            : undefined,
     billingFrequency: intervalToFrequency(renewalIntervalMonths),
     renewalIntervalMonths,
     description: information,

@@ -5,6 +5,7 @@ import { apiRequest, type PageResult } from '../lib/api';
 import { useControlPanel } from './app-shell';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
+import type { CurrencyOption } from './currencies-manager';
 
 interface CustomerOption {
   id: string;
@@ -64,6 +65,11 @@ interface Subscription {
   supplierCost: string | null;
   sellingPrice: string;
   currency: string;
+  exchangeRateToJod: string | null;
+  sellingPriceJod: string | null;
+  currentExchangeRateToJod: string | null;
+  currentExchangeRateEffectiveDate: string | null;
+  currentSellingPriceJod: string | null;
   providerAutoRenews: boolean;
   graceHours: number;
   status: string;
@@ -87,6 +93,8 @@ export function SubscriptionsManager() {
   const [types, setTypes] = useState<ServiceTypeOption[]>([]);
   const [packages, setPackages] = useState<PackageOption[]>([]);
   const [connections, setConnections] = useState<ConnectionOption[]>([]);
+  const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
+  const [defaultCustomerId, setDefaultCustomerId] = useState('');
   const [editing, setEditing] = useState<Subscription | null>(null);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
@@ -96,20 +104,32 @@ export function SubscriptionsManager() {
     const params = new URLSearchParams({ page: '1', pageSize: '100' });
     if (search) params.set('search', search);
     if (status) params.set('status', status);
-    const [subscriptions, customerPage, serviceTypes, packageOptions, technicalConnections] =
-      await Promise.all([
-        apiRequest<PageResult<Subscription>>(`/subscriptions?${params.toString()}`),
-        apiRequest<PageResult<CustomerOption>>('/customers?pageSize=100'),
-        apiRequest<ServiceTypeOption[]>('/service-types'),
-        apiRequest<PackageOption[]>('/service-packages?active=true'),
-        canMap ? apiRequest<ConnectionOption[]>('/technical-connections') : Promise.resolve([]),
-      ]);
+    const [
+      subscriptions,
+      customerPage,
+      serviceTypes,
+      packageOptions,
+      technicalConnections,
+      currencyOptions,
+    ] = await Promise.all([
+      apiRequest<PageResult<Subscription>>(`/subscriptions?${params.toString()}`),
+      apiRequest<PageResult<CustomerOption>>('/customers?pageSize=500'),
+      apiRequest<ServiceTypeOption[]>('/service-types'),
+      apiRequest<PackageOption[]>('/service-packages?active=true'),
+      canMap ? apiRequest<ConnectionOption[]>('/technical-connections') : Promise.resolve([]),
+      apiRequest<CurrencyOption[]>('/currencies?active=true'),
+    ]);
     setResult(subscriptions);
     setCustomers(customerPage.data);
     setTypes(serviceTypes);
     setPackages(packageOptions);
     setConnections(technicalConnections);
+    setCurrencies(currencyOptions);
   }, [canMap, search, status]);
+  useEffect(() => {
+    setDefaultCustomerId(new URLSearchParams(window.location.search).get('customerId') ?? '');
+  }, []);
+
   useEffect(() => {
     void load().catch((cause: unknown) =>
       setError(cause instanceof Error ? cause.message : 'Load failed.'),
@@ -217,7 +237,7 @@ export function SubscriptionsManager() {
       <Notice message={error} />
       <Notice message={message} tone="success" />
       {canManage && (
-        <details className="panel mb-6" open={Boolean(editing)}>
+        <details className="panel mb-6" open={Boolean(editing || defaultCustomerId)}>
           <summary className="cursor-pointer font-semibold">
             {editing ? `Edit ${editing.subscriptionCode}` : 'Create subscription'}
           </summary>
@@ -229,7 +249,11 @@ export function SubscriptionsManager() {
             {!editing && <Field label="Subscription code" name="subscriptionCode" required />}
             <label className="field">
               <span>Customer</span>
-              <select defaultValue={editing?.customerId ?? ''} name="customerId" required>
+              <select
+                defaultValue={editing?.customerId ?? defaultCustomerId}
+                name="customerId"
+                required
+              >
                 <option value="">Select…</option>
                 {customers.map((customer) => (
                   <option key={customer.id} value={customer.id}>
@@ -325,13 +349,31 @@ export function SubscriptionsManager() {
               value={editing?.supplierCost}
             />
             <Field
-              label="Selling price"
+              label="Original subscription amount"
               name="sellingPrice"
               required
               type="number"
               value={editing?.sellingPrice}
             />
-            <Field label="Currency" name="currency" required value={editing?.currency ?? 'JOD'} />
+            <label className="field">
+              <span>Original currency</span>
+              <select defaultValue={editing?.currency ?? 'JOD'} name="currency" required>
+                {currencies.map((currency) => (
+                  <option key={currency.code} value={currency.code}>
+                    {currency.code} — {currency.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {editing?.currentSellingPriceJod && (
+              <div className="field">
+                <span>Current JOD equivalent</span>
+                <strong>{editing.currentSellingPriceJod} JOD</strong>
+                <small className="muted">
+                  1 {editing.currency} = {editing.currentExchangeRateToJod} JOD
+                </small>
+              </div>
+            )}
             <label className="field">
               <span>Provider auto-renew</span>
               <select
@@ -451,6 +493,11 @@ export function SubscriptionsManager() {
                   </td>
                   <td>
                     {subscription.sellingPrice} {subscription.currency}
+                    <br />
+                    <span className="muted">
+                      Current equivalent {subscription.currentSellingPriceJod ?? 'rate unavailable'}{' '}
+                      JOD
+                    </span>
                     <br />
                     <span className="muted">Cost {subscription.supplierCost ?? '—'}</span>
                   </td>

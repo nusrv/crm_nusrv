@@ -215,6 +215,8 @@ model Customer {
   billingEntity         BillingEntity         @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
   subscriptions         Subscription[]
   contacts              CustomerContact[]
+  emailAddresses        CustomerEmailAddress[]
+  phoneNumbers          CustomerPhoneNumber[]
   communicationOutbox   CommunicationOutbox[]
   legacyCandidateRows   LegacyImportRow[]     @relation("LegacyCandidateCustomer")
   legacyApprovedRows    LegacyImportRow[]     @relation("LegacyApprovedCustomer")
@@ -242,6 +244,47 @@ model CustomerContact {
   @@index([customerId, active])
   @@index([email])
   @@map("customer_contacts")
+}
+
+model CustomerEmailAddress {
+  id                    String              @id @default(uuid()) @db.VarChar(36)
+  customerId            String              @map("customer_id") @db.VarChar(36)
+  email                 String              @db.VarChar(320)
+  holderName            String?             @map("holder_name") @db.VarChar(191)
+  role                  CustomerContactRole @default(OTHER)
+  label                 String?             @db.VarChar(100)
+  primary               Boolean             @default(false)
+  active                Boolean             @default(true)
+  sourceLegacyReference String?             @map("source_legacy_reference") @db.VarChar(500)
+  createdAt             DateTime            @default(now()) @map("created_at")
+  updatedAt             DateTime            @updatedAt @map("updated_at")
+  customer              Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@unique([customerId, email], map: "customer_email_addresses_customer_email_key")
+  @@index([customerId, active])
+  @@index([email])
+  @@map("customer_email_addresses")
+}
+
+model CustomerPhoneNumber {
+  id                    String              @id @default(uuid()) @db.VarChar(36)
+  customerId            String              @map("customer_id") @db.VarChar(36)
+  phoneNumber           String              @map("phone_number") @db.VarChar(16)
+  countryCallingCode    String              @map("country_calling_code") @db.VarChar(5)
+  holderName            String?             @map("holder_name") @db.VarChar(191)
+  role                  CustomerContactRole @default(OTHER)
+  label                 String?             @db.VarChar(100)
+  primary               Boolean             @default(false)
+  active                Boolean             @default(true)
+  sourceLegacyReference String?             @map("source_legacy_reference") @db.VarChar(500)
+  createdAt             DateTime            @default(now()) @map("created_at")
+  updatedAt             DateTime            @updatedAt @map("updated_at")
+  customer              Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@unique([customerId, phoneNumber], map: "customer_phone_numbers_customer_phone_key")
+  @@index([customerId, active])
+  @@index([phoneNumber])
+  @@map("customer_phone_numbers")
 }
 
 model ServiceType {
@@ -296,6 +339,20 @@ model ServicePackageTerm {
   @@map("service_package_terms")
 }
 
+model Currency {
+  code          String         @id @db.VarChar(3)
+  name          String         @db.VarChar(100)
+  rateToJod     Decimal?       @map("rate_to_jod") @db.Decimal(18, 9)
+  effectiveDate DateTime?      @map("effective_date") @db.Date
+  active        Boolean        @default(false)
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  subscriptions Subscription[]
+
+  @@index([active, code])
+  @@map("currencies")
+}
+
 model Subscription {
   id                            String                        @id @default(uuid()) @db.VarChar(36)
   customerId                    String                        @map("customer_id") @db.VarChar(36)
@@ -312,6 +369,9 @@ model Subscription {
   supplierCost                  Decimal?                      @map("supplier_cost") @db.Decimal(14, 3)
   sellingPrice                  Decimal                       @map("selling_price") @db.Decimal(14, 3)
   currency                      String                        @db.VarChar(3)
+  exchangeRateToJod             Decimal?                      @map("exchange_rate_to_jod") @db.Decimal(18, 9)
+  sellingPriceJod               Decimal?                      @map("selling_price_jod") @db.Decimal(14, 3)
+  exchangeRateEffectiveDate     DateTime?                     @map("exchange_rate_effective_date") @db.Date
   providerAutoRenews            Boolean                       @default(true) @map("provider_auto_renews")
   status                        SubscriptionStatus            @default(ACTIVE)
   graceHours                    Int                           @default(24) @map("grace_hours")
@@ -327,6 +387,7 @@ model Subscription {
   createdAt                     DateTime                      @default(now()) @map("created_at")
   updatedAt                     DateTime                      @updatedAt @map("updated_at")
   customer                      Customer                      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  currencyDefinition            Currency                      @relation(fields: [currency], references: [code], onDelete: Restrict, onUpdate: Cascade)
   serviceType                   ServiceType                   @relation(fields: [serviceTypeId], references: [id], onDelete: Restrict)
   servicePackage                ServicePackage?               @relation(fields: [servicePackageId], references: [id], onDelete: Restrict)
   identifiers                   SubscriptionIdentifier[]

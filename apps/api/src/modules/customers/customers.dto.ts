@@ -7,10 +7,69 @@ import {
   IsString,
   IsUUID,
   Length,
+  Matches,
+  ValidateIf,
   MaxLength,
 } from 'class-validator';
 import { CustomerContactRole, CustomerStatus } from '../../generated/prisma/enums';
 import { PageQueryDto } from '../../common/page-query.dto';
+
+const E164_PHONE = /^\+[1-9]\d{7,14}$/;
+const COUNTRY_CALLING_CODE = /^\+[1-9]\d{0,2}$/;
+
+export class CreateCustomerEmailAddressDto {
+  @Transform(({ value }) => String(value).trim().toLowerCase())
+  @IsEmail()
+  email!: string;
+
+  @IsOptional() @IsString() @MaxLength(191) holderName?: string;
+  @IsEnum(CustomerContactRole) role!: CustomerContactRole;
+  @IsOptional() @IsString() @MaxLength(100) label?: string;
+  @IsOptional() @IsBoolean() primary = false;
+}
+
+export class UpdateCustomerEmailAddressDto {
+  @IsOptional()
+  @Transform(({ value }) => String(value).trim().toLowerCase())
+  @IsEmail()
+  email?: string;
+  @IsOptional() @IsString() @MaxLength(191) holderName?: string;
+  @IsOptional() @IsEnum(CustomerContactRole) role?: CustomerContactRole;
+  @IsOptional() @IsString() @MaxLength(100) label?: string;
+  @IsOptional() @IsBoolean() primary?: boolean;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
+
+export class CreateCustomerPhoneNumberDto {
+  @Transform(({ value }) => String(value).replace(/[\s()-]/g, ''))
+  @Matches(E164_PHONE, { message: 'phoneNumber must use E.164 format, for example +962790000000.' })
+  phoneNumber!: string;
+
+  @Transform(({ value }) => String(value).replace(/[\s()-]/g, ''))
+  @Matches(COUNTRY_CALLING_CODE)
+  countryCallingCode!: string;
+
+  @IsOptional() @IsString() @MaxLength(191) holderName?: string;
+  @IsEnum(CustomerContactRole) role!: CustomerContactRole;
+  @IsOptional() @IsString() @MaxLength(100) label?: string;
+  @IsOptional() @IsBoolean() primary = false;
+}
+
+export class UpdateCustomerPhoneNumberDto {
+  @IsOptional()
+  @Transform(({ value }) => String(value).replace(/[\s()-]/g, ''))
+  @Matches(E164_PHONE)
+  phoneNumber?: string;
+  @IsOptional()
+  @Transform(({ value }) => String(value).replace(/[\s()-]/g, ''))
+  @Matches(COUNTRY_CALLING_CODE)
+  countryCallingCode?: string;
+  @IsOptional() @IsString() @MaxLength(191) holderName?: string;
+  @IsOptional() @IsEnum(CustomerContactRole) role?: CustomerContactRole;
+  @IsOptional() @IsString() @MaxLength(100) label?: string;
+  @IsOptional() @IsBoolean() primary?: boolean;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
 
 export class CreateCustomerContactDto {
   @IsEnum(CustomerContactRole)
@@ -83,9 +142,12 @@ export class CreateCustomerDto {
   secondaryEmail?: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(100)
+  @Matches(E164_PHONE)
   phone?: string;
+
+  @ValidateIf((input: CreateCustomerDto) => Boolean(input.phone))
+  @Matches(COUNTRY_CALLING_CODE)
+  phoneCountryCallingCode?: string;
 
   @IsOptional()
   @IsString()
@@ -147,9 +209,12 @@ export class UpdateCustomerDto {
   secondaryEmail?: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(100)
+  @Matches(E164_PHONE)
   phone?: string;
+
+  @IsOptional()
+  @Matches(COUNTRY_CALLING_CODE)
+  phoneCountryCallingCode?: string;
 
   @IsOptional()
   @IsString()

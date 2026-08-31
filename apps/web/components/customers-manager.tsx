@@ -1,10 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { apiRequest, type PageResult } from '../lib/api';
 import { useControlPanel } from './app-shell';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
+import { CustomerChannelsManager } from './customer-channels-manager';
 
 interface BillingEntity {
   id: string;
@@ -55,6 +57,7 @@ const emptyCustomer = {
   primaryEmail: '',
   secondaryEmail: '',
   phone: '',
+  phoneCountryCallingCode: '',
   address: '',
   country: '',
   taxNumber: '',
@@ -132,6 +135,7 @@ export function CustomersManager() {
       primaryEmail: value('primaryEmail'),
       secondaryEmail: value('secondaryEmail') || undefined,
       phone: value('phone') || undefined,
+      phoneCountryCallingCode: value('phoneCountryCallingCode') || undefined,
       address: value('address') || undefined,
       country: value('country') || undefined,
       taxNumber: value('taxNumber') || undefined,
@@ -187,9 +191,7 @@ export function CustomersManager() {
         `/customers/${customer.id}`,
         { method: 'DELETE' },
       );
-      setSuccess(
-        `Customer deleted along with ${result.deletedSubscriptions} subscription(s).`,
-      );
+      setSuccess(`Customer deleted along with ${result.deletedSubscriptions} subscription(s).`);
       if (editing?.id === customer.id) setEditing(null);
       await load();
     } catch (cause) {
@@ -253,6 +255,7 @@ export function CustomersManager() {
               value={String(defaults.secondaryEmail)}
             />
             <Field label="Phone" name="phone" value={String(defaults.phone)} />
+            <Field label="Phone country calling code" name="phoneCountryCallingCode" value="" />
             <Field label="Country" name="country" value={String(defaults.country)} />
             <Field label="Tax number" name="taxNumber" value={String(defaults.taxNumber)} />
             <label className="field">
@@ -411,7 +414,8 @@ export function CustomersManager() {
       {detail && (
         <section className="panel mt-6">
           <h3 className="font-semibold">{detail.companyName}</h3>
-          <h4 className="mt-4 font-medium">Contacts</h4>
+          <CustomerChannelsManager canManage={canManage} customerId={detail.id} />
+          <h4 className="mt-6 font-medium">Legacy combined contacts</h4>
           <div className="mt-2 space-y-2">
             {detail.contacts
               ?.filter((contact) => contact.active)
@@ -459,6 +463,14 @@ export function CustomersManager() {
             </form>
           )}
           <h4 className="mt-6 font-medium">Subscriptions</h4>
+          {canManage && (
+            <Link
+              className="button-small mt-3 inline-block"
+              href={`/dashboard/subscriptions?customerId=${detail.id}`}
+            >
+              Add another subscription to this customer
+            </Link>
+          )}
           <div className="mt-3 space-y-2">
             {detail.subscriptions?.length ? (
               detail.subscriptions.map((subscription) => (

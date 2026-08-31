@@ -72,9 +72,56 @@ export class CustomersService {
 
   async create(input: CreateCustomerDto, context: MutationContext) {
     await this.requireActiveBillingEntity(input.billingEntityId);
+    const { phoneCountryCallingCode, ...customerData } = input;
+    if (
+      input.phone &&
+      (!phoneCountryCallingCode || !input.phone.startsWith(phoneCountryCallingCode))
+    ) {
+      throw new BadRequestException('Phone must start with its country calling code.');
+    }
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const customer = await tx.customer.create({ data: input, include: customerInclude });
+        const customer = await tx.customer.create({
+          data: {
+            ...customerData,
+            emailAddresses: {
+              create: [
+                {
+                  email: input.primaryEmail,
+                  holderName: input.contactName,
+                  role: 'PRIMARY',
+                  label: 'Primary',
+                  primary: true,
+                },
+                ...(input.secondaryEmail
+                  ? [
+                      {
+                        email: input.secondaryEmail,
+                        holderName: input.contactName,
+                        role: 'OTHER' as const,
+                        label: 'Secondary',
+                        primary: false,
+                      },
+                    ]
+                  : []),
+              ],
+            },
+            phoneNumbers:
+              input.phone && phoneCountryCallingCode
+                ? {
+                    create: {
+                      phoneNumber: input.phone,
+                      countryCallingCode: phoneCountryCallingCode,
+                      holderName: input.contactName,
+                      role: 'PRIMARY',
+                      label: 'Primary',
+                      primary: true,
+                    },
+                  }
+                : undefined,
+          },
+          include: customerInclude,
+        });
         await this.audit.record(
           {
             actorType: ActorType.USER,
@@ -101,11 +148,18 @@ export class CustomersService {
     });
     if (!oldState) throw new NotFoundException('Customer not found.');
     if (input.billingEntityId) await this.requireActiveBillingEntity(input.billingEntityId);
+    const { phoneCountryCallingCode, ...customerData } = input;
+    if (
+      input.phone &&
+      (!phoneCountryCallingCode || !input.phone.startsWith(phoneCountryCallingCode))
+    ) {
+      throw new BadRequestException('Phone must start with its country calling code.');
+    }
     try {
       return await this.prisma.$transaction(async (tx) => {
         const customer = await tx.customer.update({
           where: { id },
-          data: input,
+          data: customerData,
           include: customerInclude,
         });
         const eventKey =
@@ -209,7 +263,10 @@ export class CustomersService {
 
       const activeRenewalCases = subscriptionIds.length
         ? await tx.renewalCase.count({
-            where: { subscriptionId: { in: subscriptionIds }, status: { notIn: ['CLOSED', 'ERROR'] } },
+            where: {
+              subscriptionId: { in: subscriptionIds },
+              status: { notIn: ['CLOSED', 'ERROR'] },
+            },
           })
         : 0;
       if (activeRenewalCases > 0) {
@@ -226,19 +283,34 @@ export class CustomersService {
       ).map((r) => r.id);
 
       await tx.communicationOutbox.deleteMany({ where: { renewalCaseId: { in: renewalCaseIds } } });
-      await tx.renewalEvaluationDecision.deleteMany({ where: { renewalCaseId: { in: renewalCaseIds } } });
+      await tx.renewalEvaluationDecision.deleteMany({
+        where: { renewalCaseId: { in: renewalCaseIds } },
+      });
       await tx.renewalHold.deleteMany({ where: { renewalCaseId: { in: renewalCaseIds } } });
       await tx.renewalCase.deleteMany({ where: { subscriptionId: { in: subscriptionIds } } });
-      await tx.legacyImportSubscriptionLink.deleteMany({ where: { subscriptionId: { in: subscriptionIds } } });
-      await tx.subscriptionIdentifier.deleteMany({ where: { subscriptionId: { in: subscriptionIds } } });
-      await tx.subscriptionConnection.deleteMany({ where: { subscriptionId: { in: subscriptionIds } } });
+      await tx.legacyImportSubscriptionLink.deleteMany({
+        where: { subscriptionId: { in: subscriptionIds } },
+      });
+      await tx.subscriptionIdentifier.deleteMany({
+        where: { subscriptionId: { in: subscriptionIds } },
+      });
+      await tx.subscriptionConnection.deleteMany({
+        where: { subscriptionId: { in: subscriptionIds } },
+      });
       await tx.communicationOutbox.deleteMany({ where: { customerId: id } });
       await tx.subscription.deleteMany({ where: { customerId: id } });
       await tx.customerContact.deleteMany({ where: { customerId: id } });
+      await tx.customerEmailAddress.deleteMany({ where: { customerId: id } });
+      await tx.customerPhoneNumber.deleteMany({ where: { customerId: id } });
 
       await tx.legacyImportRow.updateMany({
         where: { approvedCustomerId: id },
-        data: { approvedCustomerId: null, approvedById: null, approvedAt: null, status: 'REQUIRES_MANUAL_REVIEW' },
+        data: {
+          approvedCustomerId: null,
+          approvedById: null,
+          approvedAt: null,
+          status: 'REQUIRES_MANUAL_REVIEW',
+        },
       });
       await tx.legacyImportRow.updateMany({
         where: { candidateCustomerId: id },

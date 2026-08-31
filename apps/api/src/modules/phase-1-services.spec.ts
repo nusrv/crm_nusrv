@@ -27,11 +27,14 @@ describe('Phase 1 audited services', () => {
   });
 
   it('creates an independent subscription under the selected customer and Service Type', async () => {
+    const rateToJod = { mul: jest.fn(() => ({ toDecimalPlaces: () => '100.000' })) };
     const subscription = {
       id: 'subscription-id',
       customerId: 'customer-id',
       serviceTypeId: 'type-id',
       subscriptionCode: 'SUB-001',
+      sellingPrice: { toString: () => '100.000' },
+      currencyDefinition: { rateToJod, effectiveDate: new Date('2026-08-31') },
     };
     const createSubscription = jest.fn<
       (input: {
@@ -42,6 +45,16 @@ describe('Phase 1 audited services', () => {
     const prisma = {
       customer: { findUnique: jest.fn(() => Promise.resolve({ status: CustomerStatus.ACTIVE })) },
       serviceType: { findUnique: jest.fn(() => Promise.resolve({ active: true })) },
+      currency: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({
+            code: 'JOD',
+            active: true,
+            rateToJod,
+            effectiveDate: new Date('2026-08-31'),
+          }),
+        ),
+      },
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };

@@ -85,6 +85,62 @@ function explicitDateWorkbookFixture(): Buffer {
   throw new Error('The XLSX writer returned an unexpected fixture type.');
 }
 
+function originalCurrencyWorkbookFixture(): Buffer {
+  const workbook = XLSX.utils.book_new();
+  const rows: unknown[][] = [
+    [
+      'Start',
+      'End',
+      'Renewal',
+      'Renwal',
+      'Company',
+      'E-mail',
+      'Registration',
+      'Package',
+      'Billing',
+      'Original Subscription',
+      'Original Subscription',
+      'Price',
+      'Price',
+    ],
+    [
+      'Date',
+      'Date',
+      'date (-15days)',
+      'Frequancy',
+      'name',
+      'address',
+      'type',
+      '',
+      'Company',
+      'Amount',
+      'Currency',
+      'JD',
+      'USD',
+    ],
+    [
+      new Date('2026-01-16T00:00:00Z'),
+      new Date('2027-01-15T00:00:00Z'),
+      new Date('2026-12-31T00:00:00Z'),
+      '1 Year',
+      'SAFE CURRENCY COMPANY',
+      'safe-currency@example.test',
+      'Hosting',
+      'PREMIUM PLAN',
+      'New Serve for Digital Data Transformation',
+      1000,
+      'USD',
+      710,
+      1000,
+    ],
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Active_Subscriptions');
+  const output: unknown = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  if (Buffer.isBuffer(output)) return output;
+  if (output instanceof Uint8Array) return Buffer.from(output);
+  throw new Error('The XLSX writer returned an unexpected fixture type.');
+}
+
 describe('legacy workbook parser', () => {
   it('stages a safe XLS fixture with source references and conservative manual-review suggestions', () => {
     const rows = parseLegacyWorkbook(safeWorkbookFixture(), 'safe-legacy-fixture.xls');
@@ -114,6 +170,18 @@ describe('legacy workbook parser', () => {
     });
     expect(rows[0]?.suggestions.issues.join(' ')).not.toMatch(
       /Start Date column|End Date column|do not match/i,
+    );
+  });
+
+  it('prefers an explicit Original Subscription Amount/Currency over the legacy Price JD/USD columns', () => {
+    const rows = parseLegacyWorkbook(originalCurrencyWorkbookFixture(), 'currency.xlsx');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.suggestions).toMatchObject({
+      sellingPrice: '1000.000',
+      currency: 'USD',
+    });
+    expect(rows[0]?.suggestions.issues.join(' ')).not.toMatch(
+      /Selling price and currency require human confirmation|Both JOD and USD/i,
     );
   });
 

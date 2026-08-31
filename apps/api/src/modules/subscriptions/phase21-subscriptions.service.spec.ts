@@ -10,7 +10,12 @@ import { SubscriptionsService } from './subscriptions.service';
 
 describe('Phase 2.1 subscription package snapshots', () => {
   it('copies catalog identity/specification but preserves the actual selling price and term', async () => {
-    const created = { id: 'subscription-id' };
+    const rateToJod = { mul: jest.fn(() => ({ toDecimalPlaces: () => '499.125' })) };
+    const created = {
+      id: 'subscription-id',
+      sellingPrice: { toString: () => '499.125' },
+      currencyDefinition: { rateToJod, effectiveDate: new Date('2026-01-01') },
+    };
     type CreateArgs = { data: Record<string, unknown> };
     const create = jest.fn<(input: CreateArgs) => Promise<typeof created>>(() =>
       Promise.resolve(created),
@@ -19,6 +24,16 @@ describe('Phase 2.1 subscription package snapshots', () => {
     const prisma = {
       customer: { findUnique: jest.fn(() => Promise.resolve({ status: CustomerStatus.ACTIVE })) },
       serviceType: { findUnique: jest.fn(() => Promise.resolve({ active: true })) },
+      currency: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({
+            code: 'JOD',
+            active: true,
+            rateToJod,
+            effectiveDate: new Date('2026-01-01'),
+          }),
+        ),
+      },
       servicePackage: {
         findUnique: jest.fn(() =>
           Promise.resolve({

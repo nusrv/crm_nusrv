@@ -639,6 +639,30 @@ export class LegacyImportService {
                   })),
                 }
               : undefined,
+            emailAddresses: {
+              create: [
+                {
+                  email: customerInput.primaryEmail,
+                  holderName: customerInput.contactName,
+                  role: 'PRIMARY',
+                  label: 'Primary',
+                  primary: true,
+                  sourceLegacyReference: row.sourceReference,
+                },
+                ...(customerInput.secondaryEmail
+                  ? [
+                      {
+                        email: customerInput.secondaryEmail,
+                        holderName: customerInput.contactName,
+                        role: 'OTHER' as const,
+                        label: 'Secondary',
+                        primary: false,
+                        sourceLegacyReference: row.sourceReference,
+                      },
+                    ]
+                  : []),
+              ],
+            },
           },
         });
         customerId = customer.id;
@@ -660,9 +684,26 @@ export class LegacyImportService {
       const subscriptions = [];
       for (const [index, subscriptionInput] of mapping.subscriptions.entries()) {
         const { identifiers, ...liveSubscriptionInput } = subscriptionInput;
+        const currencyDefinition = await tx.currency.findUnique({
+          where: { code: subscriptionInput.currency },
+        });
+        if (
+          !currencyDefinition?.active ||
+          !currencyDefinition.rateToJod ||
+          !currencyDefinition.effectiveDate
+        ) {
+          throw new BadRequestException(
+            `Currency ${subscriptionInput.currency} needs an active JOD exchange rate before approval.`,
+          );
+        }
         const subscription = await tx.subscription.create({
           data: {
             ...liveSubscriptionInput,
+            exchangeRateToJod: currencyDefinition.rateToJod,
+            sellingPriceJod: currencyDefinition.rateToJod
+              .mul(subscriptionInput.sellingPrice)
+              .toDecimalPlaces(3),
+            exchangeRateEffectiveDate: currencyDefinition.effectiveDate,
             packageSpecificationsSnapshot: liveSubscriptionInput.packageSpecificationsSnapshot
               ? asJson(liveSubscriptionInput.packageSpecificationsSnapshot)
               : undefined,

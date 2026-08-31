@@ -167,7 +167,12 @@ describe('LegacyImportService', () => {
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const audit = {
-      record: jest.fn(() => Promise.resolve({ id: 'audit-id' })),
+      record: jest.fn<
+        (
+          event: { eventKey: string; subjectId?: string; metadata?: Record<string, unknown> },
+          client?: unknown,
+        ) => Promise<{ id: string }>
+      >(() => Promise.resolve({ id: 'audit-id' })),
     };
     const service = new LegacyImportService(prisma as never, {} as never, audit as never);
 
@@ -180,14 +185,12 @@ describe('LegacyImportService', () => {
       where: { batchId: 'batch-id' },
     });
     expect(tx.legacyImportBatch.delete).toHaveBeenCalledWith({ where: { id: 'batch-id' } });
-    expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventKey: 'legacy_import.batch_deleted',
-        subjectId: 'batch-id',
-        metadata: expect.objectContaining({ deletedRows: 604 }),
-      }),
-      tx,
-    );
+    expect(audit.record.mock.calls[0]?.[0]).toMatchObject({
+      eventKey: 'legacy_import.batch_deleted',
+      subjectId: 'batch-id',
+      metadata: { deletedRows: 604 },
+    });
+    expect(audit.record.mock.calls[0]?.[1]).toBe(tx);
   });
 
   it('refuses to delete a batch containing approved or live-linked rows', async () => {
@@ -262,6 +265,7 @@ describe('LegacyImportService', () => {
     };
     const customer = { id: 'customer-id', companyName: 'Legacy Customer' };
     const subscription = { id: 'subscription-id', name: 'Legacy Hosting' };
+    const rateToJod = { mul: jest.fn(() => ({ toDecimalPlaces: () => '100.000' })) };
     const tx = {
       legacyImportRow: {
         findUnique: jest
@@ -273,6 +277,16 @@ describe('LegacyImportService', () => {
       },
       customer: { create: jest.fn(() => Promise.resolve(customer)), findUnique: jest.fn() },
       subscription: { create: jest.fn(() => Promise.resolve(subscription)) },
+      currency: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({
+            code: 'JOD',
+            active: true,
+            rateToJod,
+            effectiveDate: new Date('2026-01-01'),
+          }),
+        ),
+      },
       legacyImportSubscriptionLink: { create: jest.fn(() => Promise.resolve({ id: 'link-id' })) },
     };
     const prisma = {

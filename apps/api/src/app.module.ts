@@ -12,6 +12,7 @@ import { OriginGuard } from './identity/origin.guard';
 import { RolesGuard } from './identity/roles.guard';
 import { BillingEntitiesModule } from './modules/billing-entities/billing-entities.module';
 import { CustomersModule } from './modules/customers/customers.module';
+import { CurrenciesModule } from './modules/currencies/currencies.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { LegacyImportModule } from './modules/legacy-import/legacy-import.module';
 import { RenewalCasesModule } from './modules/renewal-cases/renewal-cases.module';
@@ -37,6 +38,7 @@ import { TimeModule } from './time/time.module';
     DashboardModule,
     BillingEntitiesModule,
     CustomersModule,
+    CurrenciesModule,
     ServiceTypesModule,
     ServicePackagesModule,
     SubscriptionsModule,

@@ -12,7 +12,7 @@ export class PageQueryDto {
   @Transform(({ value }) => Number(value))
   @IsInt()
   @Min(1)
-  @Max(100)
+  @Max(500)
   pageSize = 20;
 
   @IsOptional()
