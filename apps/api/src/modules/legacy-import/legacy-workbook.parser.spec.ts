@@ -141,6 +141,56 @@ function originalCurrencyWorkbookFixture(): Buffer {
   throw new Error('The XLSX writer returned an unexpected fixture type.');
 }
 
+function realPriceWorkbookFixture(): Buffer {
+  const workbook = XLSX.utils.book_new();
+  const rows: unknown[][] = [
+    [
+      'Start',
+      'End',
+      'Renewal',
+      'Renwal',
+      'Company',
+      'E-mail',
+      'Registration',
+      'Package',
+      'Billing',
+      'real',
+      'Price',
+    ],
+    [
+      'Date',
+      'Date',
+      'date (-15days)',
+      'Frequancy',
+      'name',
+      'address',
+      'type',
+      '',
+      'Company',
+      'price',
+      'JD',
+    ],
+    [
+      new Date('2026-01-16T00:00:00Z'),
+      new Date('2027-01-15T00:00:00Z'),
+      new Date('2026-12-31T00:00:00Z'),
+      '1 Year',
+      'SAFE REAL PRICE COMPANY',
+      'safe-real-price@example.test',
+      'Hosting',
+      'PREMIUM PLAN',
+      'New Serve for Digital Data Transformation',
+      '1250 SAR',
+      235,
+    ],
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Active_Subscriptions');
+  const output: unknown = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  if (Buffer.isBuffer(output)) return output;
+  if (output instanceof Uint8Array) return Buffer.from(output);
+  throw new Error('The XLSX writer returned an unexpected fixture type.');
+}
+
 describe('legacy workbook parser', () => {
   it('stages a safe XLS fixture with source references and conservative manual-review suggestions', () => {
     const rows = parseLegacyWorkbook(safeWorkbookFixture(), 'safe-legacy-fixture.xls');
@@ -179,6 +229,18 @@ describe('legacy workbook parser', () => {
     expect(rows[0]?.suggestions).toMatchObject({
       sellingPrice: '1000.000',
       currency: 'USD',
+    });
+    expect(rows[0]?.suggestions.issues.join(' ')).not.toMatch(
+      /Selling price and currency require human confirmation|Both JOD and USD/i,
+    );
+  });
+
+  it('parses a combined "real price" cell like "1250 SAR" into amount and currency', () => {
+    const rows = parseLegacyWorkbook(realPriceWorkbookFixture(), 'real-price.xlsx');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.suggestions).toMatchObject({
+      sellingPrice: '1250',
+      currency: 'SAR',
     });
     expect(rows[0]?.suggestions.issues.join(' ')).not.toMatch(
       /Selling price and currency require human confirmation|Both JOD and USD/i,

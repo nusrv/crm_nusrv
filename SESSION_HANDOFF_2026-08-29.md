@@ -294,3 +294,27 @@ lockfile changes shipped, so `npm install` is not required. On the live server:
    unavailable" for their JOD equivalent, and the API refuses to create/edit a subscription priced
    in that currency. To find exactly which currencies need a rate, run against the live database:
    `SELECT DISTINCT currency FROM subscriptions WHERE currency <> 'JOD';`
+
+## Update — 2026-08-31 legacy-import parser: combined "real price" column
+
+The owner's real active-subscriptions workbook stores the original amount and currency together in
+one free-text cell headed "real price" (e.g. `1250 SAR`, `875 JOD`), not as two separate columns.
+`legacy-workbook.parser.ts` did not recognize that header at all, so uploading that workbook as-is
+would have silently ignored the column and priced every one of the 214 rows in JOD from the legacy
+`Price JD` column instead — 177 of the 214 rows are genuinely JOD, but 18 are USD, 17 are SAR, and 2
+are EUR.
+
+Fixed: the parser now also matches any header containing "real price" and parses a combined
+`"<amount> <CCY>"` cell into the same `sellingPrice`/`currency` suggestion fields used by the
+existing two-column and legacy Price JD/USD paths. It only falls back to this combined-cell format
+when no dedicated amount/currency columns exist at all, so it cannot change behavior for any
+workbook that already used the two-column format. Verified against the owner's real workbook
+(structure/counts only, no customer data): all 214 rows now resolve a currency — 177 JOD, 18 USD, 17
+SAR, 2 EUR — versus 214/214 JOD before the fix. Added a regression test
+(`legacy-workbook.parser.spec.ts`) covering the `"1250 SAR"` shape. Full verification (typecheck,
+lint, 136 tests / 40 suites, both production builds) passes.
+
+Operational note for the next real import: `USD`, `SAR`, and `EUR` do not exist in the `currencies`
+table yet (only `JOD` is seeded). Uploading and reviewing the workbook works regardless, but
+approving a row priced in one of those currencies will be refused until an Admin adds that currency
+with a real rate in Currencies / Rates first.

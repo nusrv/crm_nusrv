@@ -344,15 +344,29 @@ export function classifyLegacyValues(values: Record<string, unknown>): LegacySug
   const sourceRenewalReminderDate = toIsoDate(get(/renewal.*date/i));
   const priceJod = parseMoney(get(/price.*jd/i));
   const priceUsd = parseMoney(get(/price.*usd/i));
-  const originalAmount = parseMoney(
+  const originalAmountFromColumn = parseMoney(
     get(/original.*subscription.*amount|subscription.*amount|original.*amount/i),
   );
-  const originalCurrencyText = cleanText(
+  const originalCurrencyTextFromColumn = cleanText(
     get(/original.*subscription.*currency|subscription.*currency|original.*currency|\bcurrency\b/i),
   )?.toUpperCase();
-  const originalCurrency = /^[A-Z]{3}$/.test(originalCurrencyText ?? '')
-    ? originalCurrencyText
+  const originalCurrencyFromColumn = /^[A-Z]{3}$/.test(originalCurrencyTextFromColumn ?? '')
+    ? originalCurrencyTextFromColumn
     : undefined;
+  let originalAmount = originalAmountFromColumn;
+  let originalCurrency = originalCurrencyFromColumn;
+  if (originalAmount === undefined && originalCurrency === undefined) {
+    // Some workbooks combine the original amount and currency into one free-text cell, e.g.
+    // "real price" = "1250 SAR". Only used when no dedicated amount/currency columns exist at all.
+    const realPriceMatch = cleanText(get(/real.*price/i))?.match(
+      /^([\d,]+(?:\.\d{1,3})?)\s*([A-Za-z]{3})$/,
+    );
+    const [, realPriceAmountText, realPriceCurrencyText] = realPriceMatch ?? [];
+    if (realPriceAmountText && realPriceCurrencyText) {
+      originalAmount = parseMoney(realPriceAmountText);
+      originalCurrency = realPriceCurrencyText.toUpperCase();
+    }
+  }
   const issues = [...conflicts];
   if (!companyName) issues.push('Missing or ambiguous company name.');
   if (!emails[0]) issues.push('Missing valid primary email.');

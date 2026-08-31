@@ -46,7 +46,7 @@ rows still require explicit package decisions; split/merge decisions are never a
 review artifacts are under the Git-ignored `dont_push_to_git/` directory.
 
 Local verification passes Prisma generation, strict type checking, lint, formatting, the NestJS
-production build, the Next.js production build, and 135 default automated tests across 40 suites.
+production build, the Next.js production build, and 136 default automated tests across 40 suites.
 Twelve guarded tests across three live MariaDB suites are skipped unless MARIADB_TEST_DATABASE_URL
 targets a disposable test database. The 214-row workbook dry run was repeated with identical results
 while the source workbook hash remained unchanged.
@@ -84,7 +84,10 @@ dropdown sourced from `/currencies?active=true`, and both the original amount/cu
 current JOD equivalent are shown on the list and edit views. Legacy-import approval performs the
 same rate lookup/snapshot when materializing a live subscription, and the workbook parser now
 recognizes explicit "Original Subscription Amount" / "Original Subscription Currency" columns,
-preferring them over the older Price JD / Price USD columns when present.
+preferring them over the older Price JD / Price USD columns when present. It also recognizes a
+single combined column (matched on a header containing "real price") holding both the amount and
+currency in one free-text cell, e.g. `"1250 SAR"` — the format used in the owner's real workbook —
+and only falls back to it when no dedicated amount/currency columns exist at all.
 
 **Multiple services per customer.** Confirmed the existing one-customer-to-many-subscriptions
 schema, and added a "Add another subscription to this customer" link on the customer detail view
@@ -110,7 +113,7 @@ E.164 (JO/SA/AE/US) — other legacy numbers stay in the old free-text column pe
 normalization instead of being guessed at.
 
 Verification for this feature: Prisma generation, strict typecheck, lint, Prettier formatting, and
-the full test suite (135 tests / 40 suites, including new `currencies.service.spec.ts` and
+the full test suite (136 tests / 40 suites, including new `currencies.service.spec.ts` and
 `customer-channels.service.spec.ts` unit tests, RBAC coverage for both new controllers, and a parser
 test for the new workbook columns) all pass, plus both the NestJS and Next.js production builds,
 which include the new `/dashboard/currencies` route. This work is **uncommitted** on `main` pending
