@@ -273,11 +273,24 @@ This session verified by mirroring the repo (excluding `node_modules`/`.git`/`do
 into a local NTFS path and running `npm install`/verification there instead. For real day-to-day
 development, move the project to a local disk rather than working around this each time.
 
-Deployment note: this is a schema-changing release. After `git pull` on the server, run the Phase
-2.1 migration path (`npm run db:migrate:deploy` from `apps/api`, applying
-`20260831000000_currency_and_contact_channels`) before rebuilding and restarting — the migration
-seeds `JOD` (rate 1, active) and backfills existing customers' legacy email/phone/contact values
-into the new channel tables, but every non-JOD currency an existing subscription already uses is
-seeded **inactive with no rate configured**; an Admin must open Currencies / Rates and set a real
-rate before those subscriptions' JOD figures are meaningful, and before anyone can create or edit a
-subscription in that currency again.
+Deployment note: this is a schema-changing release (`3cc765d` → `ad0dac9`). No `package.json` or
+lockfile changes shipped, so `npm install` is not required. On the live server:
+
+1. `git pull origin main`.
+2. `cd apps/api && npm run db:generate` — regenerates the Prisma client for the new `Currency`,
+   `CustomerEmailAddress`, and `CustomerPhoneNumber` models. The generated client is Git-ignored, so
+   this must run after every pull that touches `schema.prisma`.
+3. `npm run db:migrate:deploy` — applies `20260831000000_currency_and_contact_channels`. Additive
+   and non-destructive: creates the new tables/columns, seeds `JOD` (rate 1, active), and backfills
+   existing customers' legacy email/phone/contact values into the new channel tables without
+   deleting or altering anything existing.
+4. `cd ../.. && npm run build` — rebuilds both workspaces.
+5. Restart the API, web, and renewal-worker Node processes in Plesk (all three share the rebuilt
+   `dist/`/Prisma client).
+6. Immediately after restart, before anyone edits a subscription priced outside JOD: log in as
+   Admin → Currencies / Rates → set a real rate and effective date for every currency the live
+   subscriptions actually use. The migration seeds every non-JOD currency already in use as
+   **inactive with no rate configured**, so until an Admin sets one, those subscriptions show "rate
+   unavailable" for their JOD equivalent, and the API refuses to create/edit a subscription priced
+   in that currency. To find exactly which currencies need a rate, run against the live database:
+   `SELECT DISTINCT currency FROM subscriptions WHERE currency <> 'JOD';`
