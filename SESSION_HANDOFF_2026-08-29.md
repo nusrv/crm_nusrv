@@ -318,3 +318,34 @@ Operational note for the next real import: `USD`, `SAR`, and `EUR` do not exist 
 table yet (only `JOD` is seeded). Uploading and reviewing the workbook works regardless, but
 approving a row priced in one of those currencies will be refused until an Admin adds that currency
 with a real rate in Currencies / Rates first.
+
+## Update — 2026-09-03 legacy-import "Approve" popup silently hid errors
+
+The owner deployed the `20260831000000_currency_and_contact_channels` release, approved one
+JOD-priced legacy row successfully (now a live active subscription), then hit a second row that
+appeared to do nothing on Approve: the confirmation dialog closed, no error appeared, and the row
+just reverted to `READY_FOR_APPROVAL` with no customer/subscription created.
+
+Root cause was two separate things stacking:
+
+1. **Expected backend refusal.** `approveRow()` looks up the subscription's currency and refuses to
+   approve (`BadRequestException`) unless that currency is active with a configured rate. The
+   owner's second row is priced in a non-JOD currency from the real workbook (see the update above)
+   and, per that same update, `USD`/`SAR`/`EUR` are not yet configured on the live server. The whole
+   approval runs in one transaction, so on failure everything rolls back cleanly, including the
+   temporary status flip used to claim the row — which is exactly why the row lands back at
+   `READY_FOR_APPROVAL` with nothing else changed.
+2. **Real UI bug.** The row-inspector popup in `legacy-import-manager.tsx` is a full-screen
+   `position: fixed` overlay (`zIndex: 50`) rendered _after_ the page's error/success banner in the
+   DOM. Any error set while that popup is open — including this exact currency refusal — was being
+   set correctly in state but rendered behind the popup's dark backdrop, so it was completely
+   invisible. This affected every action available from inside that popup (Approve, and the earlier
+   review/validate submit), not just the currency case.
+
+Fixed: the error/success banner (`<Notice>`) now also renders inside the popup itself, so any
+failure from an action taken there is immediately visible without closing the popup. Verified:
+typecheck, lint, and the Next.js production build pass; this is a `web`-only change, no API/schema
+change, no migration.
+
+Immediate unblock for the owner (no deploy required): add the needed currency (likely `USD` or
+`SAR`) in Currencies / Rates with a real rate, then re-open the stuck row and click Approve again.

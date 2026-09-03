@@ -457,6 +457,8 @@ export function LegacyImportManager() {
               Close
             </button>
           </div>
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
           <div className="mt-5 grid gap-6 xl:grid-cols-2">
             <div>
               <h4 className="font-medium">Raw source evidence</h4>
