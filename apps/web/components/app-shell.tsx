@@ -139,35 +139,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="min-h-screen w-full min-w-0 lg:flex">
         {!collapsed && (
           <aside className="relative border-r border-[var(--line)] bg-white lg:sticky lg:top-0 lg:h-screen lg:w-[270px] lg:flex-none">
-            <button
-              aria-label="Collapse sidebar"
-              className="hidden lg:flex"
-              onClick={toggleCollapsed}
-              style={{
-                position: 'absolute',
-                top: '1.25rem',
-                right: '-16px',
-                width: 32,
-                height: 32,
-                borderRadius: 999,
-                border: '1px solid var(--line)',
-                background: 'white',
-                boxShadow: '0 1px 2px rgb(23 33 29 / 12%)',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                zIndex: 50,
-              }}
-              title="Collapse sidebar"
-              type="button"
-            >
-              ‹
-            </button>
             <div className="p-5 lg:h-full lg:overflow-y-auto">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
                 Subscription lifecycle
               </p>
-              <h1 className="mt-2 text-xl font-semibold">Control Panel</h1>
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <h1 className="text-xl font-semibold">Control Panel</h1>
+                <button
+                  aria-label="Collapse sidebar"
+                  className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--line)] bg-white lg:flex"
+                  onClick={toggleCollapsed}
+                  style={{ boxShadow: '0 1px 2px rgb(23 33 29 / 12%)' }}
+                  title="Collapse sidebar"
+                  type="button"
+                >
+                  ‹
+                </button>
+              </div>
               <nav className="mt-8 space-y-1" aria-label="Control Panel navigation">
                 {navigation
                   .filter((item) => item.roles.some((role) => user.roles.includes(role)))
@@ -200,33 +188,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </aside>
         )}
-        {collapsed && (
-          <button
-            aria-label="Expand sidebar"
-            className="hidden lg:flex"
-            onClick={toggleCollapsed}
-            style={{
-              position: 'fixed',
-              top: '1.25rem',
-              left: 10,
-              width: 32,
-              height: 32,
-              borderRadius: 999,
-              border: '1px solid var(--line)',
-              background: 'white',
-              boxShadow: '0 1px 2px rgb(23 33 29 / 12%)',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              zIndex: 50,
-            }}
-            title="Expand sidebar"
-            type="button"
-          >
-            ›
-          </button>
-        )}
-        <main className="min-w-0 flex-1 p-5 lg:p-9">{children}</main>
+        <main
+          className={`relative min-w-0 flex-1 p-5 lg:py-9 lg:pr-9 ${collapsed ? 'lg:pl-16' : 'lg:pl-9'}`}
+        >
+          {collapsed && (
+            <button
+              aria-label="Expand sidebar"
+              className="absolute hidden h-8 w-8 items-center justify-center rounded-full border border-[var(--line)] bg-white lg:flex"
+              onClick={toggleCollapsed}
+              style={{
+                top: '1.5rem',
+                left: '1rem',
+                boxShadow: '0 1px 2px rgb(23 33 29 / 12%)',
+                zIndex: 10,
+              }}
+              title="Expand sidebar"
+              type="button"
+            >
+              ›
+            </button>
+          )}
+          {children}
+        </main>
       </div>
     </ControlPanelContext.Provider>
   );
