@@ -244,16 +244,20 @@ tbody tr:last-child td {
   border-radius: 0.8rem;
   background: white;
   display: flex;
-  flex: 1 1 240px;
+  flex: 0 1 auto;
   flex-direction: column;
   gap: 0.25rem;
   padding: 0.8rem;
   text-align: left;
-  max-width: 320px;
+  width: max-content;
+  max-width: 100%;
 }
 .batch-card span {
   color: var(--muted);
   font-size: 0.72rem;
+}
+.batch-card strong {
+  overflow-wrap: anywhere;
 }
 .batch-card-active {
   border-color: var(--accent);
