@@ -10,9 +10,9 @@
 - Phase 2.2 Canonical Data & Migration Finalization: LIVE on `crm.nusrv.com` — see
   `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md`
 - Dashboard UI/UX overhaul (modal edit forms, dedicated customer page, collapsible sidebar,
-  Legacy Import batch-list redesign) and a resulting collapsed-sidebar layout bug: code complete,
-  committed on `main` (`80591fb`..`b2d4761`), not yet deployed — see "Dashboard UI/UX overhaul and
-  collapsed-sidebar layout fix" below
+  Legacy Import batch-list redesign and card sizing) and a resulting collapsed-sidebar layout bug:
+  code complete, committed on `main` (`80591fb`..`94d08c3`), not yet deployed — see "Dashboard
+  UI/UX overhaul and collapsed-sidebar layout fix" below
 - Deployment model: the owner deploys to `crm.nusrv.com` manually after reviewing each GitHub
   change; Claude Code has no direct Plesk/SSH/database access and does not deploy
 - Phase 3: LOCKED
@@ -240,13 +240,22 @@ the previous pass was removed entirely (state, `localStorage` key, buttons) sinc
 to reclaim width from the two-column grid, which no longer exists in this single-column layout.
 Commit `b2d4761`.
 
+The batch-list redesign's `.batch-card` CSS then turned out to still cap card width at 320px
+(`max-width: 320px`, plus `flex: 1 1 240px` stretching every card to fill its row evenly regardless
+of content), so a long filename wrapped into two lines despite ample free horizontal space. Fixed
+by changing `.batch-card` to `flex: 0 1 auto` with `width: max-content; max-width: 100%`, so each
+card sizes to its own filename's natural width and only wraps once it genuinely reaches the
+container's edge, plus `overflow-wrap: anywhere` on the filename as a fallback for names with no
+natural break points. Commit `94d08c3`.
+
 No schema or migration changes in any of this work — deployment is `npm run build` plus restarting
 the API/web/worker processes. Per the owner's explicit instruction during the layout-bug
 investigation, this work was reviewed and fixed by static code inspection only; no local
-typecheck/lint/test/build was run for the three most recent commits (`5270fb0`, `6869b13`,
-`b2d4761`) because the workspace lives on a cloud-synced drive that cannot run `npm install` — see
-the environment note under the 2026-08-31 update in `SESSION_HANDOFF_2026-08-29.md`. The owner has
-not yet deployed or tested any of this on `crm.nusrv.com`.
+typecheck/lint/test/build was run for the four most recent commits (`5270fb0`, `6869b13`,
+`b2d4761`, `94d08c3`) because the workspace lives on a cloud-synced drive that cannot run
+`npm install` — see the environment note under the 2026-08-31 update in
+`SESSION_HANDOFF_2026-08-29.md`. The owner has not yet deployed or tested any of this on
+`crm.nusrv.com`.
 
 ## Staging CAPTCHA deployment patch
 

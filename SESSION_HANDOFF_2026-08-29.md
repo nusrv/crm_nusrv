@@ -502,3 +502,23 @@ single-column layout, so keeping it would have been dead code. Commit `b2d4761`.
 No schema/migration change; `npm run build` plus a restart is sufficient. Reviewed by static code
 inspection only (same drive-mounted-workspace constraint as the previous two updates); not yet
 deployed or tested by the owner.
+
+## Update — 2026-09-06 Import batches card sizing
+
+The batch-list redesign above (`b2d4761`) had left `.batch-card` with `max-width: 320px` and
+`flex: 1 1 240px` in `globals.css`. The owner reported a long filename
+(`CRM_Canonical_Import_v4_Approved_Phone_Corrections_2026-09-06.xlsx`) wrapping into two lines
+despite plenty of free horizontal space, and asked specifically for the actual width constraint to
+be found and removed rather than patched around. `max-width: 320px` was exactly that constraint;
+`flex: 1 1 240px` was a second, related problem — it stretches every card to fill its row evenly
+regardless of its own content length, which also fights "short filename → compact card, long
+filename → wide card."
+
+Fixed: `.batch-card` is now `flex: 0 1 auto` with `width: max-content; max-width: 100%`, so each
+card sizes to its own filename's natural width and only wraps once it genuinely hits the
+container's edge, plus `overflow-wrap: anywhere` on the filename `<strong>` as a fallback for names
+with no natural break points. The parent chain (`section.panel` → `div.flex.flex-wrap` →
+`button.batch-card`) has no other width/max-width/basis constraint. Commit `94d08c3`.
+
+No schema/migration change; `npm run build` plus a restart is sufficient. Reviewed by static code
+inspection only (same drive-mounted-workspace constraint); not yet deployed or tested by the owner.
