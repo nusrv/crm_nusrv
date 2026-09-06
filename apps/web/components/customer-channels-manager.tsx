@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
+import { Modal } from './modal';
 import { Notice } from './notice';
 
 interface EmailAddress {
@@ -43,7 +44,9 @@ export function CustomerChannelsManager({
 }) {
   const [channels, setChannels] = useState<Channels>({ emailAddresses: [], phoneNumbers: [] });
   const [editingEmail, setEditingEmail] = useState<EmailAddress | null>(null);
+  const [emailFormOpen, setEmailFormOpen] = useState(false);
   const [editingPhone, setEditingPhone] = useState<PhoneNumber | null>(null);
+  const [phoneFormOpen, setPhoneFormOpen] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const load = useCallback(async () => {
@@ -81,7 +84,7 @@ export function CustomerChannelsManager({
       );
       setError('');
       setEditingEmail(null);
-      event.currentTarget.reset();
+      setEmailFormOpen(false);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to save email address.');
@@ -134,7 +137,7 @@ export function CustomerChannelsManager({
       );
       setError('');
       setEditingPhone(null);
-      event.currentTarget.reset();
+      setPhoneFormOpen(false);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to save phone number.');
@@ -167,7 +170,21 @@ export function CustomerChannelsManager({
       <Notice message={error} />
       <Notice message={message} tone="success" />
       <section>
-        <h4 className="font-medium">Email addresses</h4>
+        <div className="flex items-center justify-between gap-3">
+          <h4 className="font-medium">Email addresses</h4>
+          {canManage && (
+            <button
+              className="button-small"
+              onClick={() => {
+                setEditingEmail(null);
+                setEmailFormOpen(true);
+              }}
+              type="button"
+            >
+              + Add email address
+            </button>
+          )}
+        </div>
         <div className="mt-2 space-y-2">
           {channels.emailAddresses.map((item) => (
             <div
@@ -187,7 +204,10 @@ export function CustomerChannelsManager({
                 <div className="mt-2 space-x-2">
                   <button
                     className="button-small"
-                    onClick={() => setEditingEmail(item)}
+                    onClick={() => {
+                      setEditingEmail(item);
+                      setEmailFormOpen(true);
+                    }}
                     type="button"
                   >
                     Edit
@@ -207,44 +227,61 @@ export function CustomerChannelsManager({
             <p className="muted text-sm">No email addresses on record.</p>
           )}
         </div>
-        {canManage && (
-          <form
-            className="form-grid mt-3"
-            key={editingEmail?.id ?? 'new-email'}
-            onSubmit={(event) => void saveEmail(event)}
+        {emailFormOpen && (
+          <Modal
+            onClose={() => setEmailFormOpen(false)}
+            title={editingEmail ? 'Edit email address' : 'Add email address'}
           >
-            <Field
-              label="Email address"
-              name="email"
-              required
-              type="email"
-              value={editingEmail?.email}
-            />
-            <Field
-              label="Holder / contact person"
-              name="holderName"
-              value={editingEmail?.holderName ?? undefined}
-            />
-            <RoleField value={editingEmail?.role} />
-            <Field label="Optional label" name="label" value={editingEmail?.label ?? undefined} />
-            <PrimaryField value={editingEmail?.primary} />
-            <div className="field-wide flex gap-3">
-              <Submit label={editingEmail ? 'Save changes' : 'Add email address'} />
-              {editingEmail && (
+            <form
+              className="form-grid"
+              key={editingEmail?.id ?? 'new-email'}
+              onSubmit={(event) => void saveEmail(event)}
+            >
+              <Field
+                label="Email address"
+                name="email"
+                required
+                type="email"
+                value={editingEmail?.email}
+              />
+              <Field
+                label="Holder / contact person"
+                name="holderName"
+                value={editingEmail?.holderName ?? undefined}
+              />
+              <RoleField value={editingEmail?.role} />
+              <Field label="Optional label" name="label" value={editingEmail?.label ?? undefined} />
+              <PrimaryField value={editingEmail?.primary} />
+              <div className="field-wide flex gap-3">
+                <Submit label={editingEmail ? 'Save changes' : 'Add email address'} />
                 <button
                   className="button-secondary"
-                  onClick={() => setEditingEmail(null)}
+                  onClick={() => setEmailFormOpen(false)}
                   type="button"
                 >
                   Cancel
                 </button>
-              )}
-            </div>
-          </form>
+              </div>
+            </form>
+          </Modal>
         )}
       </section>
       <section>
-        <h4 className="font-medium">Phone numbers</h4>
+        <div className="flex items-center justify-between gap-3">
+          <h4 className="font-medium">Phone numbers</h4>
+          {canManage && (
+            <button
+              className="button-small"
+              onClick={() => {
+                setEditingPhone(null);
+                setPhoneFormOpen(true);
+              }}
+              type="button"
+            >
+              + Add phone number
+            </button>
+          )}
+        </div>
         <p className="muted mt-1 text-sm">
           Store the full number in E.164 form, such as +962790000000.
         </p>
@@ -268,7 +305,10 @@ export function CustomerChannelsManager({
                 <div className="mt-2 space-x-2">
                   <button
                     className="button-small"
-                    onClick={() => setEditingPhone(item)}
+                    onClick={() => {
+                      setEditingPhone(item);
+                      setPhoneFormOpen(true);
+                    }}
                     type="button"
                   >
                     Edit
@@ -288,64 +328,67 @@ export function CustomerChannelsManager({
             <p className="muted text-sm">No phone numbers on record.</p>
           )}
         </div>
-        {canManage && (
-          <form
-            className="form-grid mt-3"
-            key={editingPhone?.id ?? 'new-phone'}
-            onSubmit={(event) => void savePhone(event)}
+        {phoneFormOpen && (
+          <Modal
+            onClose={() => setPhoneFormOpen(false)}
+            title={editingPhone ? 'Edit phone number' : 'Add phone number'}
           >
-            <Field
-              label="Full E.164 phone number"
-              name="phoneNumber"
-              placeholder="+962790000000"
-              required
-              type="tel"
-              value={editingPhone?.phoneNumber}
-            />
-            <Field
-              label="Country calling code"
-              name="countryCallingCode"
-              placeholder="+962"
-              required
-              value={editingPhone?.countryCallingCode}
-            />
-            <label className="field">
-              <span>Type</span>
-              <select defaultValue={editingPhone?.phoneType ?? 'MOBILE'} name="phoneType">
-                {phoneTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type === 'PHONE' ? 'PHONE (unspecified)' : type}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <Field
-              label="Holder / contact person"
-              name="holderName"
-              required
-              value={editingPhone?.holderName ?? undefined}
-            />
-            <RoleField value={editingPhone?.role} />
-            <Field
-              label="Optional label"
-              name="label"
-              placeholder="Mobile, Office, Finance…"
-              value={editingPhone?.label ?? undefined}
-            />
-            <PrimaryField value={editingPhone?.primary} />
-            <div className="field-wide flex gap-3">
-              <Submit label={editingPhone ? 'Save changes' : 'Add phone number'} />
-              {editingPhone && (
+            <form
+              className="form-grid"
+              key={editingPhone?.id ?? 'new-phone'}
+              onSubmit={(event) => void savePhone(event)}
+            >
+              <Field
+                label="Full E.164 phone number"
+                name="phoneNumber"
+                placeholder="+962790000000"
+                required
+                type="tel"
+                value={editingPhone?.phoneNumber}
+              />
+              <Field
+                label="Country calling code"
+                name="countryCallingCode"
+                placeholder="+962"
+                required
+                value={editingPhone?.countryCallingCode}
+              />
+              <label className="field">
+                <span>Type</span>
+                <select defaultValue={editingPhone?.phoneType ?? 'MOBILE'} name="phoneType">
+                  {phoneTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type === 'PHONE' ? 'PHONE (unspecified)' : type}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Field
+                label="Holder / contact person"
+                name="holderName"
+                required
+                value={editingPhone?.holderName ?? undefined}
+              />
+              <RoleField value={editingPhone?.role} />
+              <Field
+                label="Optional label"
+                name="label"
+                placeholder="Mobile, Office, Finance…"
+                value={editingPhone?.label ?? undefined}
+              />
+              <PrimaryField value={editingPhone?.primary} />
+              <div className="field-wide flex gap-3">
+                <Submit label={editingPhone ? 'Save changes' : 'Add phone number'} />
                 <button
                   className="button-secondary"
-                  onClick={() => setEditingPhone(null)}
+                  onClick={() => setPhoneFormOpen(false)}
                   type="button"
                 >
                   Cancel
                 </button>
-              )}
-            </div>
-          </form>
+              </div>
+            </form>
+          </Modal>
         )}
       </section>
     </div>

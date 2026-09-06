@@ -372,7 +372,8 @@ export function LegacyImportManager() {
         </form>
       )}
       <section
-        className={`grid gap-6 ${batchListCollapsed ? 'xl:grid-cols-1' : 'xl:grid-cols-[360px_1fr]'}`}
+        className="grid gap-6 xl:grid-cols-[360px_1fr]"
+        style={{ gridTemplateColumns: batchListCollapsed ? '1fr' : undefined }}
       >
         <div className="panel relative" style={{ display: batchListCollapsed ? 'none' : undefined }}>
           <h3 className="font-semibold">Import batches</h3>

@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
 import { CustomerChannelsManager } from './customer-channels-manager';
+import { Modal } from './modal';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -56,6 +57,7 @@ export function CustomerDetail() {
   const [detail, setDetail] = useState<Customer | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [contactFormOpen, setContactFormOpen] = useState(false);
 
   const load = useCallback(async () => {
     setDetail(await apiRequest<Customer>(`/customers/${customerId}`));
@@ -86,7 +88,7 @@ export function CustomerDetail() {
       });
       setSuccess('Customer contact saved and audited.');
       setError('');
-      event.currentTarget.reset();
+      setContactFormOpen(false);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Contact save failed.');
@@ -157,7 +159,14 @@ export function CustomerDetail() {
       <section className="panel mt-6">
         <h4 className="font-medium">Contact channels</h4>
         <CustomerChannelsManager canManage={canManage} customerId={detail.id} />
-        <h4 className="mt-6 font-medium">Legacy combined contacts</h4>
+        <div className="mt-6 flex items-center justify-between gap-3">
+          <h4 className="font-medium">Legacy combined contacts</h4>
+          {canManage && (
+            <button className="button-small" onClick={() => setContactFormOpen(true)} type="button">
+              + Add contact
+            </button>
+          )}
+        </div>
         <div className="mt-2 space-y-2">
           {detail.contacts
             ?.filter((contact) => contact.active)
@@ -175,34 +184,43 @@ export function CustomerDetail() {
             <p className="muted text-sm">No legacy combined contacts on record.</p>
           )}
         </div>
-        {canManage && (
-          <form className="form-grid mt-4" onSubmit={(event) => void addContact(event)}>
-            <label className="field">
-              <span>Contact role</span>
-              <select name="role">
-                <option>PRIMARY</option>
-                <option>BILLING</option>
-                <option>TECHNICAL</option>
-                <option>MANAGEMENT</option>
-                <option>OTHER</option>
-              </select>
-            </label>
-            <Field label="Contact name" name="name" />
-            <Field label="Contact email" name="email" type="email" />
-            <Field label="Contact phone" name="phone" />
-            <label className="field">
-              <span>Primary</span>
-              <select name="primary">
-                <option value="false">No</option>
-                <option value="true">Yes</option>
-              </select>
-            </label>
-            <div className="field-wide">
-              <button className="button-small" type="submit">
-                Add contact
-              </button>
-            </div>
-          </form>
+        {contactFormOpen && (
+          <Modal onClose={() => setContactFormOpen(false)} title="Add contact">
+            <form className="form-grid" onSubmit={(event) => void addContact(event)}>
+              <label className="field">
+                <span>Contact role</span>
+                <select name="role">
+                  <option>PRIMARY</option>
+                  <option>BILLING</option>
+                  <option>TECHNICAL</option>
+                  <option>MANAGEMENT</option>
+                  <option>OTHER</option>
+                </select>
+              </label>
+              <Field label="Contact name" name="name" />
+              <Field label="Contact email" name="email" type="email" />
+              <Field label="Contact phone" name="phone" />
+              <label className="field">
+                <span>Primary</span>
+                <select name="primary">
+                  <option value="false">No</option>
+                  <option value="true">Yes</option>
+                </select>
+              </label>
+              <div className="field-wide flex gap-3">
+                <button className="button-primary" type="submit">
+                  Add contact
+                </button>
+                <button
+                  className="button-secondary"
+                  onClick={() => setContactFormOpen(false)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </Modal>
         )}
       </section>
       <section className="panel mt-6">
