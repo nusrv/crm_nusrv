@@ -159,6 +159,7 @@ export function LegacyImportManager() {
   const [message, setMessage] = useState('');
   const [status, setStatus] = useState('REQUIRES_MANUAL_REVIEW');
   const [batchListCollapsed, setBatchListCollapsed] = useState(false);
+  const [pendingBatchId, setPendingBatchId] = useState('');
 
   useEffect(() => {
     // Reading localStorage during the initial render (instead of here) would return a
@@ -200,9 +201,16 @@ export function LegacyImportManager() {
       setSelectedBatch(detail);
       setRows(result.data);
       setEditing(null);
+      const params = new URLSearchParams(window.location.search);
+      params.set('batchId', batch.id);
+      window.history.replaceState(null, '', `?${params.toString()}`);
     },
     [status],
   );
+
+  useEffect(() => {
+    setPendingBatchId(new URLSearchParams(window.location.search).get('batchId') ?? '');
+  }, []);
 
   useEffect(() => {
     void Promise.all([
@@ -216,6 +224,16 @@ export function LegacyImportManager() {
       apiRequest<CurrencyOption[]>('/currencies?active=true').then(setCurrencies),
     ]).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'));
   }, [loadBatches]);
+
+  useEffect(() => {
+    if (!pendingBatchId) return;
+    const target = batches.find((batch) => batch.id === pendingBatchId);
+    if (!target) return;
+    setPendingBatchId('');
+    void openBatch(target).catch((cause: unknown) =>
+      setError(cause instanceof Error ? cause.message : 'Load failed.'),
+    );
+  }, [pendingBatchId, batches, openBatch]);
 
   // Debounced server-side search for the "existing customer" selector, since the customer count
   // can exceed the initial 500-row page (e.g. after a large canonical import).
