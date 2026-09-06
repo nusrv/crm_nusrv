@@ -10,8 +10,8 @@
 - Phase 2.2 Canonical Data & Migration Finalization: LIVE on `crm.nusrv.com` — see
   `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md`
 - Dashboard UI/UX overhaul (modal edit forms, dedicated customer page, collapsible sidebar,
-  Legacy Import batch-list redesign and card sizing, sidebar toggle button crop fix): code
-  complete, committed on `main` (`80591fb`..`d106e33`), not yet deployed — see "Dashboard UI/UX
+  Legacy Import batch-list redesign and card sizing, sidebar toggle button redesign): code
+  complete, committed on `main` (`80591fb`..`eecee31`), not yet deployed — see "Dashboard UI/UX
   overhaul and collapsed-sidebar layout fix" below
 - Deployment model: the owner deploys to `crm.nusrv.com` manually after reviewing each GitHub
   change; Claude Code has no direct Plesk/SSH/database access and does not deploy
@@ -258,12 +258,22 @@ render outside its bounds. Also bumped both toggle buttons from 28px to 32px (of
 exactly half the button width), added a box shadow, and raised their `zIndex` to 50. Commit
 `d106e33`.
 
+The owner then asked to stop positioning the toggle on the sidebar edge/scrollbar entirely and gave
+a specific two-state design: the collapse button now lives inside the sidebar's own header, in
+normal flex flow beside the "Control Panel" heading (`flex items-center justify-between`, no
+absolute positioning); the collapsed-state expand button sits inside `<main>` (now `relative`),
+absolutely positioned in a left gutter reserved by widening `<main>`'s left padding to `lg:pl-16`
+only while collapsed (`lg:pl-9` otherwise, matching the original `lg:p-9` left value) — guaranteed
+not to overlap any page's heading text, since every page's content now starts to the right of that
+reserved gutter. Sidebar width, the dashboard flex layout, and sidebar scroll behavior are
+unchanged. Commit `eecee31`.
+
 No schema or migration changes in any of this work — deployment is `npm run build` plus restarting
 the API/web/worker processes. Per the owner's explicit instruction during the layout-bug
 investigation, this work was reviewed and fixed by static code inspection only; no local
-typecheck/lint/test/build was run for the five most recent commits (`5270fb0`, `6869b13`,
-`b2d4761`, `94d08c3`, `d106e33`) because the workspace lives on a cloud-synced drive that cannot run
-`npm install` — see the environment note under the 2026-08-31 update in
+typecheck/lint/test/build was run for the six most recent commits (`5270fb0`, `6869b13`,
+`b2d4761`, `94d08c3`, `d106e33`, `eecee31`) because the workspace lives on a cloud-synced drive that
+cannot run `npm install` — see the environment note under the 2026-08-31 update in
 `SESSION_HANDOFF_2026-08-29.md`. The owner has not yet deployed or tested any of this on
 `crm.nusrv.com`.
 

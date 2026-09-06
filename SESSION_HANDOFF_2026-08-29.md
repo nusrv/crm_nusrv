@@ -543,3 +543,24 @@ page widths, the dashboard grid, or sidebar scroll behavior otherwise. Commit `d
 
 No schema/migration change; `npm run build` plus a restart is sufficient. Reviewed by static code
 inspection only (same drive-mounted-workspace constraint); not yet deployed or tested by the owner.
+
+## Update — 2026-09-06 sidebar toggle redesigned as two in-flow buttons
+
+The owner asked to stop positioning the toggle on the sidebar edge/scrollbar entirely (the fix
+above reduced the crop but the owner wanted a structurally different, more robust approach) and
+gave a specific two-state design instead:
+
+- **Expanded**: the collapse button now lives inside the sidebar's own header, in normal flex flow
+  beside the "Control Panel" heading (`flex items-center justify-between`) — no absolute
+  positioning, nowhere near the scrollable nav container.
+- **Collapsed**: a small expand button sits inside `<main>` (now `relative`), absolutely positioned
+  in a left gutter reserved by widening `<main>`'s left padding to `lg:pl-16` only while collapsed
+  (`lg:pl-9` otherwise, matching the original `lg:p-9` left value) — guaranteed not to overlap any
+  page's heading text, since every page's content now starts to the right of that reserved gutter
+  instead of at the same x-coordinate as a floating button.
+
+Sidebar width, the dashboard flex layout (from the earlier CSS-Grid-to-Flexbox fix), and sidebar
+scroll behavior are all unchanged. Commit `eecee31`.
+
+No schema/migration change; `npm run build` plus a restart is sufficient. Reviewed by static code
+inspection only (same drive-mounted-workspace constraint); not yet deployed or tested by the owner.
