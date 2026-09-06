@@ -377,3 +377,109 @@ emails, 275 identifiers) and the historical classification baseline exactly (85 
 / 72 `CUSTOM` / 57 `MANUAL_REVIEW`) — meaning 85 rows land at `READY_FOR_APPROVAL` on upload and
 129 need the same package-classification decisions Phase 2.1 already identified. Not yet run
 against a live database, and not yet deployed.
+
+## Update — 2026-09-06 canonical-import billingFrequency fix
+
+The owner deployed Phase 2.2, then hit a live error while editing a subscription: `billingFrequency
+must be one of the following values: MONTHLY, QUARTERLY, SEMI_ANNUAL, ANNUAL, BIENNIAL, CUSTOM`,
+with "there is no option i can edit." Root cause: `createCanonicalBatch()` set `billingFrequency:
+suggestions.billingFrequency`, which is always `undefined` for canonical rows because the package
+classifier never receives frequency free text for them — and since clean rows route straight to
+`READY_FOR_APPROVAL`, bypassing the only screen with an editable form, there was no way to fix it
+in the UI at all once the row was created. Fixed by exporting `intervalToFrequency` from
+`legacy-workbook.parser.ts` and deriving `billingFrequency` directly from
+`renewalIntervalMonths` instead of the classifier's suggestion. Verified against all 214 real
+workbook rows: 166 `CUSTOM`, 45 `ANNUAL`, 3 `BIENNIAL`, zero undefined. Commit `80591fb`. No schema
+change; `npm run build` plus a restart is sufficient.
+
+## Update — 2026-09-06 phone types, contact-channel editing, and bulk customer delete
+
+The owner asked in one message: why can't customers with several phone numbers be marked
+Mobile/Landline/Fax; why can't an existing email/phone be edited or deactivated instead of only
+adding new ones; why does customer search seem unavailable; and why is there no way to bulk-delete
+approved customers. Customer search turned out to already work (the customers list already queries
+company name, code, email, and phone) — nothing to fix there. The rest were real gaps:
+
+- `phoneType` had been added to the schema in Phase 2.2 but was never exposed on
+  `CreateCustomerPhoneNumberDto` / `UpdateCustomerPhoneNumberDto`, so a number could never be
+  marked as Fax through the UI. Both DTOs now expose `phoneType`.
+- The contact-channels panel only supported adding new emails/phones. It now has a Type selector
+  plus Edit/Deactivate/Reactivate actions per channel.
+- Added an Admin-only multi-select bulk-delete to the customers list (checkboxes + "Delete N
+  selected"). The owner was asked whether this should be import-cleanup-specific or general-purpose
+  and chose general-purpose, so it sits alongside the existing per-row delete for ordinary
+  housekeeping too.
+
+Commit `5381563`. No schema/migration change; `npm run build` plus a restart is sufficient.
+
+## Update — 2026-09-06 dashboard UI/UX overhaul: modal edit forms, dedicated customer page, collapsible sidebar
+
+The owner asked for a systemic UX change, verbatim: edit screens must open as a popup instead of
+appearing inline at the end of the current page; clicking a customer must show a dedicated page for
+only that customer instead of an inline panel below the still-visible customer list; the main
+navigation sidebar needs a collapse/expand arrow to reclaim screen width; and the Legacy Import
+staged-rows table needed to stop requiring horizontal scrolling to read a row's data, "maybe you
+can make it in a new full screen."
+
+Built a shared `Modal` popup component (`apps/web/components/modal.tsx`) and converted every
+manager's create/edit form to it: Currencies, Billing Entities, Service Types, Package Catalog,
+Technical Connections, Subscriptions, and Customers. Customer detail moved to a new dedicated
+`/dashboard/customers/[id]` route (`customer-detail.tsx`). The main sidebar and the Legacy Import
+batch-list panel each gained a collapse/expand arrow toggle (persisted in `localStorage`), and the
+staged-rows table gained Start/renewal-date and price columns so a row's key data is visible
+without opening the inspector. Commit `895fa79`.
+
+The owner then reported edit screens were still inline in places, and that hiding the Legacy Import
+batch list collapsed the remaining content to a tiny width. The first report was real:
+`customer-channels-manager.tsx` (the customer detail page's email/phone contact forms) predated the
+Modal conversion above and had been missed — its add/edit forms, plus the "add legacy contact"
+form, were still rendered inline. All three converted to the same Modal pattern. The second report
+led to a genuine CSS bug (see below) plus a hardening fix: the Legacy Import batch-list grid was
+switched from a display:none-based hide to conditionally unmounting the panel, with an explicit
+`grid-cols-1` base so sub-`xl` viewports get a real `1fr` track instead of the implicit
+shrink-to-fit default. Commit `9366a5c`.
+
+## Update — 2026-09-06 collapsed-sidebar layout bug and selected-batch-lost-on-refresh bug
+
+The owner then reported, with unusual precision, that collapsing the sidebar caused: a narrow
+column on the left, page titles wrapping word-by-word, overlapping text, collapsed stat cards, and
+staged-rows tables only a few pixels wide — most visible on Legacy Import — and explicitly noted
+"after previous fixes, some outer containers became wide but child elements still remain collapsed
+or overlap." That last detail was the key clue.
+
+**Root cause**, found by static CSS/Grid-spec reasoning (no browser/build tooling was available —
+see below): the collapsible shell used CSS Grid with an explicit two-track `gridTemplateColumns`
+(`'0px 1fr'` when collapsed). Per the CSS Grid spec, `display:none` and `position:fixed` elements
+are excluded from grid item placement entirely. Once the sidebar (`display:none`) and the floating
+collapse button (`position:fixed`) were both excluded, `<main>` became the *first* auto-placed grid
+item and was placed into the sidebar's now-empty `0px` track instead of the `1fr` track — even
+though the grid container itself still correctly reported two tracks (exactly matching "outer
+containers became wide but children remain collapsed"). This squeezed all page content into a
+near-zero-width column, producing every symptom reported.
+
+**Fix:** switched the app shell (`app-shell.tsx`) from CSS Grid to Flexbox. The sidebar is now
+conditionally rendered (unmounted, not `display:none`) with a fixed `flex-basis`
+(`lg:w-[270px] lg:flex-none`), and `<main>` is `flex-1 min-w-0`, so it always absorbs 100% of the
+freed space regardless of how many siblings exist or are hidden — flexbox has no equivalent
+placement ambiguity. Applied the identical fix to the Legacy Import batch-list panel. Commit
+`5270fb0`.
+
+Separately, the owner asked why an uploaded Legacy Import file "disappears" on page refresh.
+`selectedBatch`/`rows` were pure in-memory React state with nothing restoring them on mount, so a
+refresh reset the detail view to "Select an import batch" even though the file was still present in
+the reloaded batch list. Fixed by persisting the selected batch id in the URL (`?batchId=`) and
+restoring it once the batch list loads, matching the `?edit=`/`?customerId=` convention already
+used elsewhere in the app. Commit `6869b13`.
+
+**Process note for whoever works on this next:** for the two commits above, the owner explicitly
+required *no* local `npm run build`/`test`/`lint`/`typecheck`, no dev server, and no browser/E2E
+testing, because of the cloud-synced-drive constraint (see the 2026-08-31 environment note above) —
+fixes were made and reviewed by static code/diff inspection only. This is a deliberate deviation
+from this project's normal full-verification standard for every other change in this file; treat
+these two commits as code-reviewed but **not locally verified**, and prioritize testing them for
+real once deployed.
+
+No schema or migration changes across any of the four updates above. All are on `main`; none have
+been deployed or tested by the owner yet. Deploy with `git pull`, `npm ci`, `npm run db:generate`,
+`npm run build`, then restart the API/web/worker processes — no `db:migrate:deploy` needed for this
+batch.

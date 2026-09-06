@@ -7,9 +7,12 @@
 - Phase 2: COMPLETE / OWNER APPROVED
 - Phase 2.1 Operational Data Correction: LIVE on `crm.nusrv.com` — code complete; 129 of 214
   legacy rows still await the owner's package-classification decisions
-- Phase 2.2 Canonical Data & Migration Finalization: code complete, tests pass, migration
-  additive-only and not yet applied to any database — see
+- Phase 2.2 Canonical Data & Migration Finalization: LIVE on `crm.nusrv.com` — see
   `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md`
+- Dashboard UI/UX overhaul (modal edit forms, dedicated customer page, collapsible sidebar) and a
+  resulting collapsed-sidebar layout bug: code complete, committed on `main`
+  (`80591fb`..`6869b13`), not yet deployed — see "Dashboard UI/UX overhaul and collapsed-sidebar
+  layout fix" below
 - Deployment model: the owner deploys to `crm.nusrv.com` manually after reviewing each GitHub
   change; Claude Code has no direct Plesk/SSH/database access and does not deploy
 - Phase 3: LOCKED
@@ -162,6 +165,80 @@ reproduced the workbook's own README counts exactly (124 customers, 214 subscrip
 `MATCHED_OFFICIAL` / 72 `CUSTOM` / 57 `MANUAL_REVIEW`). Not yet run against a live database, and
 not yet deployed — this is a schema-changing release awaiting the owner's review and deployment.
 
+## Canonical-import billingFrequency fix, phone types, and bulk customer delete
+
+After Phase 2.2 was deployed and the owner began approving canonical rows, editing an already
+live subscription failed with `billingFrequency must be one of the following values: MONTHLY,
+QUARTERLY, SEMI_ANNUAL, ANNUAL, BIENNIAL, CUSTOM`. Root cause: `createCanonicalBatch()` set
+`billingFrequency` from the package classifier's suggestion, which is always `undefined` for
+canonical rows (the classifier never receives frequency free text for them), and clean rows route
+straight to `READY_FOR_APPROVAL` — bypassing the only screen with an editable form — so there was
+no way to fix it in the UI at all once created. Fixed by deriving `billingFrequency` directly from
+`renewalIntervalMonths` via the existing `intervalToFrequency` helper instead of the classifier's
+suggestion. Verified against all 214 real workbook rows: 166 `CUSTOM`, 45 `ANNUAL`, 3 `BIENNIAL`,
+zero undefined. Commit `80591fb`.
+
+Separately, the owner asked why customers with several phone numbers couldn't be marked
+Mobile/Landline/Fax, why there was no way to edit or deactivate an existing contact channel, why
+customer search seemed unavailable, and why there was no way to bulk-delete approved customers.
+Customer search was already implemented (the customers list already queries company name, code,
+email, and phone) — no code change needed there. The rest were real gaps: `phoneType` had been
+added to the schema in Phase 2.2 but was never exposed on `CreateCustomerPhoneNumberDto` /
+`UpdateCustomerPhoneNumberDto`, so a number could never be marked as Fax through the UI; the
+contact-channels panel only supported adding new emails/phones, with no edit or
+deactivate/reactivate controls. Both DTOs now expose `phoneType`, and the panel gained a Type
+selector plus Edit/Deactivate/Reactivate actions per channel. Also added an Admin-only multi-select
+bulk-delete to the customers list (checkboxes + "Delete N selected"), a general-purpose feature
+usable for both import cleanup and ordinary housekeeping, alongside the existing per-row delete.
+Commit `5381563`.
+
+No schema or migration changes in either fix.
+
+## Dashboard UI/UX overhaul and collapsed-sidebar layout fix
+
+The owner requested a systemic UX change: every edit screen must open as a popup instead of
+appearing inline at the end of the current page; clicking a customer must show a dedicated page for
+only that customer, not an inline panel below the still-visible customer list; the main navigation
+sidebar needs a collapse/expand arrow to reclaim screen width; and the Legacy Import staged-rows
+table needed to stop requiring horizontal scrolling to read a row's data.
+
+Built a shared `Modal` popup component and converted every manager's create/edit form to it:
+Currencies, Billing Entities, Service Types, Package Catalog, Technical Connections, Subscriptions,
+Customers, and — in a follow-up pass after the owner reported some forms were still inline — the
+customer contact-channel email/phone forms and the legacy-contact "add contact" form, which had
+predated the Modal conversion. Customer detail moved to a dedicated `/dashboard/customers/[id]`
+route. The main sidebar and the Legacy Import batch-list panel each gained a collapse/expand arrow
+(persisted in `localStorage`), and the staged-rows table gained Start/renewal-date and price
+columns so a row's key data is visible without opening the inspector. Commits `895fa79`, `9366a5c`.
+
+Two real bugs surfaced once the owner tested the deployed change, both fixed by commits `5270fb0`
+and `6869b13`:
+
+1. **Collapsed-sidebar layout bug.** The collapsible shell used CSS Grid with an explicit two-track
+   `gridTemplateColumns` (`'0px 1fr'` when collapsed). `display:none` and `position:fixed` siblings
+   are excluded from CSS Grid's item-placement algorithm, so once the sidebar was hidden, the main
+   content became the *first* auto-placed grid item and was placed into the sidebar's now-empty
+   `0px` track instead of the `1fr` track — even though the container itself still reported two
+   tracks correctly. This squeezed all page content into a near-zero width: word-by-word title
+   wrapping, overlapping text, and collapsed stat cards/tables, most visible on Legacy Import.
+   Fixed by switching the shell from CSS Grid to Flexbox (sidebar conditionally rendered with a
+   fixed `flex-basis`, main content `flex-1 min-w-0`), which has no equivalent placement ambiguity;
+   applied the same fix to the Legacy Import batch-list panel.
+2. **Selected-batch-lost-on-refresh bug.** The Legacy Import page's selected batch and staged rows
+   were pure in-memory state with nothing restoring them on mount, so refreshing the page reset the
+   view to "Select an import batch" even though the uploaded file was still present in the reloaded
+   batch list — reported by the owner as the file "disappearing." Fixed by persisting the selected
+   batch id in the URL (`?batchId=`) and restoring it once the batch list loads, matching the
+   `?edit=`/`?customerId=` convention already used elsewhere in the app.
+
+No schema or migration changes in any of this work — deployment is `npm run build` plus restarting
+the API/web/worker processes. Per the owner's explicit instruction during the layout-bug
+investigation, this work was reviewed and fixed by static code inspection only; no local
+typecheck/lint/test/build was run for the two bug-fix commits (`5270fb0`, `6869b13`) because the
+workspace lives on a cloud-synced drive that cannot run `npm install` — see the environment note
+under the 2026-08-31 update in `SESSION_HANDOFF_2026-08-29.md`. The owner has not yet deployed or
+tested any of this on `crm.nusrv.com`.
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then
@@ -188,11 +265,12 @@ claim as scoped to that.
 
 ## Required owner/operator actions
 
-1. Deploy the Phase 2.2 release (see `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md` for the exact
-   steps) and upload `CRM_Canonical_Import_v4_Approved_Phone_Corrections_2026-09-06.xlsx` through
-   Legacy Import.
+1. Deploy the current `main` branch (`git pull`, `npm ci`, `npm run db:generate`, `npm run build`,
+   restart the API/web/worker processes — no migration in this batch) and test the dashboard
+   UI/UX overhaul and the collapsed-sidebar layout fix described above, especially on the Legacy
+   Import page. This has not been tested against a live deployment yet.
 2. Add `USD`, `SAR`, and `EUR` in Currencies / Rates with real rates before approving any row
-   priced in them.
+   priced in them, if not already done.
 3. Approve the rows that land at `READY_FOR_APPROVAL` directly; work through the remainder's
    package-classification decisions (the same 129-row backlog Phase 2.1 already identified).
 
