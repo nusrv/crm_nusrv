@@ -138,8 +138,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <ControlPanelContext.Provider value={value}>
       <div className="min-h-screen w-full min-w-0 lg:flex">
         {!collapsed && (
-          <aside className="relative border-r border-[var(--line)] bg-white lg:sticky lg:top-0 lg:h-screen lg:w-[270px] lg:flex-none lg:overflow-y-auto">
-            <div className="p-5">
+          <aside className="relative border-r border-[var(--line)] bg-white lg:sticky lg:top-0 lg:h-screen lg:w-[270px] lg:flex-none">
+            <button
+              aria-label="Collapse sidebar"
+              className="hidden lg:flex"
+              onClick={toggleCollapsed}
+              style={{
+                position: 'absolute',
+                top: '1.25rem',
+                right: '-16px',
+                width: 32,
+                height: 32,
+                borderRadius: 999,
+                border: '1px solid var(--line)',
+                background: 'white',
+                boxShadow: '0 1px 2px rgb(23 33 29 / 12%)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                zIndex: 50,
+              }}
+              title="Collapse sidebar"
+              type="button"
+            >
+              ‹
+            </button>
+            <div className="p-5 lg:h-full lg:overflow-y-auto">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
                 Subscription lifecycle
               </p>
@@ -174,29 +198,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </button>
               </div>
             </div>
-            <button
-              aria-label="Collapse sidebar"
-              className="hidden lg:flex"
-              onClick={toggleCollapsed}
-              style={{
-                position: 'absolute',
-                top: '1.25rem',
-                right: '-14px',
-                width: 28,
-                height: 28,
-                borderRadius: 999,
-                border: '1px solid var(--line)',
-                background: 'white',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                zIndex: 10,
-              }}
-              title="Collapse sidebar"
-              type="button"
-            >
-              ‹
-            </button>
           </aside>
         )}
         {collapsed && (
@@ -208,15 +209,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               position: 'fixed',
               top: '1.25rem',
               left: 10,
-              width: 28,
-              height: 28,
+              width: 32,
+              height: 32,
               borderRadius: 999,
               border: '1px solid var(--line)',
               background: 'white',
+              boxShadow: '0 1px 2px rgb(23 33 29 / 12%)',
               alignItems: 'center',
               justifyContent: 'center',
               cursor: 'pointer',
-              zIndex: 10,
+              zIndex: 50,
             }}
             title="Expand sidebar"
             type="button"
