@@ -372,51 +372,53 @@ export function LegacyImportManager() {
         </form>
       )}
       <section
-        className="grid gap-6 xl:grid-cols-[360px_1fr]"
+        className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]"
         style={{ gridTemplateColumns: batchListCollapsed ? '1fr' : undefined }}
       >
-        <div className="panel relative" style={{ display: batchListCollapsed ? 'none' : undefined }}>
-          <h3 className="font-semibold">Import batches</h3>
-          <div className="mt-4 space-y-3">
-            {batches.map((batch) => (
-              <button
-                className={`batch-card ${selectedBatch?.id === batch.id ? 'batch-card-active' : ''}`}
-                key={batch.id}
-                onClick={() => void openBatch(batch)}
-                type="button"
-              >
-                <strong>{batch.sourceFileName}</strong>
-                <span>
-                  {batch.status} · {batch.totalRows} rows
-                </span>
-                <span>{new Date(batch.createdAt).toLocaleString()}</span>
-              </button>
-            ))}
+        {!batchListCollapsed && (
+          <div className="panel relative min-w-0">
+            <h3 className="font-semibold">Import batches</h3>
+            <div className="mt-4 space-y-3">
+              {batches.map((batch) => (
+                <button
+                  className={`batch-card ${selectedBatch?.id === batch.id ? 'batch-card-active' : ''}`}
+                  key={batch.id}
+                  onClick={() => void openBatch(batch)}
+                  type="button"
+                >
+                  <strong>{batch.sourceFileName}</strong>
+                  <span>
+                    {batch.status} · {batch.totalRows} rows
+                  </span>
+                  <span>{new Date(batch.createdAt).toLocaleString()}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              aria-label="Hide batch list for a wider view"
+              className="hidden xl:flex"
+              onClick={toggleBatchList}
+              style={{
+                position: 'absolute',
+                top: '1.25rem',
+                right: '-14px',
+                width: 28,
+                height: 28,
+                borderRadius: 999,
+                border: '1px solid var(--line)',
+                background: 'white',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                zIndex: 10,
+              }}
+              title="Hide batch list for a wider view"
+              type="button"
+            >
+              ‹
+            </button>
           </div>
-          <button
-            aria-label="Hide batch list for a wider view"
-            className="hidden xl:flex"
-            onClick={toggleBatchList}
-            style={{
-              position: 'absolute',
-              top: '1.25rem',
-              right: '-14px',
-              width: 28,
-              height: 28,
-              borderRadius: 999,
-              border: '1px solid var(--line)',
-              background: 'white',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              zIndex: 10,
-            }}
-            title="Hide batch list for a wider view"
-            type="button"
-          >
-            ‹
-          </button>
-        </div>
+        )}
         {batchListCollapsed && (
           <button
             aria-label="Show batch list"
