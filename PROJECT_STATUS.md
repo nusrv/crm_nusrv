@@ -9,10 +9,10 @@
   legacy rows still await the owner's package-classification decisions
 - Phase 2.2 Canonical Data & Migration Finalization: LIVE on `crm.nusrv.com` — see
   `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md`
-- Dashboard UI/UX overhaul (modal edit forms, dedicated customer page, collapsible sidebar) and a
-  resulting collapsed-sidebar layout bug: code complete, committed on `main`
-  (`80591fb`..`6869b13`), not yet deployed — see "Dashboard UI/UX overhaul and collapsed-sidebar
-  layout fix" below
+- Dashboard UI/UX overhaul (modal edit forms, dedicated customer page, collapsible sidebar,
+  Legacy Import batch-list redesign) and a resulting collapsed-sidebar layout bug: code complete,
+  committed on `main` (`80591fb`..`b2d4761`), not yet deployed — see "Dashboard UI/UX overhaul and
+  collapsed-sidebar layout fix" below
 - Deployment model: the owner deploys to `crm.nusrv.com` manually after reviewing each GitHub
   change; Claude Code has no direct Plesk/SSH/database access and does not deploy
 - Phase 3: LOCKED
@@ -231,13 +231,22 @@ and `6869b13`:
    batch id in the URL (`?batchId=`) and restoring it once the batch list loads, matching the
    `?edit=`/`?customerId=` convention already used elsewhere in the app.
 
+The owner then reported the Legacy Import "Import batches" list looked ugly — a long, mostly-empty
+column with one filename squeezing the detail view beside it — and asked for it as a single row of
+batches with the selected batch's data shown beneath it once clicked. Replaced the two-column grid
+with one panel where batch cards wrap left-to-right in a row, followed by the selected batch's
+detail/staged-rows table stacked full-width beneath it. The batch-list collapse/hide toggle from
+the previous pass was removed entirely (state, `localStorage` key, buttons) since it only existed
+to reclaim width from the two-column grid, which no longer exists in this single-column layout.
+Commit `b2d4761`.
+
 No schema or migration changes in any of this work — deployment is `npm run build` plus restarting
 the API/web/worker processes. Per the owner's explicit instruction during the layout-bug
 investigation, this work was reviewed and fixed by static code inspection only; no local
-typecheck/lint/test/build was run for the two bug-fix commits (`5270fb0`, `6869b13`) because the
-workspace lives on a cloud-synced drive that cannot run `npm install` — see the environment note
-under the 2026-08-31 update in `SESSION_HANDOFF_2026-08-29.md`. The owner has not yet deployed or
-tested any of this on `crm.nusrv.com`.
+typecheck/lint/test/build was run for the three most recent commits (`5270fb0`, `6869b13`,
+`b2d4761`) because the workspace lives on a cloud-synced drive that cannot run `npm install` — see
+the environment note under the 2026-08-31 update in `SESSION_HANDOFF_2026-08-29.md`. The owner has
+not yet deployed or tested any of this on `crm.nusrv.com`.
 
 ## Staging CAPTCHA deployment patch
 

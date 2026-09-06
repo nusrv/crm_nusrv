@@ -483,3 +483,22 @@ No schema or migration changes across any of the four updates above. All are on 
 been deployed or tested by the owner yet. Deploy with `git pull`, `npm ci`, `npm run db:generate`,
 `npm run build`, then restart the API/web/worker processes — no `db:migrate:deploy` needed for this
 batch.
+
+## Update — 2026-09-06 Legacy Import batch-list redesign
+
+The owner reported the "Import batches" list looked ugly: a long, mostly-empty column with one
+filename, sitting beside and visually squeezing the detail columns next to it — exactly the old
+two-column sidebar-style layout from the earlier UX overhaul. Asked for it as a single row of
+batches instead, with the selected batch's real data showing beneath it once clicked.
+
+Replaced the two-column grid (`batch list | batch detail`) with a single "Import batches" panel
+where batch cards wrap left-to-right in a row (`flex flex-wrap`, each card `flex: 1 1 240px` with a
+320px max width instead of the old fixed-width vertical stack), followed by the selected batch's
+detail/staged-rows table stacked full-width beneath it. Also removed the batch-list collapse/hide
+toggle (state, `localStorage` key, and buttons) added in the previous UX-overhaul pass: it only
+existed to reclaim width from the old side-by-side grid, which no longer exists in this
+single-column layout, so keeping it would have been dead code. Commit `b2d4761`.
+
+No schema/migration change; `npm run build` plus a restart is sufficient. Reviewed by static code
+inspection only (same drive-mounted-workspace constraint as the previous two updates); not yet
+deployed or tested by the owner.
