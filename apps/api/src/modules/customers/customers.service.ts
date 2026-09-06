@@ -4,6 +4,7 @@ import type { MutationContext } from '../../common/mutation-context';
 import { pageMetadata } from '../../common/page-query.dto';
 import { throwMappedPrismaError } from '../../common/prisma-errors';
 import { PrismaService } from '../../database/prisma.service';
+import type { Prisma } from '../../generated/prisma/client';
 import { ActorType, CustomerStatus } from '../../generated/prisma/enums';
 import type {
   CreateCustomerContactDto,
@@ -46,7 +47,7 @@ export class CustomersService {
       this.prisma.customer.findMany({
         where,
         include: customerInclude,
-        orderBy: [{ companyName: 'asc' }, { customerCode: 'asc' }],
+        orderBy: [{ sourceSequence: 'asc' }, { createdAt: 'asc' }, { customerCode: 'asc' }],
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
       }),
@@ -81,9 +82,11 @@ export class CustomersService {
     }
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const sourceSequence = await this.nextSourceSequence(tx);
         const customer = await tx.customer.create({
           data: {
             ...customerData,
+            sourceSequence,
             emailAddresses: {
               create: [
                 {
@@ -336,6 +339,11 @@ export class CustomersService {
 
       return { id, deleted: true, deletedSubscriptions: subscriptionIds.length };
     });
+  }
+
+  private async nextSourceSequence(tx: Prisma.TransactionClient): Promise<number> {
+    const highest = await tx.customer.aggregate({ _max: { sourceSequence: true } });
+    return (highest._max.sourceSequence ?? 0) + 1;
   }
 
   private async requireActiveBillingEntity(id: string): Promise<void> {

@@ -87,6 +87,9 @@ describe('Phase 2.1 subscription package snapshots', () => {
       priceOverrideReason: 'Historical negotiated price',
       identifiers: { create: [{ type: SubscriptionIdentifierType.DOMAIN, value: 'example.test' }] },
     });
+    // Phase 2.2 transitional mapping: currentTermEndDate is kept in lockstep with the renewal
+    // engine's operational renewalDate field rather than left unpopulated.
+    expect(data?.currentTermEndDate).toEqual(new Date('2029-01-01'));
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ eventKey: 'subscription.created' }),
       tx,

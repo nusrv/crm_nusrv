@@ -14,6 +14,120 @@ import { parseLegacyWorkbook } from './legacy-workbook.parser';
 
 const actor = { actorId: '10000000-0000-4000-8000-000000000001' };
 
+function canonicalWorkbookFixture(): Buffer {
+  const workbook = XLSX.utils.book_new();
+  const sheet = (rows: unknown[][]) => XLSX.utils.aoa_to_sheet(rows);
+  XLSX.utils.book_append_sheet(
+    workbook,
+    sheet([
+      ['Customer_ID', 'Customer_Order', 'Canonical_Name', 'Review_Status'],
+      ['CUST-0001', 1, 'Duplicate Signal Co', 'READY'],
+      ['CUST-0002', 2, 'Clean Co', 'READY'],
+    ]),
+    'Customers',
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    sheet([['Contact_ID', 'Customer_ID', 'Person_Name', 'Role']]),
+    'Contacts',
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    sheet([
+      [
+        'Phone_ID',
+        'Customer_ID',
+        'Contact_ID',
+        'Phone_Type',
+        'E164_Normalized',
+        'Active',
+        'Primary_Draft',
+        'Verification_Status',
+      ],
+    ]),
+    'Phone_Channels',
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    sheet([
+      ['Email_ID', 'Customer_ID', 'Contact_ID', 'Normalized_Email', 'Role', 'Verification_Status'],
+      ['EM-0001', 'CUST-0001', '', 'dup@example.test', 'GENERAL', 'UNVERIFIED'],
+      ['EM-0002', 'CUST-0002', '', 'clean@example.test', 'GENERAL', 'UNVERIFIED'],
+    ]),
+    'Email_Channels',
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    sheet([
+      [
+        'Subscription_ID',
+        'Source_Sequence',
+        'Source_Row',
+        'Customer_ID',
+        'Billing_Entity_Source',
+        'Service_Type_Source',
+        'Package_Source',
+        'Start_Date',
+        'Current_Term_End_Date',
+        'Renewal_Interval_Months',
+        'Selling_Price_Original',
+        'Currency',
+        'Review_Status',
+      ],
+      [
+        'SUB-0001',
+        1,
+        3,
+        'CUST-0001',
+        'Billing Co',
+        'Hosting',
+        'CUSTOM Plan',
+        new Date('2026-01-01T00:00:00.000Z'),
+        new Date('2027-01-01T00:00:00.000Z'),
+        12,
+        100,
+        'JOD',
+        'READY',
+      ],
+      [
+        'SUB-0002',
+        2,
+        4,
+        'CUST-0002',
+        'Billing Co',
+        'Hosting',
+        'CUSTOM Plan',
+        new Date('2026-01-01T00:00:00.000Z'),
+        new Date('2027-01-01T00:00:00.000Z'),
+        12,
+        200,
+        'JOD',
+        'READY',
+      ],
+      [
+        'SUB-0003',
+        3,
+        5,
+        'CUST-0002',
+        'Billing Co',
+        'Domain',
+        'CUSTOM Plan',
+        new Date('2026-01-01T00:00:00.000Z'),
+        new Date('2027-01-01T00:00:00.000Z'),
+        12,
+        50,
+        'JOD',
+        'READY',
+      ],
+    ]),
+    'Subscriptions',
+  );
+  const output: unknown = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  if (Buffer.isBuffer(output)) return output;
+  if (output instanceof Uint8Array) return Buffer.from(output);
+  throw new Error('The XLSX writer returned an unexpected fixture type.');
+}
+
 function explicitDateWorkbookFixture(): Buffer {
   const workbook = XLSX.utils.book_new();
   const rows: unknown[][] = [
@@ -275,7 +389,13 @@ describe('LegacyImportService', () => {
         updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
         update: jest.fn(() => Promise.resolve({ ...readyRow, status: 'APPROVED' })),
       },
-      customer: { create: jest.fn(() => Promise.resolve(customer)), findUnique: jest.fn() },
+      customer: {
+        create: jest.fn(() => Promise.resolve({ ...customer, contacts: [] })),
+        findUnique: jest.fn(),
+        findFirst: jest.fn(() => Promise.resolve(null)),
+      },
+      customerEmailAddress: { createMany: jest.fn(() => Promise.resolve({ count: 1 })) },
+      customerPhoneNumber: { createMany: jest.fn(() => Promise.resolve({ count: 0 })) },
       subscription: { create: jest.fn(() => Promise.resolve(subscription)) },
       currency: {
         findUnique: jest.fn(() =>
@@ -320,6 +440,98 @@ describe('LegacyImportService', () => {
     );
   });
 
+  it('resolves two sibling canonical rows to the same customer instead of creating a duplicate', async () => {
+    const canonicalCustomerRef = 'canonical.xlsx#Customers!CUST-0001';
+    const buildRow = (id: string, subscriptionCode: string) => ({
+      id,
+      batchId: 'batch-id',
+      status: LegacyImportRowStatus.READY_FOR_APPROVAL,
+      sourceReference: `canonical.xlsx#Subscriptions!${subscriptionCode}`,
+      customerResolution: LegacyCustomerResolution.CREATE_NEW,
+      candidateCustomerId: null,
+      mappedCustomer: {
+        companyName: 'Canonical Customer',
+        primaryEmail: 'canonical@example.test',
+        billingEntityId: 'entity-id',
+        preferredLanguage: 'en',
+        sourceLegacyReference: canonicalCustomerRef,
+      },
+      mappedSubscriptions: [
+        {
+          serviceTypeId: 'service-type-id',
+          name: 'Canonical Hosting',
+          startDate: '2026-01-01',
+          renewalDate: '2027-01-01',
+          billingFrequency: BillingFrequency.ANNUAL,
+          sellingPrice: '100.000',
+          currency: 'JOD',
+          providerAutoRenews: true,
+          graceHours: 24,
+          status: 'ACTIVE',
+        },
+      ],
+      subscriptionLinks: [],
+    });
+    const rowA = buildRow('row-a', 'SUB-0001');
+    const rowB = buildRow('row-b', 'SUB-0002');
+    const customer = { id: 'customer-id', contacts: [] };
+    const rateToJod = { mul: jest.fn(() => ({ toDecimalPlaces: () => '100.000' })) };
+    const tx = {
+      legacyImportRow: {
+        findUnique: jest
+          .fn<() => Promise<typeof rowA>>()
+          .mockResolvedValueOnce(rowA)
+          .mockResolvedValueOnce(rowB),
+        updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
+        update: jest.fn(() => Promise.resolve({})),
+      },
+      customer: {
+        create: jest.fn(() => Promise.resolve(customer)),
+        findFirst: jest
+          .fn<() => Promise<typeof customer | null>>()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(customer),
+      },
+      customerEmailAddress: { createMany: jest.fn(() => Promise.resolve({ count: 1 })) },
+      customerPhoneNumber: { createMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+      subscription: {
+        create: jest
+          .fn<() => Promise<{ id: string }>>()
+          .mockResolvedValueOnce({ id: 'subscription-a' })
+          .mockResolvedValueOnce({ id: 'subscription-b' }),
+      },
+      currency: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({
+            code: 'JOD',
+            active: true,
+            rateToJod,
+            effectiveDate: new Date('2026-01-01'),
+          }),
+        ),
+      },
+      legacyImportSubscriptionLink: { create: jest.fn(() => Promise.resolve({ id: 'link-id' })) },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      legacyImportRow: { count: jest.fn(() => Promise.resolve(0)) },
+      legacyImportBatch: { update: jest.fn(() => Promise.resolve({ id: 'batch-id' })) },
+    };
+    const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
+    const service = new LegacyImportService(prisma as never, {} as never, audit as never);
+
+    const first = await service.approveRow('row-a', actor);
+    const second = await service.approveRow('row-b', actor);
+
+    expect(first).toEqual(expect.objectContaining({ customerId: 'customer-id' }));
+    expect(second).toEqual(expect.objectContaining({ customerId: 'customer-id' }));
+    expect(tx.customer.create).toHaveBeenCalledTimes(1);
+    expect(tx.customer.findFirst).toHaveBeenCalledWith({
+      where: { sourceLegacyReference: canonicalCustomerRef },
+    });
+    expect(tx.subscription.create).toHaveBeenCalledTimes(2);
+  });
+
   it('refuses approval while a row still requires manual review', async () => {
     const tx = {
       legacyImportRow: {
@@ -335,5 +547,79 @@ describe('LegacyImportService', () => {
     await expect(service.approveRow('row-id', actor)).rejects.toThrow(
       'must be validated before approval',
     );
+  });
+
+  it("stages a canonical workbook: flags a shared email as a review signal without auto-merging, and shares one customer reference across a customer's multiple subscriptions", async () => {
+    const existingCustomer = {
+      id: 'existing-customer-id',
+      customerCode: 'CUS-001',
+      companyName: 'Existing Customer',
+      primaryEmail: 'dup@example.test',
+      secondaryEmail: null,
+      phone: null,
+      subscriptions: [],
+    };
+    const createdRows: Array<{ data: Record<string, unknown> }> = [];
+    const tx = {
+      legacyImportBatch: { create: jest.fn(() => Promise.resolve({ id: 'batch-id' })) },
+      legacyImportRow: {
+        create: jest.fn((input: { data: Record<string, unknown> }) => {
+          createdRows.push(input);
+          return Promise.resolve({ id: `row-${String(createdRows.length)}` });
+        }),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      legacyImportBatch: { findUnique: jest.fn(() => Promise.resolve(null)) },
+      customer: { findMany: jest.fn(() => Promise.resolve([existingCustomer])) },
+      billingEntity: {
+        findMany: jest.fn(() => Promise.resolve([{ id: 'entity-id', name: 'Billing Co' }])),
+      },
+      serviceType: {
+        findMany: jest.fn(() => Promise.resolve([{ id: 'hosting-id', name: 'Hosting' }])),
+      },
+      servicePackage: { findMany: jest.fn(() => Promise.resolve([])) },
+    };
+    const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
+    const encryption = { encrypt: jest.fn(() => 'ciphertext') };
+    const service = new LegacyImportService(prisma as never, encryption as never, audit as never);
+
+    const buffer = canonicalWorkbookFixture();
+    const result = await service.createBatch(
+      { originalname: 'canonical.xlsx', size: buffer.length, buffer },
+      actor,
+    );
+
+    expect(result.reused).toBe(false);
+    expect(createdRows).toHaveLength(3);
+
+    const duplicateRow = createdRows.find(
+      (row) => row.data.sourceReference === 'canonical.xlsx#Subscriptions!SUB-0001',
+    );
+    expect(duplicateRow?.data.status).toBe(LegacyImportRowStatus.REQUIRES_MANUAL_REVIEW);
+    expect(duplicateRow?.data.customerResolution).toBeUndefined();
+    expect(String(duplicateRow?.data.validationIssues)).toMatch(/duplicate customer/i);
+
+    const cleanRows = createdRows.filter((row) =>
+      ['canonical.xlsx#Subscriptions!SUB-0002', 'canonical.xlsx#Subscriptions!SUB-0003'].includes(
+        row.data.sourceReference as string,
+      ),
+    );
+    expect(cleanRows).toHaveLength(2);
+    const customerRefs = cleanRows.map(
+      (row) => (row.data.mappedCustomer as { sourceLegacyReference: string }).sourceLegacyReference,
+    );
+    expect(customerRefs[0]).toBe('canonical.xlsx#Customers!CUST-0002');
+    expect(customerRefs[0]).toBe(customerRefs[1]);
+
+    // The canonical sheet gives Start Date / End Date / the renewal interval as typed columns,
+    // not the free text the reused classifier normally parses them from — every staged row's
+    // issue list must never claim they are "missing" just because that free text is absent.
+    for (const row of createdRows) {
+      expect(String(row.data.validationIssues)).not.toMatch(
+        /Date column is missing or invalid|Renewal interval requires human confirmation/,
+      );
+    }
   });
 });

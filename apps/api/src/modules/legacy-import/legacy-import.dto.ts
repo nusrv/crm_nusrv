@@ -20,11 +20,13 @@ import {
 } from 'class-validator';
 import {
   BillingFrequency,
+  ChannelVerificationStatus,
   CustomerContactRole,
   LegacyCustomerResolution,
   LegacyImportBatchStatus,
   LegacyImportRowStatus,
   PackageClassificationStatus,
+  PhoneType,
   SubscriptionIdentifierType,
   SubscriptionStatus,
 } from '../../generated/prisma/enums';
@@ -56,6 +58,11 @@ export class ImportRowListQueryDto extends PageQueryDto {
 }
 
 export class LegacyContactMappingDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  ref?: string;
+
   @IsEnum(CustomerContactRole)
   role!: CustomerContactRole;
 
@@ -77,6 +84,110 @@ export class LegacyContactMappingDto {
   @IsOptional()
   @IsBoolean()
   primary = false;
+}
+
+export class LegacyEmailChannelMappingDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  contactRef?: string;
+
+  @Transform(({ value }) => String(value).trim().toLowerCase())
+  @IsEmail()
+  email!: string;
+
+  @IsEnum(CustomerContactRole)
+  role: CustomerContactRole = CustomerContactRole.OTHER;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  label?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  primary = false;
+
+  @IsOptional()
+  @IsEnum(ChannelVerificationStatus)
+  verificationStatus: ChannelVerificationStatus = ChannelVerificationStatus.UNVERIFIED;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  holderName?: string;
+}
+
+export class LegacyPhoneChannelMappingDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  contactRef?: string;
+
+  @Transform(({ value }) => String(value).replace(/[\s()-]/g, ''))
+  @Matches(/^\+[1-9]\d{7,18}$/)
+  phoneNumber!: string;
+
+  @Transform(({ value }) => String(value).replace(/[\s()-]/g, ''))
+  @Matches(/^\+[1-9]\d{0,2}$/)
+  countryCallingCode!: string;
+
+  @IsEnum(PhoneType)
+  phoneType: PhoneType = PhoneType.PHONE;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  rawValue?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  areaOrOperatorCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  subscriberNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  extension?: string;
+
+  @IsEnum(CustomerContactRole)
+  role: CustomerContactRole = CustomerContactRole.OTHER;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  label?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  primary = false;
+
+  @IsOptional()
+  @IsBoolean()
+  active = true;
+
+  @IsOptional()
+  @IsEnum(ChannelVerificationStatus)
+  verificationStatus: ChannelVerificationStatus = ChannelVerificationStatus.UNVERIFIED;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  holderName?: string;
+
+  @IsOptional()
+  @IsObject()
+  metadata?: Record<string, unknown>;
 }
 
 export class LegacyCustomerMappingDto {
@@ -133,6 +244,27 @@ export class LegacyCustomerMappingDto {
   contacts: LegacyContactMappingDto[] = [];
 
   @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => LegacyEmailChannelMappingDto)
+  @ArrayMaxSize(30)
+  emailChannels?: LegacyEmailChannelMappingDto[];
+
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => LegacyPhoneChannelMappingDto)
+  @ArrayMaxSize(30)
+  phoneChannels?: LegacyPhoneChannelMappingDto[];
+
+  @IsOptional()
+  @IsInt()
+  sourceSequence?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  sourceLegacyReference?: string;
+
+  @IsOptional()
   @IsString()
   @MaxLength(5000)
   notes?: string;
@@ -174,6 +306,19 @@ export class LegacySubscriptionMappingDto {
 
   @IsDateString()
   renewalDate!: string;
+
+  @IsOptional()
+  @IsDateString()
+  currentTermEndDate?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  paidLabel?: string;
+
+  @IsOptional()
+  @IsInt()
+  sourceSequence?: number;
 
   @IsEnum(BillingFrequency)
   billingFrequency!: BillingFrequency;

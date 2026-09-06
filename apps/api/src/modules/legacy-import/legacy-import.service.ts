@@ -26,7 +26,10 @@ import type {
   LegacySubscriptionMappingDto,
   ReviewLegacyRowDto,
 } from './legacy-import.dto';
+import { parseCanonicalWorkbook } from './canonical-workbook.parser';
 import {
+  classifyLegacyValues,
+  detectCanonicalWorkbook,
   parseLegacyWorkbook,
   type LegacySuggestions,
   type ParsedLegacyRow,
@@ -77,6 +80,9 @@ export class LegacyImportService {
       throw new BadRequestException('Only .xls and .xlsx files are accepted.');
     }
     const sourceFileHash = createHash('sha256').update(file.buffer).digest('hex');
+    if (detectCanonicalWorkbook(file.buffer)) {
+      return this.createCanonicalBatch(file, sourceFileHash, context);
+    }
     let parsedRows: ParsedLegacyRow[];
     try {
       parsedRows = parseLegacyWorkbook(file.buffer, file.originalname);
@@ -249,6 +255,289 @@ export class LegacyImportService {
             totalRows: parsedRows.length,
             activeRows,
             skippedRows,
+          },
+          ipAddress: context.ipAddress,
+        },
+        tx,
+      );
+      return created;
+    });
+    return { batch, reused: false };
+  }
+
+  /**
+   * Stages a canonical (`CRM_Import_Schema`) multi-sheet workbook: a pre-reviewed, already
+   * normalized dataset rather than raw legacy rows. One `LegacyImportRow` is created per
+   * canonical subscription so the existing review/approve pipeline, audit trail, and
+   * per-row idempotency all apply unchanged; sibling rows that share a canonical customer all
+   * carry that customer's full contact/email/phone payload so `approveRow` can create it exactly
+   * once no matter which sibling row a human approves first (see the idempotent
+   * sourceLegacyReference lookup there).
+   */
+  private async createCanonicalBatch(
+    file: UploadedLegacyFile,
+    sourceFileHash: string,
+    context: MutationContext,
+  ) {
+    let parsed: ReturnType<typeof parseCanonicalWorkbook>;
+    try {
+      parsed = parseCanonicalWorkbook(file.buffer);
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error ? error.message : 'The canonical workbook could not be parsed.',
+      );
+    }
+    if (!parsed.subscriptions.length) {
+      throw new BadRequestException('The canonical workbook contains no subscription rows.');
+    }
+
+    const existing = await this.prisma.legacyImportBatch.findUnique({
+      where: { sourceFileHash },
+      include: { _count: { select: { rows: true } } },
+    });
+    if (existing) {
+      return { batch: existing, reused: true, refreshedRows: 0 };
+    }
+
+    const [customers, billingEntities, serviceTypes, servicePackages] = await Promise.all([
+      this.prisma.customer.findMany({
+        select: {
+          id: true,
+          customerCode: true,
+          companyName: true,
+          primaryEmail: true,
+          secondaryEmail: true,
+          phone: true,
+          subscriptions: { select: { name: true, description: true, sourceLegacyReference: true } },
+        },
+      }),
+      this.prisma.billingEntity.findMany({
+        where: { active: true },
+        select: { id: true, name: true },
+      }),
+      this.prisma.serviceType.findMany({
+        where: { active: true },
+        select: { id: true, name: true },
+      }),
+      this.prisma.servicePackage.findMany({
+        where: { active: true },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          kind: true,
+          serviceTypeId: true,
+          specifications: true,
+        },
+      }),
+    ]);
+
+    const batch = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.legacyImportBatch.create({
+        data: {
+          sourceFileName: file.originalname,
+          sourceFileHash,
+          sourceFileSize: file.size,
+          uploadedById: context.actorId,
+          totalRows: parsed.subscriptions.length,
+        },
+      });
+
+      for (const subscriptionRow of parsed.subscriptions) {
+        const customer = parsed.customers.get(subscriptionRow.customerId);
+        if (!customer) continue;
+        const sourceReference = `${file.originalname}#Subscriptions!${subscriptionRow.subscriptionId}`;
+        const customerSourceReference = `${file.originalname}#Customers!${customer.customerId}`;
+        const primaryEmail = customer.emails[0]?.email;
+        const primaryPhone = customer.phones.find((phone) => phone.primary) ?? customer.phones[0];
+
+        // Reuse the existing package/service classification engine (catalog matching,
+        // technical-spec conflict detection) by feeding it a synthetic record shaped like the
+        // flat importer's own headers, rather than re-implementing that logic here.
+        const syntheticRow: Record<string, unknown> = compactJson({
+          'Company Name': customer.companyName,
+          'Registration Type': subscriptionRow.serviceTypeSource,
+          Package: subscriptionRow.packageSource,
+          Information: subscriptionRow.informationSource,
+          'Billing Company': subscriptionRow.billingEntitySource ?? customer.billingEntityName,
+          'E-mail Address': primaryEmail,
+          // The canonical sheet already gives dates and the renewal interval as typed columns,
+          // not free text — feed them through under the headers the classifier recognizes so it
+          // doesn't falsely report them as missing (it has no other way to see them).
+          'Start Date': subscriptionRow.startDate,
+          'End Date': subscriptionRow.currentTermEndDate,
+          'real price':
+            subscriptionRow.sellingPriceOriginal && subscriptionRow.currency
+              ? `${subscriptionRow.sellingPriceOriginal} ${subscriptionRow.currency}`
+              : undefined,
+        });
+        const suggestions = classifyLegacyValues(syntheticRow);
+        // The classifier only recognizes a renewal interval from free-text frequency wording,
+        // which the canonical sheet doesn't carry — it gives the interval as a plain number
+        // instead. Don't let that absence read as "requires human confirmation" when we already
+        // have a trustworthy value directly from the sheet.
+        if (subscriptionRow.renewalIntervalMonths) {
+          suggestions.issues = suggestions.issues.filter(
+            (issue) => issue !== 'Renewal interval requires human confirmation.',
+          );
+        }
+
+        const billingEntity = billingEntities.find(
+          (entry) =>
+            normalize(entry.name) ===
+            normalize(subscriptionRow.billingEntitySource ?? customer.billingEntityName),
+        );
+        const serviceType = serviceTypes.find(
+          (entry) => normalize(entry.name) === normalize(suggestions.serviceTypeName),
+        );
+        const servicePackage = servicePackages.find(
+          (entry) => entry.code === suggestions.servicePackageCode,
+        );
+        const duplicateCandidates = this.findDuplicates(
+          {
+            companyName: customer.companyName,
+            primaryEmail,
+            phone: primaryPhone?.phoneNumber,
+            description: subscriptionRow.informationSource,
+          },
+          customers,
+        );
+
+        const issues = [...suggestions.issues];
+        if (subscriptionRow.reviewStatus !== 'READY') {
+          issues.push('Canonical subscription row is not marked READY for import.');
+        }
+        if (customer.reviewStatus !== 'READY') {
+          issues.push('Canonical customer is not marked READY for import.');
+        }
+        if (duplicateCandidates.length) {
+          issues.push('Possible duplicate customer requires an explicit human resolution.');
+        }
+        const uniqueIssues = [...new Set(issues)];
+
+        const mappedCustomer = compactJson({
+          companyName: customer.companyName,
+          contactName: customer.contacts[0]?.personName,
+          primaryEmail,
+          secondaryEmail: customer.emails[1]?.email,
+          phone: primaryPhone?.phoneNumber,
+          address: customer.address,
+          country: customer.country,
+          billingEntityId: billingEntity?.id,
+          preferredLanguage: 'en',
+          sourceSequence: customer.sourceSequence,
+          sourceLegacyReference: customerSourceReference,
+          contacts: customer.contacts.map((contact) => ({
+            ref: contact.contactId,
+            role: contact.role,
+            name: contact.personName,
+            primary: false,
+          })),
+          emailChannels: customer.emails.map((email, index) => ({
+            contactRef: email.contactRef,
+            email: email.email,
+            role: email.role,
+            primary: index === 0,
+            verificationStatus: email.verificationStatus,
+            holderName: email.holderName,
+          })),
+          phoneChannels: customer.phones.map((phone) => ({
+            contactRef: phone.contactRef,
+            phoneNumber: phone.phoneNumber,
+            countryCallingCode: phone.countryCallingCode,
+            phoneType: phone.phoneType,
+            rawValue: phone.rawValue,
+            country: phone.country,
+            areaOrOperatorCode: phone.areaOrOperatorCode,
+            subscriberNumber: phone.subscriberNumber,
+            extension: phone.extension,
+            role: 'OTHER',
+            primary: phone.primary,
+            active: phone.active,
+            verificationStatus: phone.verificationStatus,
+            holderName: phone.holderName,
+            metadata: phone.metadata,
+          })),
+        });
+
+        const mappedSubscriptions = serviceType
+          ? [
+              compactJson({
+                serviceTypeId: serviceType.id,
+                servicePackageId: servicePackage?.id,
+                name: suggestions.servicePackageName ?? suggestions.serviceTypeName,
+                description: subscriptionRow.informationSource,
+                startDate: subscriptionRow.startDate ?? null,
+                renewalDate: subscriptionRow.currentTermEndDate ?? subscriptionRow.startDate,
+                currentTermEndDate: subscriptionRow.currentTermEndDate,
+                paidLabel: subscriptionRow.paidLabel,
+                sourceSequence: subscriptionRow.sourceSequence,
+                billingFrequency: suggestions.billingFrequency,
+                renewalIntervalMonths: subscriptionRow.renewalIntervalMonths,
+                contractTermMonths: subscriptionRow.renewalIntervalMonths,
+                sellingPrice: subscriptionRow.sellingPriceOriginal,
+                currency: subscriptionRow.currency,
+                providerAutoRenews: true,
+                graceHours: 24,
+                sourceRegistration: subscriptionRow.serviceTypeSource,
+                packageNameSnapshot:
+                  suggestions.servicePackageName ?? subscriptionRow.packageSource,
+                packageSpecificationsSnapshot: servicePackage?.specifications,
+                customPackage: suggestions.classificationStatus === 'CUSTOM',
+                classificationStatus: suggestions.classificationStatus,
+                classificationEvidence: {
+                  ...suggestions.classificationEvidence,
+                  sourceStartDate: subscriptionRow.startDate,
+                  sourceEndDate: subscriptionRow.currentTermEndDate,
+                  sourceRenewalReminderDate: subscriptionRow.legacyReminderDate,
+                },
+                identifiers: subscriptionRow.identifiers,
+              }),
+            ]
+          : [];
+
+        await tx.legacyImportRow.create({
+          data: {
+            batchId: created.id,
+            sheetName: 'Subscriptions',
+            sourceRowNumber: subscriptionRow.sourceRow ?? subscriptionRow.sourceSequence ?? 0,
+            sourceReference,
+            rowFingerprint: createHash('sha256')
+              .update(stableJson({ subscriptionRow, customer }))
+              .digest('hex'),
+            rawValuesCiphertext: this.encryption.encrypt({ subscriptionRow, customer }),
+            rawPreview: asJson(compactJson({ ...subscriptionRow, customer: customer.companyName })),
+            mappedCustomer: asJson(mappedCustomer),
+            mappedSubscriptions: asJson(mappedSubscriptions),
+            duplicateCandidates: asJson(duplicateCandidates),
+            validationIssues: asJson(uniqueIssues),
+            status: uniqueIssues.length
+              ? LegacyImportRowStatus.REQUIRES_MANUAL_REVIEW
+              : LegacyImportRowStatus.READY_FOR_APPROVAL,
+            validationStatus: uniqueIssues.length
+              ? LegacyValidationStatus.INVALID
+              : LegacyValidationStatus.VALID,
+            customerResolution: uniqueIssues.length
+              ? undefined
+              : LegacyCustomerResolution.CREATE_NEW,
+            billingEntityId: billingEntity?.id,
+            manualReviewReason: uniqueIssues.length ? uniqueIssues.join(' ') : null,
+          },
+        });
+      }
+
+      await this.audit.record(
+        {
+          actorType: ActorType.USER,
+          actorId: context.actorId,
+          eventKey: 'legacy_import.canonical_batch_created',
+          subjectType: 'LegacyImportBatch',
+          subjectId: created.id,
+          newState: {
+            sourceFileName: created.sourceFileName,
+            sourceFileHash: created.sourceFileHash,
+            totalCustomers: parsed.customers.size,
+            totalSubscriptions: parsed.subscriptions.length,
           },
           ipAddress: context.ipAddress,
         },
@@ -624,61 +913,138 @@ export class LegacyImportService {
         customerId = customer.id;
       } else {
         if (!mapping.customer) throw new BadRequestException('Mapped customer data is required.');
-        const { contacts, ...customerInput } = mapping.customer;
-        const customer = await tx.customer.create({
-          data: {
-            ...customerInput,
-            customerCode: this.generatedCode('LEG-C', row.sourceReference),
-            sourceLegacyReference: row.sourceReference,
-            status: CustomerStatus.ACTIVE,
-            contacts: contacts?.length
-              ? {
-                  create: contacts.map((contact) => ({
-                    ...contact,
-                    sourceLegacyReference: row.sourceReference,
-                  })),
-                }
-              : undefined,
-            emailAddresses: {
-              create: [
-                {
-                  email: customerInput.primaryEmail,
-                  holderName: customerInput.contactName,
-                  role: 'PRIMARY',
-                  label: 'Primary',
-                  primary: true,
-                  sourceLegacyReference: row.sourceReference,
-                },
-                ...(customerInput.secondaryEmail
-                  ? [
-                      {
-                        email: customerInput.secondaryEmail,
-                        holderName: customerInput.contactName,
-                        role: 'OTHER' as const,
-                        label: 'Secondary',
-                        primary: false,
-                        sourceLegacyReference: row.sourceReference,
-                      },
-                    ]
-                  : []),
-              ],
+        const {
+          contacts,
+          emailChannels,
+          phoneChannels,
+          sourceSequence: canonicalSourceSequence,
+          sourceLegacyReference: canonicalCustomerReference,
+          ...customerInput
+        } = mapping.customer;
+
+        // A canonical import stages one LegacyImportRow per subscription, so several sibling
+        // rows can share the same canonical customer. Whichever row is approved first creates
+        // it; every later sibling row must find and reuse that same customer rather than
+        // creating a duplicate — this is what makes approval order-independent and idempotent.
+        const existingCanonicalCustomer = canonicalCustomerReference
+          ? await tx.customer.findFirst({
+              where: { sourceLegacyReference: canonicalCustomerReference },
+            })
+          : null;
+
+        let customer = existingCanonicalCustomer;
+        if (!customer) {
+          const created = await tx.customer.create({
+            data: {
+              ...customerInput,
+              customerCode: this.generatedCode('LEG-C', row.sourceReference),
+              sourceLegacyReference: canonicalCustomerReference ?? row.sourceReference,
+              sourceSequence: canonicalSourceSequence,
+              status: CustomerStatus.ACTIVE,
+              contacts: contacts?.length
+                ? {
+                    create: contacts.map((contact) => ({
+                      role: contact.role,
+                      name: contact.name,
+                      email: contact.email,
+                      phone: contact.phone,
+                      primary: contact.primary,
+                      sourceLegacyReference: contact.ref
+                        ? `${row.sourceReference}#contact:${contact.ref}`
+                        : row.sourceReference,
+                    })),
+                  }
+                : undefined,
             },
-          },
-        });
+            include: { contacts: true },
+          });
+          const contactIdByRef = new Map(
+            created.contacts
+              .map((contact) => [contact.sourceLegacyReference?.split('#contact:')[1], contact.id])
+              .filter((entry): entry is [string, string] => Boolean(entry[0])),
+          );
+
+          const emailsByAddress = new Map<string, Prisma.CustomerEmailAddressCreateManyInput>();
+          emailsByAddress.set(customerInput.primaryEmail, {
+            customerId: created.id,
+            email: customerInput.primaryEmail,
+            holderName: customerInput.contactName,
+            role: 'PRIMARY',
+            label: 'Primary',
+            primary: true,
+            sourceLegacyReference: row.sourceReference,
+          });
+          if (customerInput.secondaryEmail) {
+            emailsByAddress.set(customerInput.secondaryEmail, {
+              customerId: created.id,
+              email: customerInput.secondaryEmail,
+              holderName: customerInput.contactName,
+              role: 'OTHER',
+              label: 'Secondary',
+              primary: false,
+              sourceLegacyReference: row.sourceReference,
+            });
+          }
+          for (const channel of emailChannels ?? []) {
+            emailsByAddress.set(channel.email, {
+              customerId: created.id,
+              contactId: channel.contactRef ? contactIdByRef.get(channel.contactRef) : undefined,
+              email: channel.email,
+              holderName: channel.holderName,
+              role: channel.role,
+              label: channel.label,
+              primary: channel.primary,
+              verificationStatus: channel.verificationStatus,
+              sourceLegacyReference: row.sourceReference,
+            });
+          }
+          if (emailsByAddress.size) {
+            await tx.customerEmailAddress.createMany({ data: [...emailsByAddress.values()] });
+          }
+
+          const phonesByNumber = new Map<string, Prisma.CustomerPhoneNumberCreateManyInput>();
+          for (const channel of phoneChannels ?? []) {
+            phonesByNumber.set(channel.phoneNumber, {
+              customerId: created.id,
+              contactId: channel.contactRef ? contactIdByRef.get(channel.contactRef) : undefined,
+              phoneNumber: channel.phoneNumber,
+              countryCallingCode: channel.countryCallingCode,
+              phoneType: channel.phoneType,
+              rawValue: channel.rawValue,
+              country: channel.country,
+              areaOrOperatorCode: channel.areaOrOperatorCode,
+              subscriberNumber: channel.subscriberNumber,
+              extension: channel.extension,
+              holderName: channel.holderName,
+              role: channel.role,
+              label: channel.label,
+              primary: channel.primary,
+              active: channel.active,
+              verificationStatus: channel.verificationStatus,
+              metadata: channel.metadata ? asJson(channel.metadata) : undefined,
+              sourceLegacyReference: row.sourceReference,
+            });
+          }
+          if (phonesByNumber.size) {
+            await tx.customerPhoneNumber.createMany({ data: [...phonesByNumber.values()] });
+          }
+
+          customer = created;
+          await this.audit.record(
+            {
+              actorType: ActorType.USER,
+              actorId: context.actorId,
+              eventKey: 'legacy_import.live_customer_created',
+              subjectType: 'Customer',
+              subjectId: customer.id,
+              newState: customer,
+              metadata: { importRowId: row.id, sourceReference: row.sourceReference },
+              ipAddress: context.ipAddress,
+            },
+            tx,
+          );
+        }
         customerId = customer.id;
-        await this.audit.record(
-          {
-            actorType: ActorType.USER,
-            actorId: context.actorId,
-            eventKey: 'legacy_import.live_customer_created',
-            subjectType: 'Customer',
-            subjectId: customer.id,
-            newState: customer,
-            metadata: { importRowId: row.id, sourceReference: row.sourceReference },
-            ipAddress: context.ipAddress,
-          },
-          tx,
-        );
       }
 
       const subscriptions = [];
@@ -717,6 +1083,9 @@ export class LegacyImportService {
             ),
             startDate: new Date(subscriptionInput.startDate),
             renewalDate: new Date(subscriptionInput.renewalDate),
+            currentTermEndDate: subscriptionInput.currentTermEndDate
+              ? new Date(subscriptionInput.currentTermEndDate)
+              : new Date(subscriptionInput.renewalDate),
             sourceLegacyReference: row.sourceReference,
             identifiers: identifiers?.length ? { create: identifiers } : undefined,
           },

@@ -103,6 +103,10 @@ export class SubscriptionsService {
             exchangeRateEffectiveDate: currencyDefinition.effectiveDate,
             startDate: new Date(input.startDate),
             renewalDate: new Date(input.renewalDate),
+            // Transitional mapping (Phase 2.2): `renewalDate` remains the field the renewal
+            // engine reads; `currentTermEndDate` is the new, unambiguous name for the same
+            // "when does the current term end" concept and is kept in lockstep here.
+            currentTermEndDate: new Date(input.renewalDate),
             packageNameSnapshot: servicePackage?.name,
             packageSpecificationsSnapshot: servicePackage?.specifications ?? undefined,
             customPackage: servicePackage?.kind === 'CUSTOM_TEMPLATE',
@@ -163,6 +167,7 @@ export class SubscriptionsService {
       exchangeRateEffectiveDate: currencyDefinition?.effectiveDate,
       startDate: input.startDate ? new Date(input.startDate) : undefined,
       renewalDate: input.renewalDate ? new Date(input.renewalDate) : undefined,
+      currentTermEndDate: input.renewalDate ? new Date(input.renewalDate) : undefined,
       packageNameSnapshot: input.servicePackageId ? servicePackage?.name : undefined,
       packageSpecificationsSnapshot: input.servicePackageId
         ? (servicePackage?.specifications ?? undefined)

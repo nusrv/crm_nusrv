@@ -246,6 +246,18 @@ export function parseLegacyWorkbook(buffer: Buffer, sourceFileName: string): Par
   return parsed;
 }
 
+export function detectCanonicalWorkbook(buffer: Buffer): boolean {
+  try {
+    const workbook = XLSX.read(buffer, { type: 'buffer', bookSheets: true });
+    const sheets = new Set(workbook.SheetNames);
+    return ['Customers', 'Subscriptions', 'Phone_Channels', 'Email_Channels'].every((name) =>
+      sheets.has(name),
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function classifyLegacyValues(values: Record<string, unknown>): LegacySuggestions {
   const entries = Object.entries(values);
   const get = (pattern: RegExp) => entries.find(([key]) => pattern.test(key))?.[1];

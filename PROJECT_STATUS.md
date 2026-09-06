@@ -5,8 +5,13 @@
 - Phase 0: COMPLETE / OWNER APPROVED
 - Phase 1: COMPLETE / OWNER APPROVED
 - Phase 2: COMPLETE / OWNER APPROVED
-- Phase 2.1 Operational Data Correction: IMPLEMENTED LOCALLY / awaiting human data decisions and staging verification
-- Staging Runtime Gate: BLOCKED — awaiting deployment/access to `crm.nusrv.com`
+- Phase 2.1 Operational Data Correction: LIVE on `crm.nusrv.com` — code complete; 129 of 214
+  legacy rows still await the owner's package-classification decisions
+- Phase 2.2 Canonical Data & Migration Finalization: code complete, tests pass, migration
+  additive-only and not yet applied to any database — see
+  `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md`
+- Deployment model: the owner deploys to `crm.nusrv.com` manually after reviewing each GitHub
+  change; Claude Code has no direct Plesk/SSH/database access and does not deploy
 - Phase 3: LOCKED
 - Phase 4+: LOCKED
 
@@ -116,13 +121,46 @@ Verification for this feature: Prisma generation, strict typecheck, lint, Pretti
 the full test suite (136 tests / 40 suites, including new `currencies.service.spec.ts` and
 `customer-channels.service.spec.ts` unit tests, RBAC coverage for both new controllers, and a parser
 test for the new workbook columns) all pass, plus both the NestJS and Next.js production builds,
-which include the new `/dashboard/currencies` route. This work is **uncommitted** on `main` pending
-owner review.
+which include the new `/dashboard/currencies` route. This work is committed on `main` and deployed
+to `crm.nusrv.com`.
 
 Known follow-up (not blocking, not yet implemented): legacy-import customer creation does not
 auto-populate the new `CustomerPhoneNumber` table from the workbook's free-text phone column (only
 email addresses are auto-seeded) — a human can add the E.164 number afterward through the contact
 channels panel, consistent with how every other ambiguous legacy value already requires confirmation.
+
+## Phase 2.2 canonical data & migration finalization
+
+Full detail: `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md`. Summary: the owner completed an
+external data-cleaning pass over the 214-row legacy workbook, producing an approved multi-sheet
+relational export (`CRM_Canonical_Import_v4_Approved_Phone_Corrections_2026-09-06.xlsx`) with its
+own customer/contact/phone/email/subscription/identifier sheets, already reviewed and marked
+`READY`. This phase adds what the application needed to safely consume it:
+
+- `Customer.sourceSequence` / `Subscription.sourceSequence` — source-appearance order, not
+  alphabetical; the customer list's default order changed accordingly.
+- `CustomerPhoneNumber`/`CustomerEmailAddress` gained an optional `contactId` link plus
+  `phoneType`, decomposed phone parts, and verification tracking.
+- `Subscription.currentTermEndDate` and `Subscription.paidLabel` — see the Phase 2.2 doc for the
+  documented transitional mapping against the existing `renewalDate` field the renewal engine
+  reads.
+- A new, independently-tested phone normalizer (dash-split, slash-suffix expansion, shared-prefix
+  inheritance, Saudi-hyphen-is-one-number, incomplete-value rejection) plus the five manually
+  approved phone corrections as an authoritative override table.
+- A new canonical-workbook parser and importer path (auto-detected by sheet names), reusing the
+  existing review/approve pipeline and package-classification engine, with idempotent customer
+  resolution across a customer's multiple subscription rows.
+- Legacy-import UI: currency now a dropdown from the Currency table, a searchable (not
+  capped-at-100) existing-customer selector, and a read-only multi-phone/email display in the
+  review form.
+
+Migration `20260906000000_canonical_phone_contact_and_source_order` is purely additive. Verified:
+typecheck, lint, both production builds, and 161 tests / 42 suites all pass; a structural dry run
+of the real approved workbook (parser + reused classification engine, no live database available)
+reproduced the workbook's own README counts exactly (124 customers, 214 subscriptions, 374 phones,
+205 emails, 275 identifiers) and the historical classification baseline exactly (85
+`MATCHED_OFFICIAL` / 72 `CUSTOM` / 57 `MANUAL_REVIEW`). Not yet run against a live database, and
+not yet deployed — this is a schema-changing release awaiting the owner's review and deployment.
 
 ## Staging CAPTCHA deployment patch
 
@@ -138,39 +176,38 @@ explicit renewal interval. Existing frequency behavior remains the fallback. Rem
 outbox idempotency, BullMQ worker separation, business timezone, multi-hold aggregation, RBAC, and
 audit behavior remain covered by the full test suite. No SMTP delivery or Phase 3 integration exists.
 
-## Staging Runtime Gate blocker
+## Deployment model
 
-The target is `crm.nusrv.com` on Plesk 18.0.80 with Node.js 22.23.2, MariaDB 11.4.7, and Redis
-7.4.11. This environment has no authorized SSH/Plesk deployment access, staging database
-credentials, or Redis runtime access. Therefore it cannot truthfully run or verify:
-
-- the canonical three-migration MariaDB deployment and idempotent seed on staging;
-- live MariaDB constraints and Phase 2.1 CRUD/import approval;
-- Redis readiness, persistent worker, and registered scheduler;
-- the deployed UI/API, role matrix, security checks, and renewal/outbox idempotency.
-
-The staging gate remains BLOCKED, not failed.
+Live at `crm.nusrv.com` (Plesk 18.0.80, Node.js 22.23.2, MariaDB 11.4.7, Redis 7.4.11). The owner
+deploys manually after reviewing each GitHub change; Claude Code sessions do not have Plesk/SSH/
+database access and do not deploy. Every session's own local verification (typecheck, lint, tests,
+production builds) is therefore against the code only, never against the live database — MariaDB
+constraints, Redis/worker behavior, and a real import approval have only ever been exercised by the
+owner directly on `crm.nusrv.com`, not reproduced in a session. Treat any session's "verified"
+claim as scoped to that.
 
 ## Required owner/operator actions
 
-1. After deploying the explicit-date importer patch, re-upload
-   `dont_push_to_git/Project20report20Filled_With_Start_End_Dates.xlsx`. The identical existing
-   batch is reused and untouched rows receive the validated dates. Confirm the prefilled dates and
-   complete every ambiguous/custom package decision in the structured review UI.
-2. Provide authorized Plesk/SSH access (or have the server administrator execute the runbook),
-   a dedicated staging MariaDB database/user, and private authenticated Redis access.
-3. Run the live MariaDB suite, migrations/seed, Phase 2 renewal regression, RBAC/security smoke
-   tests, and worker/scheduler verification on staging.
+1. Deploy the Phase 2.2 release (see `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md` for the exact
+   steps) and upload `CRM_Canonical_Import_v4_Approved_Phone_Corrections_2026-09-06.xlsx` through
+   Legacy Import.
+2. Add `USD`, `SAR`, and `EUR` in Currencies / Rates with real rates before approving any row
+   priced in them.
+3. Approve the rows that land at `READY_FOR_APPROVAL` directly; work through the remainder's
+   package-classification decisions (the same 129-row backlog Phase 2.1 already identified).
 
 ## Integration status
 
-- MariaDB: Phase 2.1 schema/migration and guarded tests prepared; staging execution blocked
-- Redis/BullMQ: approved Phase 2 scheduler/worker preserved; real staging runtime blocked
+- MariaDB: Phase 0–2.2 schema/migrations and guarded tests prepared; live and in use on
+  `crm.nusrv.com`, not independently re-verified from inside a session
+- Redis/BullMQ: approved Phase 2 scheduler/worker preserved; live runtime not independently
+  re-verified from inside a session
 - Communication outbox: durable queue records only; no delivery transport
 - Technical Connections: secure configuration/mapping only; no external provider calls
 - Phase 3 integrations: LOCKED and not started
 
 ## Next allowed work
 
-Only Phase 2.1 human data resolution and the Phase 02/2.1 staging runtime gate are allowed. Phase 3
-remains locked until Phase 2.1 is fully completed, verified, and explicitly authorized by the owner.
+Only Phase 2.1/2.2 human data resolution and their staging/production deployment are allowed.
+Phase 3 remains locked until Phase 2.1/2.2 are fully completed, verified, and explicitly authorized
+by the owner.

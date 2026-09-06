@@ -349,3 +349,31 @@ change, no migration.
 
 Immediate unblock for the owner (no deploy required): add the needed currency (likely `USD` or
 `SAR`) in Currencies / Rates with a real rate, then re-open the stuck row and click Approve again.
+
+## Update — 2026-09-06 Phase 2.2: canonical data & migration finalization
+
+Full detail in `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md` and the matching `PROJECT_STATUS.md`
+section — this entry is a pointer, not a duplicate. The owner completed an external data-cleaning
+pass over the 214-row legacy workbook and handed back an approved, pre-reviewed, multi-sheet
+relational export (`CRM_Canonical_Import_v4_Approved_Phone_Corrections_2026-09-06.xlsx`). This
+phase built what the application needed to safely consume that format: additive schema (customer/
+subscription source ordering, phone/email contact linkage and decomposition, `currentTermEndDate`,
+`paidLabel`), a standalone rule-based phone normalizer covering every documented pattern and all
+five manually approved corrections (Sami Kashkol, the `079821889` removal, Khalil Hdaib, the
+doubled-6 landline typo, Dr. Eyad Shahrouri), a new canonical-workbook importer reusing the
+existing review/approve pipeline with idempotent customer resolution across a customer's multiple
+subscription rows, and legacy-import UI fixes (currency dropdown, searchable customer selector,
+read-only multi-channel display).
+
+Also fixed during this pass: the first draft of the canonical importer fed the reused package-
+classification engine a synthetic row with no date/interval fields, which made it falsely flag
+every single row as missing dates and needing interval confirmation regardless of real data
+quality — caught by a structural dry run against the real approved workbook (no live database
+available in this environment), fixed, and locked in with a regression test.
+
+Verified: typecheck, lint, both production builds, and 161 tests / 42 suites pass. The dry run
+reproduced the workbook's own counts exactly (124 customers, 214 subscriptions, 374 phones, 205
+emails, 275 identifiers) and the historical classification baseline exactly (85 `MATCHED_OFFICIAL`
+/ 72 `CUSTOM` / 57 `MANUAL_REVIEW`) — meaning 85 rows land at `READY_FOR_APPROVAL` on upload and
+129 need the same package-classification decisions Phase 2.1 already identified. Not yet run
+against a live database, and not yet deployed.

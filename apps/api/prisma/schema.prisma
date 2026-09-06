@@ -174,6 +174,19 @@ enum SubscriptionIdentifierType {
   OTHER
 }
 
+enum PhoneType {
+  MOBILE
+  LANDLINE
+  FAX
+  PHONE
+}
+
+enum ChannelVerificationStatus {
+  UNVERIFIED
+  VERIFIED
+  INVALID
+}
+
 model BillingEntity {
   id                     String            @id @default(uuid()) @db.VarChar(36)
   name                   String
@@ -195,51 +208,55 @@ model BillingEntity {
 }
 
 model Customer {
-  id                    String                @id @default(uuid()) @db.VarChar(36)
-  billingEntityId       String                @map("billing_entity_id") @db.VarChar(36)
-  customerCode          String                @unique @map("customer_code")
-  companyName           String                @map("company_name")
-  contactName           String?               @map("contact_name")
-  primaryEmail          String                @map("primary_email")
-  secondaryEmail        String?               @map("secondary_email")
+  id                    String                 @id @default(uuid()) @db.VarChar(36)
+  billingEntityId       String                 @map("billing_entity_id") @db.VarChar(36)
+  customerCode          String                 @unique @map("customer_code")
+  companyName           String                 @map("company_name")
+  contactName           String?                @map("contact_name")
+  primaryEmail          String                 @map("primary_email")
+  secondaryEmail        String?                @map("secondary_email")
   phone                 String?
   address               String?
   country               String?
-  taxNumber             String?               @map("tax_number")
-  preferredLanguage     String                @default("en") @map("preferred_language")
-  status                CustomerStatus        @default(ACTIVE)
-  sourceLegacyReference String?               @map("source_legacy_reference")
-  notes                 String?               @db.Text
-  createdAt             DateTime              @default(now()) @map("created_at")
-  updatedAt             DateTime              @updatedAt @map("updated_at")
-  billingEntity         BillingEntity         @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
+  taxNumber             String?                @map("tax_number")
+  preferredLanguage     String                 @default("en") @map("preferred_language")
+  status                CustomerStatus         @default(ACTIVE)
+  sourceLegacyReference String?                @map("source_legacy_reference")
+  sourceSequence        Int?                   @map("source_sequence")
+  notes                 String?                @db.Text
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
+  billingEntity         BillingEntity          @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
   subscriptions         Subscription[]
   contacts              CustomerContact[]
   emailAddresses        CustomerEmailAddress[]
   phoneNumbers          CustomerPhoneNumber[]
   communicationOutbox   CommunicationOutbox[]
-  legacyCandidateRows   LegacyImportRow[]     @relation("LegacyCandidateCustomer")
-  legacyApprovedRows    LegacyImportRow[]     @relation("LegacyApprovedCustomer")
+  legacyCandidateRows   LegacyImportRow[]      @relation("LegacyCandidateCustomer")
+  legacyApprovedRows    LegacyImportRow[]      @relation("LegacyApprovedCustomer")
 
   @@index([billingEntityId])
   @@index([companyName])
   @@index([primaryEmail])
+  @@index([sourceSequence])
   @@map("customers")
 }
 
 model CustomerContact {
-  id                    String              @id @default(uuid()) @db.VarChar(36)
-  customerId            String              @map("customer_id") @db.VarChar(36)
-  role                  CustomerContactRole @default(OTHER)
-  name                  String?             @db.VarChar(191)
-  email                 String?             @db.VarChar(320)
-  phone                 String?             @db.VarChar(80)
-  primary               Boolean             @default(false)
-  active                Boolean             @default(true)
-  sourceLegacyReference String?             @map("source_legacy_reference") @db.VarChar(500)
-  createdAt             DateTime            @default(now()) @map("created_at")
-  updatedAt             DateTime            @updatedAt @map("updated_at")
-  customer              Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  id                    String                 @id @default(uuid()) @db.VarChar(36)
+  customerId            String                 @map("customer_id") @db.VarChar(36)
+  role                  CustomerContactRole    @default(OTHER)
+  name                  String?                @db.VarChar(191)
+  email                 String?                @db.VarChar(320)
+  phone                 String?                @db.VarChar(80)
+  primary               Boolean                @default(false)
+  active                Boolean                @default(true)
+  sourceLegacyReference String?                @map("source_legacy_reference") @db.VarChar(500)
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
+  customer              Customer               @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  emailAddresses        CustomerEmailAddress[]
+  phoneNumbers          CustomerPhoneNumber[]
 
   @@index([customerId, active])
   @@index([email])
@@ -247,42 +264,59 @@ model CustomerContact {
 }
 
 model CustomerEmailAddress {
-  id                    String              @id @default(uuid()) @db.VarChar(36)
-  customerId            String              @map("customer_id") @db.VarChar(36)
-  email                 String              @db.VarChar(320)
-  holderName            String?             @map("holder_name") @db.VarChar(191)
-  role                  CustomerContactRole @default(OTHER)
-  label                 String?             @db.VarChar(100)
-  primary               Boolean             @default(false)
-  active                Boolean             @default(true)
-  sourceLegacyReference String?             @map("source_legacy_reference") @db.VarChar(500)
-  createdAt             DateTime            @default(now()) @map("created_at")
-  updatedAt             DateTime            @updatedAt @map("updated_at")
-  customer              Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  id                    String                    @id @default(uuid()) @db.VarChar(36)
+  customerId            String                    @map("customer_id") @db.VarChar(36)
+  contactId             String?                   @map("contact_id") @db.VarChar(36)
+  email                 String                    @db.VarChar(320)
+  holderName            String?                   @map("holder_name") @db.VarChar(191)
+  role                  CustomerContactRole       @default(OTHER)
+  label                 String?                   @db.VarChar(100)
+  primary               Boolean                   @default(false)
+  active                Boolean                   @default(true)
+  verificationStatus    ChannelVerificationStatus @default(UNVERIFIED) @map("verification_status")
+  verifiedAt            DateTime?                 @map("verified_at")
+  sourceLegacyReference String?                   @map("source_legacy_reference") @db.VarChar(500)
+  createdAt             DateTime                  @default(now()) @map("created_at")
+  updatedAt             DateTime                  @updatedAt @map("updated_at")
+  customer              Customer                  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contact               CustomerContact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
   @@unique([customerId, email], map: "customer_email_addresses_customer_email_key")
   @@index([customerId, active])
+  @@index([contactId])
   @@index([email])
   @@map("customer_email_addresses")
 }
 
 model CustomerPhoneNumber {
-  id                    String              @id @default(uuid()) @db.VarChar(36)
-  customerId            String              @map("customer_id") @db.VarChar(36)
-  phoneNumber           String              @map("phone_number") @db.VarChar(16)
-  countryCallingCode    String              @map("country_calling_code") @db.VarChar(5)
-  holderName            String?             @map("holder_name") @db.VarChar(191)
-  role                  CustomerContactRole @default(OTHER)
-  label                 String?             @db.VarChar(100)
-  primary               Boolean             @default(false)
-  active                Boolean             @default(true)
-  sourceLegacyReference String?             @map("source_legacy_reference") @db.VarChar(500)
-  createdAt             DateTime            @default(now()) @map("created_at")
-  updatedAt             DateTime            @updatedAt @map("updated_at")
-  customer              Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  id                    String                    @id @default(uuid()) @db.VarChar(36)
+  customerId            String                    @map("customer_id") @db.VarChar(36)
+  contactId             String?                   @map("contact_id") @db.VarChar(36)
+  phoneNumber           String                    @map("phone_number") @db.VarChar(20)
+  countryCallingCode    String                    @map("country_calling_code") @db.VarChar(5)
+  phoneType             PhoneType                 @default(PHONE) @map("phone_type")
+  rawValue              String?                   @map("raw_value") @db.VarChar(100)
+  country               String?                   @db.VarChar(100)
+  areaOrOperatorCode    String?                   @map("area_or_operator_code") @db.VarChar(20)
+  subscriberNumber      String?                   @map("subscriber_number") @db.VarChar(40)
+  extension             String?                   @db.VarChar(20)
+  holderName            String?                   @map("holder_name") @db.VarChar(191)
+  role                  CustomerContactRole       @default(OTHER)
+  label                 String?                   @db.VarChar(100)
+  primary               Boolean                   @default(false)
+  active                Boolean                   @default(true)
+  verificationStatus    ChannelVerificationStatus @default(UNVERIFIED) @map("verification_status")
+  verifiedAt            DateTime?                 @map("verified_at")
+  metadata              Json?
+  sourceLegacyReference String?                   @map("source_legacy_reference") @db.VarChar(500)
+  createdAt             DateTime                  @default(now()) @map("created_at")
+  updatedAt             DateTime                  @updatedAt @map("updated_at")
+  customer              Customer                  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contact               CustomerContact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
   @@unique([customerId, phoneNumber], map: "customer_phone_numbers_customer_phone_key")
   @@index([customerId, active])
+  @@index([contactId])
   @@index([phoneNumber])
   @@map("customer_phone_numbers")
 }
@@ -363,6 +397,7 @@ model Subscription {
   description                   String?
   startDate                     DateTime                      @map("start_date") @db.Date
   renewalDate                   DateTime                      @map("renewal_date") @db.Date
+  currentTermEndDate            DateTime?                     @map("current_term_end_date") @db.Date
   billingFrequency              BillingFrequency              @map("billing_frequency")
   renewalIntervalMonths         Int?                          @map("renewal_interval_months")
   contractTermMonths            Int?                          @map("contract_term_months")
@@ -376,7 +411,9 @@ model Subscription {
   status                        SubscriptionStatus            @default(ACTIVE)
   graceHours                    Int                           @default(24) @map("grace_hours")
   sourceLegacyReference         String?                       @map("source_legacy_reference")
+  sourceSequence                Int?                          @map("source_sequence")
   sourceRegistration            String?                       @map("source_registration") @db.VarChar(191)
+  paidLabel                     String?                       @map("paid_label") @db.VarChar(50)
   packageNameSnapshot           String?                       @map("package_name_snapshot") @db.VarChar(191)
   packageSpecificationsSnapshot Json?                         @map("package_specifications_snapshot")
   customPackage                 Boolean                       @default(false) @map("custom_package")
@@ -400,6 +437,7 @@ model Subscription {
   @@index([serviceTypeId])
   @@index([servicePackageId])
   @@index([renewalDate, status])
+  @@index([sourceSequence])
   @@map("subscriptions")
 }
 

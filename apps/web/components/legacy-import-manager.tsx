@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
 import { useControlPanel } from './app-shell';
+import type { CurrencyOption } from './currencies-manager';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -57,7 +58,21 @@ interface CustomerDraft {
   preferredLanguage?: string;
   billingEntityId?: string;
   notes?: string;
-  contacts?: Array<Record<string, unknown>>;
+  contacts?: Array<{ ref?: string; role?: string; name?: string }>;
+  // Canonical multi-channel import data. Not individually edited in this form yet, but must
+  // survive being carried through the review form unchanged, or approval would silently lose
+  // every phone/email beyond the first two scalar fields.
+  emailChannels?: Array<{ email: string; role?: string; holderName?: string; primary?: boolean }>;
+  phoneChannels?: Array<{
+    phoneNumber: string;
+    countryCallingCode?: string;
+    phoneType?: string;
+    country?: string;
+    holderName?: string;
+    primary?: boolean;
+  }>;
+  sourceSequence?: number;
+  sourceLegacyReference?: string;
 }
 interface SubscriptionDraft {
   serviceTypeId?: string;
@@ -138,6 +153,8 @@ export function LegacyImportManager() {
   const [packages, setPackages] = useState<PackageOption[]>([]);
   const [entities, setEntities] = useState<BillingEntity[]>([]);
   const [customers, setCustomers] = useState<CustomerOption[]>([]);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [status, setStatus] = useState('REQUIRES_MANUAL_REVIEW');
@@ -167,11 +184,26 @@ export function LegacyImportManager() {
       apiRequest<ServiceType[]>('/service-types').then(setTypes),
       apiRequest<PackageOption[]>('/service-packages?active=true').then(setPackages),
       apiRequest<BillingEntity[]>('/billing-entities').then(setEntities),
-      apiRequest<PageResult<CustomerOption>>('/customers?pageSize=100').then((value) =>
+      apiRequest<PageResult<CustomerOption>>('/customers?pageSize=500').then((value) =>
         setCustomers(value.data),
       ),
+      apiRequest<CurrencyOption[]>('/currencies?active=true').then(setCurrencies),
     ]).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'));
   }, [loadBatches]);
+
+  // Debounced server-side search for the "existing customer" selector, since the customer count
+  // can exceed the initial 500-row page (e.g. after a large canonical import).
+  useEffect(() => {
+    if (resolution !== 'ATTACH_EXISTING') return;
+    const handle = setTimeout(() => {
+      const params = new URLSearchParams({ pageSize: '50' });
+      if (customerSearch.trim()) params.set('search', customerSearch.trim());
+      void apiRequest<PageResult<CustomerOption>>(`/customers?${params.toString()}`).then((value) =>
+        setCustomers(value.data),
+      );
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [customerSearch, resolution]);
 
   function inspect(row: ImportRow) {
     setEditing(row);
@@ -524,6 +556,15 @@ export function LegacyImportManager() {
                       </select>
                     </label>
                     {resolution === 'ATTACH_EXISTING' ? (
+                      <>
+                      <label className="field">
+                        <span>Search existing customers</span>
+                        <input
+                          onChange={(event) => setCustomerSearch(event.target.value)}
+                          placeholder="Company name, code, or email…"
+                          value={customerSearch}
+                        />
+                      </label>
                       <label className="field">
                         <span>Existing customer</span>
                         <select
@@ -539,6 +580,7 @@ export function LegacyImportManager() {
                           ))}
                         </select>
                       </label>
+                      </>
                     ) : (
                       <>
                         <Text
@@ -570,6 +612,36 @@ export function LegacyImportManager() {
                           value={customer.phone}
                           onChange={(value) => setCustomer({ ...customer, phone: value })}
                         />
+                        {(!!customer.emailChannels?.length || !!customer.phoneChannels?.length) && (
+                          <div className="field-wide notice">
+                            <strong>
+                              Canonical contact channels ({customer.emailChannels?.length ?? 0} email
+                              {(customer.emailChannels?.length ?? 0) === 1 ? '' : 's'},{' '}
+                              {customer.phoneChannels?.length ?? 0} phone
+                              {(customer.phoneChannels?.length ?? 0) === 1 ? '' : 's'})
+                            </strong>
+                            <p className="muted mt-1 text-sm">
+                              Carried through unchanged on approval; edit individual channels from
+                              the customer&apos;s contact-methods panel afterward if needed.
+                            </p>
+                            <ul className="mt-2 list-disc pl-5 text-sm">
+                              {customer.emailChannels?.map((email, index) => (
+                                <li key={`email-${String(index)}`}>
+                                  {email.email}
+                                  {email.primary ? ' · Primary' : ''}
+                                  {email.holderName ? ` · ${email.holderName}` : ''}
+                                </li>
+                              ))}
+                              {customer.phoneChannels?.map((phone, index) => (
+                                <li key={`phone-${String(index)}`}>
+                                  {phone.phoneNumber} · {phone.phoneType ?? 'PHONE'}
+                                  {phone.primary ? ' · Primary' : ''}
+                                  {phone.holderName ? ` · ${phone.holderName}` : ''}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                         <Text
                           label="Address"
                           value={customer.address}
@@ -719,14 +791,30 @@ export function LegacyImportManager() {
                         value={subscription.sellingPrice}
                         onChange={(value) => patchSubscription(index, { sellingPrice: value })}
                       />
-                      <Text
-                        label="Currency"
-                        required
-                        value={subscription.currency}
-                        onChange={(value) =>
-                          patchSubscription(index, { currency: value.toUpperCase() })
-                        }
-                      />
+                      <label className="field">
+                        <span>Currency</span>
+                        <select
+                          onChange={(event) =>
+                            patchSubscription(index, { currency: event.target.value })
+                          }
+                          required
+                          value={subscription.currency ?? ''}
+                        >
+                          <option value="">Select…</option>
+                          {subscription.currency &&
+                            !currencies.some((currency) => currency.code === subscription.currency) && (
+                              <option value={subscription.currency}>
+                                {subscription.currency} (not yet active — add a rate in
+                                Currencies/Rates)
+                              </option>
+                            )}
+                          {currencies.map((currency) => (
+                            <option key={currency.code} value={currency.code}>
+                              {currency.code} — {currency.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                       <Text
                         label="Negotiated price reason"
                         value={subscription.priceOverrideReason}

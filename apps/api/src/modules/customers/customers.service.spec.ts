@@ -11,7 +11,15 @@ describe('CustomersService', () => {
       billingEntityId: 'entity-id',
       status: CustomerStatus.ACTIVE,
     };
-    const tx = { customer: { create: jest.fn(() => Promise.resolve(customer)) } };
+    const create = jest.fn<(input: { data: Record<string, unknown> }) => Promise<typeof customer>>(
+      () => Promise.resolve(customer),
+    );
+    const tx = {
+      customer: {
+        create,
+        aggregate: jest.fn(() => Promise.resolve({ _max: { sourceSequence: 4 } })),
+      },
+    };
     const prisma = {
       billingEntity: { findUnique: jest.fn(() => Promise.resolve({ active: true })) },
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
@@ -32,10 +40,27 @@ describe('CustomersService', () => {
     );
 
     expect(result).toBe(customer);
-    expect(tx.customer.create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0]?.[0].data).toMatchObject({ sourceSequence: 5 });
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ eventKey: 'customer.created', subjectId: 'customer-id' }),
       tx,
+    );
+  });
+
+  it('lists customers in source-appearance order by default, not alphabetically', async () => {
+    const findMany = jest.fn(() => Promise.resolve([]));
+    const prisma = {
+      customer: { findMany, count: jest.fn(() => Promise.resolve(0)) },
+    };
+    const service = new CustomersService(prisma as never, {} as never);
+
+    await service.list({ page: 1, pageSize: 20 });
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: [{ sourceSequence: 'asc' }, { createdAt: 'asc' }, { customerCode: 'asc' }],
+      }),
     );
   });
 });
