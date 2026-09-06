@@ -1,6 +1,6 @@
 import { jest } from '@jest/globals';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { CustomerContactRole } from '../../generated/prisma/enums';
+import { CustomerContactRole, PhoneType } from '../../generated/prisma/enums';
 import { CustomerChannelsService } from './customer-channels.service';
 
 describe('CustomerChannelsService', () => {
@@ -80,6 +80,7 @@ describe('CustomerChannelsService', () => {
           phoneNumber: '+15551234567',
           countryCallingCode: '+962',
           role: CustomerContactRole.OTHER,
+          phoneType: PhoneType.PHONE,
           primary: false,
         },
         { actorId: 'actor-id' },

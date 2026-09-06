@@ -11,7 +11,7 @@ import {
   ValidateIf,
   MaxLength,
 } from 'class-validator';
-import { CustomerContactRole, CustomerStatus } from '../../generated/prisma/enums';
+import { CustomerContactRole, CustomerStatus, PhoneType } from '../../generated/prisma/enums';
 import { PageQueryDto } from '../../common/page-query.dto';
 
 const E164_PHONE = /^\+[1-9]\d{7,14}$/;
@@ -51,6 +51,7 @@ export class CreateCustomerPhoneNumberDto {
 
   @IsOptional() @IsString() @MaxLength(191) holderName?: string;
   @IsEnum(CustomerContactRole) role!: CustomerContactRole;
+  @IsOptional() @IsEnum(PhoneType) phoneType: PhoneType = PhoneType.PHONE;
   @IsOptional() @IsString() @MaxLength(100) label?: string;
   @IsOptional() @IsBoolean() primary = false;
 }
@@ -66,6 +67,7 @@ export class UpdateCustomerPhoneNumberDto {
   countryCallingCode?: string;
   @IsOptional() @IsString() @MaxLength(191) holderName?: string;
   @IsOptional() @IsEnum(CustomerContactRole) role?: CustomerContactRole;
+  @IsOptional() @IsEnum(PhoneType) phoneType?: PhoneType;
   @IsOptional() @IsString() @MaxLength(100) label?: string;
   @IsOptional() @IsBoolean() primary?: boolean;
   @IsOptional() @IsBoolean() active?: boolean;

@@ -79,6 +79,7 @@ export function CustomersManager() {
   const [detail, setDetail] = useState<Customer | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     const params = new URLSearchParams({ page: String(page), pageSize: '20' });
@@ -197,6 +198,60 @@ export function CustomersManager() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Delete failed.');
     }
+  }
+
+  function toggleSelected(id: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllOnPage() {
+    const pageIds = customers?.data.map((customer) => customer.id) ?? [];
+    const allSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+    setSelected((current) => {
+      const next = new Set(current);
+      if (allSelected) {
+        for (const id of pageIds) next.delete(id);
+      } else {
+        for (const id of pageIds) next.add(id);
+      }
+      return next;
+    });
+  }
+
+  async function deleteSelected() {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (
+      !window.confirm(
+        `Permanently delete ${String(ids.length)} selected customer(s) and all their subscriptions? This cannot be undone.`,
+      )
+    )
+      return;
+    setError('');
+    setSuccess('');
+    let deleted = 0;
+    const failures: string[] = [];
+    for (const id of ids) {
+      const customer = customers?.data.find((entry) => entry.id === id);
+      try {
+        await apiRequest(`/customers/${id}`, { method: 'DELETE' });
+        deleted += 1;
+      } catch (cause) {
+        failures.push(
+          `${customer?.companyName ?? id}: ${cause instanceof Error ? cause.message : 'delete failed'}`,
+        );
+      }
+    }
+    setSelected(new Set());
+    if (deleted) setSuccess(`Deleted ${String(deleted)} customer(s).`);
+    if (failures.length)
+      setError(`Could not delete ${String(failures.length)}: ${failures.join('; ')}`);
+    await load();
   }
 
   const defaults = editing
@@ -340,11 +395,33 @@ export function CustomersManager() {
             <option value="ACTIVE">Active</option>
             <option value="INACTIVE">Inactive</option>
           </select>
+          {can('ADMIN') && selected.size > 0 && (
+            <button
+              className="button-small danger"
+              onClick={() => void deleteSelected()}
+              type="button"
+            >
+              Delete {selected.size} selected
+            </button>
+          )}
         </div>
         <div className="table-wrap mt-4">
           <table>
             <thead>
               <tr>
+                {can('ADMIN') && (
+                  <th>
+                    <input
+                      aria-label="Select all customers on this page"
+                      checked={
+                        (customers?.data.length ?? 0) > 0 &&
+                        (customers?.data.every((customer) => selected.has(customer.id)) ?? false)
+                      }
+                      onChange={() => toggleSelectAllOnPage()}
+                      type="checkbox"
+                    />
+                  </th>
+                )}
                 <th>Code</th>
                 <th>Company</th>
                 <th>Email / phone</th>
@@ -357,6 +434,16 @@ export function CustomersManager() {
             <tbody>
               {customers?.data.map((customer) => (
                 <tr key={customer.id}>
+                  {can('ADMIN') && (
+                    <td>
+                      <input
+                        aria-label={`Select ${customer.companyName}`}
+                        checked={selected.has(customer.id)}
+                        onChange={() => toggleSelected(customer.id)}
+                        type="checkbox"
+                      />
+                    </td>
+                  )}
                   <td>{customer.customerCode}</td>
                   <td>
                     <button
