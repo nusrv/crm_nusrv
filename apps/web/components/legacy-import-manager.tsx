@@ -158,33 +158,7 @@ export function LegacyImportManager() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [status, setStatus] = useState('REQUIRES_MANUAL_REVIEW');
-  const [batchListCollapsed, setBatchListCollapsed] = useState(false);
   const [pendingBatchId, setPendingBatchId] = useState('');
-
-  useEffect(() => {
-    // Reading localStorage during the initial render (instead of here) would return a
-    // different value on the server than the client and break hydration, so this must
-    // stay in an effect despite the synchronous setState.
-    try {
-      setBatchListCollapsed(
-        window.localStorage.getItem('cp.legacyImportBatchListCollapsed') === 'true',
-      );
-    } catch {
-      // Ignore storage access failures (private browsing, disabled storage, etc).
-    }
-  }, []);
-
-  function toggleBatchList() {
-    setBatchListCollapsed((current) => {
-      const next = !current;
-      try {
-        window.localStorage.setItem('cp.legacyImportBatchListCollapsed', String(next));
-      } catch {
-        // Ignore storage write failures; the toggle still works for this page view.
-      }
-      return next;
-    });
-  }
 
   const loadBatches = useCallback(async () => {
     const result = await apiRequest<PageResult<Batch>>('/legacy-import/batches?pageSize=50');
@@ -389,81 +363,28 @@ export function LegacyImportManager() {
           </button>
         </form>
       )}
-      <section
-        className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]"
-        style={{ gridTemplateColumns: batchListCollapsed ? '1fr' : undefined }}
-      >
-        {!batchListCollapsed && (
-          <div className="panel relative min-w-0">
-            <h3 className="font-semibold">Import batches</h3>
-            <div className="mt-4 space-y-3">
-              {batches.map((batch) => (
-                <button
-                  className={`batch-card ${selectedBatch?.id === batch.id ? 'batch-card-active' : ''}`}
-                  key={batch.id}
-                  onClick={() => void openBatch(batch)}
-                  type="button"
-                >
-                  <strong>{batch.sourceFileName}</strong>
-                  <span>
-                    {batch.status} · {batch.totalRows} rows
-                  </span>
-                  <span>{new Date(batch.createdAt).toLocaleString()}</span>
-                </button>
-              ))}
-            </div>
+      <section className="panel mb-6 min-w-0">
+        <h3 className="font-semibold">Import batches</h3>
+        <div className="mt-4 flex flex-wrap gap-3">
+          {batches.map((batch) => (
             <button
-              aria-label="Hide batch list for a wider view"
-              className="hidden xl:flex"
-              onClick={toggleBatchList}
-              style={{
-                position: 'absolute',
-                top: '1.25rem',
-                right: '-14px',
-                width: 28,
-                height: 28,
-                borderRadius: 999,
-                border: '1px solid var(--line)',
-                background: 'white',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                zIndex: 10,
-              }}
-              title="Hide batch list for a wider view"
+              className={`batch-card ${selectedBatch?.id === batch.id ? 'batch-card-active' : ''}`}
+              key={batch.id}
+              onClick={() => void openBatch(batch)}
               type="button"
             >
-              ‹
+              <strong>{batch.sourceFileName}</strong>
+              <span>
+                {batch.status} · {batch.totalRows} rows
+              </span>
+              <span>{new Date(batch.createdAt).toLocaleString()}</span>
             </button>
-          </div>
-        )}
-        {batchListCollapsed && (
-          <button
-            aria-label="Show batch list"
-            className="hidden xl:flex"
-            onClick={toggleBatchList}
-            style={{
-              position: 'fixed',
-              top: '1.25rem',
-              left: 10,
-              width: 28,
-              height: 28,
-              borderRadius: 999,
-              border: '1px solid var(--line)',
-              background: 'white',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              zIndex: 10,
-            }}
-            title="Show batch list"
-            type="button"
-          >
-            ›
-          </button>
-        )}
-        <div className="min-w-0">
-          {selectedBatch ? (
+          ))}
+          {!batches.length && <p className="muted text-sm">No workbooks staged yet.</p>}
+        </div>
+      </section>
+      <div className="min-w-0">
+        {selectedBatch ? (
             <>
               <section className="panel">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -586,8 +507,7 @@ export function LegacyImportManager() {
               <p className="muted text-sm">Select an import batch.</p>
             </section>
           )}
-        </div>
-      </section>
+      </div>
       {editing && (
         <div
           style={{ position: 'fixed', inset: 0, zIndex: 50, overflowY: 'auto', background: 'rgba(0,0,0,0.6)' }}
