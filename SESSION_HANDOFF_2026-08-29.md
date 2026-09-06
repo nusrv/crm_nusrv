@@ -522,3 +522,24 @@ with no natural break points. The parent chain (`section.panel` → `div.flex.fl
 
 No schema/migration change; `npm run build` plus a restart is sufficient. Reviewed by static code
 inspection only (same drive-mounted-workspace constraint); not yet deployed or tested by the owner.
+
+## Update — 2026-09-06 cropped sidebar collapse toggle button
+
+The owner reported the circular sidebar collapse toggle was partially cropped, overlapping the
+sidebar's own scrollbar/overflow area. Root cause, found in `app-shell.tsx`: the button was a
+child of `<aside>`, and `<aside>` itself carried `lg:overflow-y-auto` for its scrollable nav
+content. Per the CSS overflow spec, setting `overflow-y` to anything other than `visible` computes
+`overflow-x` to `auto` too (when it would otherwise be `visible`) — so the aside was clipping in
+both axes, cropping the button, which was absolutely positioned half outside the aside's right edge
+(`right: -14px`) to sit on the border.
+
+Fixed by moving `overflow-y-auto` off `<aside>` onto a new inner wrapper `<div>` that now holds only
+the scrollable nav content; `<aside>` stays `relative` with no overflow set, so the button (still a
+direct child of `<aside>`, not inside the scrollable wrapper) can render outside its bounds without
+being clipped. Also bumped both the collapse and expand buttons from 28px to 32px with the offset
+adjusted to `-16px` (exactly half the button width sits outside the edge), added a subtle box
+shadow, and raised `zIndex` from 10 to 50, matching the owner's requested visual spec. No change to
+page widths, the dashboard grid, or sidebar scroll behavior otherwise. Commit `d106e33`.
+
+No schema/migration change; `npm run build` plus a restart is sufficient. Reviewed by static code
+inspection only (same drive-mounted-workspace constraint); not yet deployed or tested by the owner.

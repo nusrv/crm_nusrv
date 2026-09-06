@@ -10,9 +10,9 @@
 - Phase 2.2 Canonical Data & Migration Finalization: LIVE on `crm.nusrv.com` — see
   `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md`
 - Dashboard UI/UX overhaul (modal edit forms, dedicated customer page, collapsible sidebar,
-  Legacy Import batch-list redesign and card sizing) and a resulting collapsed-sidebar layout bug:
-  code complete, committed on `main` (`80591fb`..`94d08c3`), not yet deployed — see "Dashboard
-  UI/UX overhaul and collapsed-sidebar layout fix" below
+  Legacy Import batch-list redesign and card sizing, sidebar toggle button crop fix): code
+  complete, committed on `main` (`80591fb`..`d106e33`), not yet deployed — see "Dashboard UI/UX
+  overhaul and collapsed-sidebar layout fix" below
 - Deployment model: the owner deploys to `crm.nusrv.com` manually after reviewing each GitHub
   change; Claude Code has no direct Plesk/SSH/database access and does not deploy
 - Phase 3: LOCKED
@@ -248,11 +248,21 @@ card sizes to its own filename's natural width and only wraps once it genuinely 
 container's edge, plus `overflow-wrap: anywhere` on the filename as a fallback for names with no
 natural break points. Commit `94d08c3`.
 
+The sidebar collapse toggle button itself then turned out to be visually cropped: it was a child of
+`<aside>`, and `<aside>` carried `lg:overflow-y-auto` for its scrollable nav content. Setting
+`overflow-y` to anything other than `visible` computes `overflow-x` to `auto` too, so the aside was
+clipping in both axes, cropping the button positioned half outside its right edge. Fixed by moving
+`overflow-y-auto` onto a new inner wrapper `<div>` holding only the scrollable nav content, leaving
+`<aside>` as `relative` with no overflow so the button (still a direct child of `<aside>`) can
+render outside its bounds. Also bumped both toggle buttons from 28px to 32px (offset adjusted to
+exactly half the button width), added a box shadow, and raised their `zIndex` to 50. Commit
+`d106e33`.
+
 No schema or migration changes in any of this work — deployment is `npm run build` plus restarting
 the API/web/worker processes. Per the owner's explicit instruction during the layout-bug
 investigation, this work was reviewed and fixed by static code inspection only; no local
-typecheck/lint/test/build was run for the four most recent commits (`5270fb0`, `6869b13`,
-`b2d4761`, `94d08c3`) because the workspace lives on a cloud-synced drive that cannot run
+typecheck/lint/test/build was run for the five most recent commits (`5270fb0`, `6869b13`,
+`b2d4761`, `94d08c3`, `d106e33`) because the workspace lives on a cloud-synced drive that cannot run
 `npm install` — see the environment note under the 2026-08-31 update in
 `SESSION_HANDOFF_2026-08-29.md`. The owner has not yet deployed or tested any of this on
 `crm.nusrv.com`.
