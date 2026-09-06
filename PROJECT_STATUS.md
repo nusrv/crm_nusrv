@@ -66,8 +66,8 @@ mutated; this upstream Prisma 7 advisory must be monitored before production pro
 
 ## Subscription currency conversion and customer contact channels
 
-Implemented locally (uncommitted) in response to an owner request covering three points: original
-subscription amount/currency with an automatic JOD equivalent, verifying that adding a new
+Committed and deployed to `crm.nusrv.com`, in response to an owner request covering three points:
+original subscription amount/currency with an automatic JOD equivalent, verifying that adding a new
 service/subscription to an existing customer does not require a duplicate customer record, and
 E.164-ready multi-email/multi-phone contact channels per customer.
 
