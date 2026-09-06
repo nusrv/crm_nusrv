@@ -577,7 +577,12 @@ describe('LegacyImportService', () => {
         findMany: jest.fn(() => Promise.resolve([{ id: 'entity-id', name: 'Billing Co' }])),
       },
       serviceType: {
-        findMany: jest.fn(() => Promise.resolve([{ id: 'hosting-id', name: 'Hosting' }])),
+        findMany: jest.fn(() =>
+          Promise.resolve([
+            { id: 'hosting-id', name: 'Hosting' },
+            { id: 'domain-id', name: 'Domain' },
+          ]),
+        ),
       },
       servicePackage: { findMany: jest.fn(() => Promise.resolve([])) },
     };
@@ -620,6 +625,16 @@ describe('LegacyImportService', () => {
       expect(String(row.data.validationIssues)).not.toMatch(
         /Date column is missing or invalid|Renewal interval requires human confirmation/,
       );
+    }
+
+    // billingFrequency must be computed from the canonical sheet's own Renewal_Interval_Months
+    // (here 12 -> ANNUAL), not from the reused classifier's free-text parsing, which never sees
+    // any frequency text for a canonical row and would otherwise always leave it undefined —
+    // silently producing a row nothing in the UI could fix, since only REQUIRES_MANUAL_REVIEW
+    // rows show an editable form at all.
+    for (const row of createdRows) {
+      const subscriptions = row.data.mappedSubscriptions as Array<{ billingFrequency?: string }>;
+      expect(subscriptions[0]?.billingFrequency).toBe(BillingFrequency.ANNUAL);
     }
   });
 });

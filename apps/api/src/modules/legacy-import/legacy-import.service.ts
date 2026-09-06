@@ -30,6 +30,7 @@ import { parseCanonicalWorkbook } from './canonical-workbook.parser';
 import {
   classifyLegacyValues,
   detectCanonicalWorkbook,
+  intervalToFrequency,
   parseLegacyWorkbook,
   type LegacySuggestions,
   type ParsedLegacyRow,
@@ -472,7 +473,11 @@ export class LegacyImportService {
                 currentTermEndDate: subscriptionRow.currentTermEndDate,
                 paidLabel: subscriptionRow.paidLabel,
                 sourceSequence: subscriptionRow.sourceSequence,
-                billingFrequency: suggestions.billingFrequency,
+                // Not suggestions.billingFrequency: the classifier only derives this from free
+                // text it's never shown here (the canonical sheet gives the interval as a plain
+                // number, see the "Renewal interval" note above), so that would always be
+                // undefined. Compute it directly from the trustworthy canonical value instead.
+                billingFrequency: intervalToFrequency(subscriptionRow.renewalIntervalMonths),
                 renewalIntervalMonths: subscriptionRow.renewalIntervalMonths,
                 contractTermMonths: subscriptionRow.renewalIntervalMonths,
                 sellingPrice: subscriptionRow.sellingPriceOriginal,

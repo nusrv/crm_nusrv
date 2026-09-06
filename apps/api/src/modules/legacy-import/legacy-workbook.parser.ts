@@ -597,7 +597,7 @@ function parseTermMonths(value?: string): number | undefined {
   return undefined;
 }
 
-function intervalToFrequency(months?: number): string | undefined {
+export function intervalToFrequency(months?: number): string | undefined {
   return months === 1
     ? 'MONTHLY'
     : months === 3
