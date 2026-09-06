@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
+import { Modal } from './modal';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -23,6 +24,7 @@ export function BillingEntitiesManager() {
   const { can } = useControlPanel();
   const [items, setItems] = useState<BillingEntity[]>([]);
   const [editing, setEditing] = useState<BillingEntity | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -54,6 +56,7 @@ export function BillingEntitiesManager() {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
+      setFormOpen(false);
       setEditing(null);
       setMessage('Billing Entity saved and audited.');
       setError('');
@@ -72,12 +75,26 @@ export function BillingEntitiesManager() {
       <Notice message={error} />
       <Notice message={message} tone="success" />
       {can('ADMIN') && (
-        <details className="panel mb-6" open={Boolean(editing)}>
-          <summary className="cursor-pointer font-semibold">
-            {editing ? `Edit ${editing.code}` : 'Create Billing Entity'}
-          </summary>
+        <div className="mb-4">
+          <button
+            className="button-primary"
+            onClick={() => {
+              setEditing(null);
+              setFormOpen(true);
+            }}
+            type="button"
+          >
+            + Create Billing Entity
+          </button>
+        </div>
+      )}
+      {formOpen && (
+        <Modal
+          onClose={() => setFormOpen(false)}
+          title={editing ? `Edit ${editing.code}` : 'Create Billing Entity'}
+        >
           <form
-            className="form-grid mt-5"
+            className="form-grid"
             key={editing?.id ?? 'new'}
             onSubmit={(event) => void save(event)}
           >
@@ -113,14 +130,12 @@ export function BillingEntitiesManager() {
               <button className="button-primary" type="submit">
                 Save
               </button>
-              {editing && (
-                <button className="button-secondary" onClick={() => setEditing(null)} type="button">
-                  Cancel
-                </button>
-              )}
+              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+                Cancel
+              </button>
             </div>
           </form>
-        </details>
+        </Modal>
       )}
       <section className="panel table-wrap">
         <table>
@@ -148,7 +163,14 @@ export function BillingEntitiesManager() {
                 <td>{item.active ? 'ACTIVE' : 'INACTIVE'}</td>
                 <td>
                   {can('ADMIN') && (
-                    <button className="button-small" onClick={() => setEditing(item)} type="button">
+                    <button
+                      className="button-small"
+                      onClick={() => {
+                        setEditing(item);
+                        setFormOpen(true);
+                      }}
+                      type="button"
+                    >
                       Edit
                     </button>
                   )}

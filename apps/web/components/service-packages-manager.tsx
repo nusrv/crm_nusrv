@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
+import { Modal } from './modal';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -35,6 +36,7 @@ export function ServicePackagesManager() {
   const [items, setItems] = useState<ServicePackage[]>([]);
   const [types, setTypes] = useState<ServiceType[]>([]);
   const [editing, setEditing] = useState<ServicePackage | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -78,6 +80,7 @@ export function ServicePackagesManager() {
           ...(editing ? { active: value('active') === 'true' } : {}),
         }),
       });
+      setFormOpen(false);
       setEditing(null);
       setMessage('Package catalog entry saved and audited.');
       setError('');
@@ -96,12 +99,27 @@ export function ServicePackagesManager() {
       <Notice message={error} />
       <Notice message={message} tone="success" />
       {can('ADMIN') && (
-        <details className="panel mb-6" open={Boolean(editing)}>
-          <summary className="cursor-pointer font-semibold">
-            {editing ? `Edit ${editing.code}` : 'Create package'}
-          </summary>
+        <div className="mb-4">
+          <button
+            className="button-primary"
+            onClick={() => {
+              setEditing(null);
+              setFormOpen(true);
+            }}
+            type="button"
+          >
+            + Create package
+          </button>
+        </div>
+      )}
+      {formOpen && (
+        <Modal
+          maxWidth="56rem"
+          onClose={() => setFormOpen(false)}
+          title={editing ? `Edit ${editing.code}` : 'Create package'}
+        >
           <form
-            className="form-grid mt-5"
+            className="form-grid"
             key={editing?.id ?? 'new'}
             onSubmit={(event) => void save(event)}
           >
@@ -169,14 +187,12 @@ export function ServicePackagesManager() {
               <button className="button-primary" type="submit">
                 Save package
               </button>
-              {editing && (
-                <button className="button-secondary" onClick={() => setEditing(null)} type="button">
-                  Cancel
-                </button>
-              )}
+              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+                Cancel
+              </button>
             </div>
           </form>
-        </details>
+        </Modal>
       )}
       <section className="panel">
         <div className="table-wrap">
@@ -220,7 +236,10 @@ export function ServicePackagesManager() {
                     {can('ADMIN') && (
                       <button
                         className="button-small"
-                        onClick={() => setEditing(item)}
+                        onClick={() => {
+                          setEditing(item);
+                          setFormOpen(true);
+                        }}
                         type="button"
                       >
                         Edit

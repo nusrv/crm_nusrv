@@ -72,11 +72,38 @@ const navigation: Array<{ href: string; label: string; roles: RoleCode[] }> = [
   { href: '/dashboard/access', label: 'Users / Roles', roles: ['ADMIN'] },
 ];
 
+const SIDEBAR_COLLAPSED_KEY = 'cp.sidebarCollapsed';
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [error, setError] = useState('');
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    // Reading localStorage during the initial render (instead of here) would return a
+    // different value on the server than the client and break hydration, so this must
+    // stay in an effect despite the synchronous setState.
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true');
+    } catch {
+      // Ignore storage access failures (private browsing, disabled storage, etc).
+    }
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+      } catch {
+        // Ignore storage write failures; the toggle still works for this page view.
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     void apiRequest<{ user: AuthenticatedUser }>('/auth/me')
@@ -109,42 +136,98 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <ControlPanelContext.Provider value={value}>
-      <div className="min-h-screen lg:grid lg:grid-cols-[270px_1fr]">
-        <aside className="border-r border-[var(--line)] bg-white p-5 lg:sticky lg:top-0 lg:h-screen">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
-            Subscription lifecycle
-          </p>
-          <h1 className="mt-2 text-xl font-semibold">Control Panel</h1>
-          <nav className="mt-8 space-y-1" aria-label="Control Panel navigation">
-            {navigation
-              .filter((item) => item.roles.some((role) => user.roles.includes(role)))
-              .map((item) => {
-                const active =
-                  pathname === item.href ||
-                  (item.href !== '/dashboard' && pathname.startsWith(item.href));
-                return (
-                  <Link
-                    className={`nav-link ${active ? 'nav-link-active' : ''}`}
-                    href={item.href}
-                    key={item.href}
-                  >
-                    {item.label}
-                  </Link>
-                );
-              })}
-          </nav>
-          <div className="mt-8 border-t border-[var(--line)] pt-5 text-sm">
-            <p className="font-medium">{user.displayName}</p>
-            <p className="mt-1 text-xs text-[var(--muted)]">{user.roles.join(', ')}</p>
-            <button
-              className="button-secondary mt-4 w-full"
-              onClick={() => void logout()}
-              type="button"
-            >
-              Sign out
-            </button>
+      <div
+        className="min-h-screen lg:grid"
+        style={{ gridTemplateColumns: collapsed ? '0px 1fr' : '270px 1fr' }}
+      >
+        <aside
+          className="relative border-r border-[var(--line)] bg-white lg:sticky lg:top-0 lg:h-screen lg:overflow-y-auto"
+          style={{ display: collapsed ? 'none' : undefined }}
+        >
+          <div className="p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
+              Subscription lifecycle
+            </p>
+            <h1 className="mt-2 text-xl font-semibold">Control Panel</h1>
+            <nav className="mt-8 space-y-1" aria-label="Control Panel navigation">
+              {navigation
+                .filter((item) => item.roles.some((role) => user.roles.includes(role)))
+                .map((item) => {
+                  const active =
+                    pathname === item.href ||
+                    (item.href !== '/dashboard' && pathname.startsWith(item.href));
+                  return (
+                    <Link
+                      className={`nav-link ${active ? 'nav-link-active' : ''}`}
+                      href={item.href}
+                      key={item.href}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+            </nav>
+            <div className="mt-8 border-t border-[var(--line)] pt-5 text-sm">
+              <p className="font-medium">{user.displayName}</p>
+              <p className="mt-1 text-xs text-[var(--muted)]">{user.roles.join(', ')}</p>
+              <button
+                className="button-secondary mt-4 w-full"
+                onClick={() => void logout()}
+                type="button"
+              >
+                Sign out
+              </button>
+            </div>
           </div>
+          <button
+            aria-label="Collapse sidebar"
+            className="hidden lg:flex"
+            onClick={toggleCollapsed}
+            style={{
+              position: 'absolute',
+              top: '1.25rem',
+              right: '-14px',
+              width: 28,
+              height: 28,
+              borderRadius: 999,
+              border: '1px solid var(--line)',
+              background: 'white',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              zIndex: 10,
+            }}
+            title="Collapse sidebar"
+            type="button"
+          >
+            ‹
+          </button>
         </aside>
+        {collapsed && (
+          <button
+            aria-label="Expand sidebar"
+            className="hidden lg:flex"
+            onClick={toggleCollapsed}
+            style={{
+              position: 'fixed',
+              top: '1.25rem',
+              left: 10,
+              width: 28,
+              height: 28,
+              borderRadius: 999,
+              border: '1px solid var(--line)',
+              background: 'white',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              zIndex: 10,
+            }}
+            title="Expand sidebar"
+            type="button"
+          >
+            ›
+          </button>
+        )}
         <main className="min-w-0 p-5 lg:p-9">{children}</main>
       </div>
     </ControlPanelContext.Provider>

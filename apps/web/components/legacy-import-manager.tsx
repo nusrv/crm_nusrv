@@ -158,6 +158,32 @@ export function LegacyImportManager() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [status, setStatus] = useState('REQUIRES_MANUAL_REVIEW');
+  const [batchListCollapsed, setBatchListCollapsed] = useState(false);
+
+  useEffect(() => {
+    // Reading localStorage during the initial render (instead of here) would return a
+    // different value on the server than the client and break hydration, so this must
+    // stay in an effect despite the synchronous setState.
+    try {
+      setBatchListCollapsed(
+        window.localStorage.getItem('cp.legacyImportBatchListCollapsed') === 'true',
+      );
+    } catch {
+      // Ignore storage access failures (private browsing, disabled storage, etc).
+    }
+  }, []);
+
+  function toggleBatchList() {
+    setBatchListCollapsed((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem('cp.legacyImportBatchListCollapsed', String(next));
+      } catch {
+        // Ignore storage write failures; the toggle still works for this page view.
+      }
+      return next;
+    });
+  }
 
   const loadBatches = useCallback(async () => {
     const result = await apiRequest<PageResult<Batch>>('/legacy-import/batches?pageSize=50');
@@ -345,8 +371,10 @@ export function LegacyImportManager() {
           </button>
         </form>
       )}
-      <section className="grid gap-6 xl:grid-cols-[360px_1fr]">
-        <div className="panel">
+      <section
+        className={`grid gap-6 ${batchListCollapsed ? 'xl:grid-cols-1' : 'xl:grid-cols-[360px_1fr]'}`}
+      >
+        <div className="panel relative" style={{ display: batchListCollapsed ? 'none' : undefined }}>
           <h3 className="font-semibold">Import batches</h3>
           <div className="mt-4 space-y-3">
             {batches.map((batch) => (
@@ -364,7 +392,55 @@ export function LegacyImportManager() {
               </button>
             ))}
           </div>
+          <button
+            aria-label="Hide batch list for a wider view"
+            className="hidden xl:flex"
+            onClick={toggleBatchList}
+            style={{
+              position: 'absolute',
+              top: '1.25rem',
+              right: '-14px',
+              width: 28,
+              height: 28,
+              borderRadius: 999,
+              border: '1px solid var(--line)',
+              background: 'white',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              zIndex: 10,
+            }}
+            title="Hide batch list for a wider view"
+            type="button"
+          >
+            ‹
+          </button>
         </div>
+        {batchListCollapsed && (
+          <button
+            aria-label="Show batch list"
+            className="hidden xl:flex"
+            onClick={toggleBatchList}
+            style={{
+              position: 'fixed',
+              top: '1.25rem',
+              left: 10,
+              width: 28,
+              height: 28,
+              borderRadius: 999,
+              border: '1px solid var(--line)',
+              background: 'white',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              zIndex: 10,
+            }}
+            title="Show batch list"
+            type="button"
+          >
+            ›
+          </button>
+        )}
         <div className="min-w-0">
           {selectedBatch ? (
             <>
@@ -421,6 +497,8 @@ export function LegacyImportManager() {
                       <tr>
                         <th>Source</th>
                         <th>Candidate</th>
+                        <th>Start → renewal</th>
+                        <th>Price</th>
                         <th>Package status</th>
                         <th>Duplicates</th>
                         <th>Status</th>
@@ -428,14 +506,31 @@ export function LegacyImportManager() {
                       </tr>
                     </thead>
                     <tbody>
-                      {rows.map((row) => (
+                      {rows.map((row) => {
+                        const primarySubscription = row.mappedSubscriptions?.[0];
+                        const extraSubscriptions = (row.mappedSubscriptions?.length ?? 0) - 1;
+                        return (
                         <tr key={row.id}>
                           <td>
                             {row.sheetName}!{row.sourceRowNumber}
                           </td>
                           <td>{row.mappedCustomer?.companyName ?? 'Unmapped'}</td>
                           <td>
-                            {row.mappedSubscriptions?.[0]?.classificationStatus ?? 'UNCLASSIFIED'}
+                            {primarySubscription?.startDate?.slice(0, 10) ?? '—'} →{' '}
+                            {primarySubscription?.renewalDate?.slice(0, 10) ?? '—'}
+                            {extraSubscriptions > 0 && (
+                              <>
+                                <br />
+                                <span className="muted text-xs">+{extraSubscriptions} more</span>
+                              </>
+                            )}
+                          </td>
+                          <td>
+                            {primarySubscription?.sellingPrice ?? '—'}{' '}
+                            {primarySubscription?.currency ?? ''}
+                          </td>
+                          <td>
+                            {primarySubscription?.classificationStatus ?? 'UNCLASSIFIED'}
                           </td>
                           <td>{row.duplicateCandidates.length}</td>
                           <td>{row.status}</td>
@@ -458,7 +553,8 @@ export function LegacyImportManager() {
                             )}
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

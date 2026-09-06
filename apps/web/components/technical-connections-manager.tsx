@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
+import { Modal } from './modal';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -27,6 +28,7 @@ export function TechnicalConnectionsManager() {
   const canManage = can('ADMIN', 'IT');
   const [items, setItems] = useState<TechnicalConnection[]>([]);
   const [editing, setEditing] = useState<TechnicalConnection | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   async function load() {
@@ -63,6 +65,7 @@ export function TechnicalConnectionsManager() {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
+      setFormOpen(false);
       setEditing(null);
       setMessage(
         'Technical Connection saved. Credentials were encrypted and the change was audited.',
@@ -83,12 +86,27 @@ export function TechnicalConnectionsManager() {
       <Notice message={error} />
       <Notice message={message} tone="success" />
       {canManage && (
-        <details className="panel mb-6" open={Boolean(editing)}>
-          <summary className="cursor-pointer font-semibold">
-            {editing ? `Edit ${editing.code}` : 'Create Technical Connection'}
-          </summary>
+        <div className="mb-4">
+          <button
+            className="button-primary"
+            onClick={() => {
+              setEditing(null);
+              setFormOpen(true);
+            }}
+            type="button"
+          >
+            + Create Technical Connection
+          </button>
+        </div>
+      )}
+      {formOpen && (
+        <Modal
+          maxWidth="48rem"
+          onClose={() => setFormOpen(false)}
+          title={editing ? `Edit ${editing.code}` : 'Create Technical Connection'}
+        >
           <form
-            className="form-grid mt-5"
+            className="form-grid"
             key={editing?.id ?? 'new'}
             onSubmit={(event) => void save(event)}
           >
@@ -163,14 +181,12 @@ export function TechnicalConnectionsManager() {
               <button className="button-primary" type="submit">
                 Save secure configuration
               </button>
-              {editing && (
-                <button className="button-secondary" onClick={() => setEditing(null)} type="button">
-                  Cancel
-                </button>
-              )}
+              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+                Cancel
+              </button>
             </div>
           </form>
-        </details>
+        </Modal>
       )}
       <section className="panel table-wrap">
         <table>
@@ -214,7 +230,14 @@ export function TechnicalConnectionsManager() {
                 </td>
                 <td>
                   {canManage && (
-                    <button className="button-small" onClick={() => setEditing(item)} type="button">
+                    <button
+                      className="button-small"
+                      onClick={() => {
+                        setEditing(item);
+                        setFormOpen(true);
+                      }}
+                      type="button"
+                    >
                       Edit
                     </button>
                   )}

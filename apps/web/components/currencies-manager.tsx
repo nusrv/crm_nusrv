@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
+import { Modal } from './modal';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -18,6 +19,7 @@ export function CurrenciesManager() {
   const { can } = useControlPanel();
   const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
   const [editing, setEditing] = useState<CurrencyOption | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const load = useCallback(async () => setCurrencies(await apiRequest('/currencies')), []);
@@ -27,6 +29,16 @@ export function CurrenciesManager() {
       setError(cause instanceof Error ? cause.message : 'Unable to load currencies.'),
     );
   }, [load]);
+
+  function openCreate() {
+    setEditing(null);
+    setFormOpen(true);
+  }
+
+  function openEdit(currency: CurrencyOption) {
+    setEditing(currency);
+    setFormOpen(true);
+  }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -45,11 +57,11 @@ export function CurrenciesManager() {
           changeReason: value('changeReason') || undefined,
         }),
       });
+      setFormOpen(false);
       setEditing(null);
       setMessage('Exchange rate saved and audited.');
       setError('');
       await load();
-      event.currentTarget.reset();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to save exchange rate.');
     }
@@ -64,11 +76,18 @@ export function CurrenciesManager() {
       <Notice message={error} />
       <Notice message={message} tone="success" />
       {can('ADMIN') && (
-        <details className="panel mb-6" open={Boolean(editing)}>
-          <summary className="cursor-pointer font-semibold">
-            {editing ? `Edit ${editing.code}` : 'Add supported currency'}
-          </summary>
-          <form className="form-grid mt-5" key={editing?.code ?? 'new'} onSubmit={save}>
+        <div className="mb-4">
+          <button className="button-primary" onClick={openCreate} type="button">
+            + Add supported currency
+          </button>
+        </div>
+      )}
+      {formOpen && (
+        <Modal
+          onClose={() => setFormOpen(false)}
+          title={editing ? `Edit ${editing.code}` : 'Add supported currency'}
+        >
+          <form className="form-grid" key={editing?.code ?? 'new'} onSubmit={save}>
             <Field
               label="ISO currency code"
               name="code"
@@ -104,14 +123,12 @@ export function CurrenciesManager() {
               <button className="button-primary" type="submit">
                 Save currency
               </button>
-              {editing && (
-                <button className="button-secondary" onClick={() => setEditing(null)} type="button">
-                  Cancel
-                </button>
-              )}
+              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+                Cancel
+              </button>
             </div>
           </form>
-        </details>
+        </Modal>
       )}
       <section className="panel table-wrap">
         <table>
@@ -143,7 +160,7 @@ export function CurrenciesManager() {
                   {can('ADMIN') && (
                     <button
                       className="button-small"
-                      onClick={() => setEditing(currency)}
+                      onClick={() => openEdit(currency)}
                       type="button"
                     >
                       Edit

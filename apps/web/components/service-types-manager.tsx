@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
+import { Modal } from './modal';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -19,6 +20,7 @@ export function ServiceTypesManager() {
   const { can } = useControlPanel();
   const [items, setItems] = useState<ServiceType[]>([]);
   const [editing, setEditing] = useState<ServiceType | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   async function load() {
@@ -44,6 +46,7 @@ export function ServiceTypesManager() {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
+      setFormOpen(false);
       setEditing(null);
       setMessage('Service Type saved and audited.');
       setError('');
@@ -61,12 +64,26 @@ export function ServiceTypesManager() {
       <Notice message={error} />
       <Notice message={message} tone="success" />
       {can('ADMIN') && (
-        <details className="panel mb-6" open={Boolean(editing)}>
-          <summary className="cursor-pointer font-semibold">
-            {editing ? `Edit ${editing.code}` : 'Create Service Type'}
-          </summary>
+        <div className="mb-4">
+          <button
+            className="button-primary"
+            onClick={() => {
+              setEditing(null);
+              setFormOpen(true);
+            }}
+            type="button"
+          >
+            + Create Service Type
+          </button>
+        </div>
+      )}
+      {formOpen && (
+        <Modal
+          onClose={() => setFormOpen(false)}
+          title={editing ? `Edit ${editing.code}` : 'Create Service Type'}
+        >
           <form
-            className="form-grid mt-5"
+            className="form-grid"
             key={editing?.id ?? 'new'}
             onSubmit={(event) => void save(event)}
           >
@@ -97,14 +114,12 @@ export function ServiceTypesManager() {
               <button className="button-primary" type="submit">
                 Save
               </button>
-              {editing && (
-                <button className="button-secondary" onClick={() => setEditing(null)} type="button">
-                  Cancel
-                </button>
-              )}
+              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+                Cancel
+              </button>
             </div>
           </form>
-        </details>
+        </Modal>
       )}
       <section className="panel table-wrap">
         <table>
@@ -128,7 +143,14 @@ export function ServiceTypesManager() {
                 <td>{item.active ? 'ACTIVE' : 'INACTIVE'}</td>
                 <td>
                   {can('ADMIN') && (
-                    <button className="button-small" onClick={() => setEditing(item)} type="button">
+                    <button
+                      className="button-small"
+                      onClick={() => {
+                        setEditing(item);
+                        setFormOpen(true);
+                      }}
+                      type="button"
+                    >
                       Edit
                     </button>
                   )}

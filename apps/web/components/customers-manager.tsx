@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiRequest, type PageResult } from '../lib/api';
 import { useControlPanel } from './app-shell';
+import { Modal } from './modal';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
-import { CustomerChannelsManager } from './customer-channels-manager';
 
 interface BillingEntity {
   id: string;
@@ -32,22 +32,6 @@ interface Customer {
   billingEntityId: string;
   billingEntity: BillingEntity;
   _count: { subscriptions: number };
-  contacts?: Array<{
-    id: string;
-    role: string;
-    name: string | null;
-    email: string | null;
-    phone: string | null;
-    primary: boolean;
-    active: boolean;
-  }>;
-  subscriptions?: Array<{
-    id: string;
-    subscriptionCode: string;
-    name: string;
-    renewalDate: string;
-    serviceType: { name: string };
-  }>;
 }
 
 const emptyCustomer = {
@@ -76,10 +60,11 @@ export function CustomersManager() {
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Customer | null>(null);
-  const [detail, setDetail] = useState<Customer | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingEditId, setPendingEditId] = useState('');
 
   const load = useCallback(async () => {
     const params = new URLSearchParams({ page: String(page), pageSize: '20' });
@@ -94,33 +79,43 @@ export function CustomersManager() {
   }, [page, search, status]);
 
   useEffect(() => {
+    setPendingEditId(new URLSearchParams(window.location.search).get('edit') ?? '');
+  }, []);
+
+  useEffect(() => {
     void load().catch((cause: unknown) =>
       setError(cause instanceof Error ? cause.message : 'Load failed.'),
     );
   }, [load]);
 
-  async function addContact(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!detail) return;
-    const form = new FormData(event.currentTarget);
-    const value = (name: string) => String(form.get(name) ?? '').trim();
-    try {
-      await apiRequest(`/customers/${detail.id}/contacts`, {
-        method: 'POST',
-        body: JSON.stringify({
-          role: value('role'),
-          name: value('name') || undefined,
-          email: value('email') || undefined,
-          phone: value('phone') || undefined,
-          primary: value('primary') === 'true',
-        }),
-      });
-      setDetail(await apiRequest<Customer>(`/customers/${detail.id}`));
-      setSuccess('Customer contact saved and audited.');
-      event.currentTarget.reset();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Contact save failed.');
+  useEffect(() => {
+    if (!pendingEditId) return;
+    const target = customers?.data.find((item) => item.id === pendingEditId);
+    if (target) {
+      setEditing(target);
+      setFormOpen(true);
+      setPendingEditId('');
+      return;
     }
+    // The customer to edit may not be on the current (filtered/paginated) page — fetch it
+    // directly rather than requiring it to already be loaded.
+    void apiRequest<Customer>(`/customers/${pendingEditId}`)
+      .then((customer) => {
+        setEditing(customer);
+        setFormOpen(true);
+      })
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'))
+      .finally(() => setPendingEditId(''));
+  }, [pendingEditId, customers]);
+
+  function openCreate() {
+    setEditing(null);
+    setFormOpen(true);
+  }
+
+  function openEdit(customer: Customer) {
+    setEditing(customer);
+    setFormOpen(true);
   }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
@@ -151,20 +146,11 @@ export function CustomersManager() {
         body: JSON.stringify(body),
       });
       setSuccess(editing ? 'Customer updated and audited.' : 'Customer created and audited.');
+      setFormOpen(false);
       setEditing(null);
-      event.currentTarget.reset();
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
-    }
-  }
-
-  async function view(customer: Customer) {
-    setEditing(customer);
-    try {
-      setDetail(await apiRequest<Customer>(`/customers/${customer.id}`));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Unable to load customer.');
     }
   }
 
@@ -193,7 +179,10 @@ export function CustomersManager() {
         { method: 'DELETE' },
       );
       setSuccess(`Customer deleted along with ${result.deletedSubscriptions} subscription(s).`);
-      if (editing?.id === customer.id) setEditing(null);
+      if (editing?.id === customer.id) {
+        setEditing(null);
+        setFormOpen(false);
+      }
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Delete failed.');
@@ -272,12 +261,19 @@ export function CustomersManager() {
       <Notice message={error} />
       <Notice message={success} tone="success" />
       {canManage && (
-        <details className="panel mb-6" open={Boolean(editing)}>
-          <summary className="cursor-pointer font-semibold">
-            {editing ? `Edit ${editing.customerCode}` : 'Create customer'}
-          </summary>
+        <div className="mb-4">
+          <button className="button-primary" onClick={openCreate} type="button">
+            + Create customer
+          </button>
+        </div>
+      )}
+      {formOpen && (
+        <Modal
+          onClose={() => setFormOpen(false)}
+          title={editing ? `Edit ${editing.customerCode}` : 'Create customer'}
+        >
           <form
-            className="form-grid mt-5"
+            className="form-grid"
             key={editing?.id ?? 'new'}
             onSubmit={(event) => void save(event)}
           >
@@ -356,21 +352,12 @@ export function CustomersManager() {
               <button className="button-primary" type="submit">
                 {editing ? 'Save changes' : 'Create customer'}
               </button>
-              {editing && (
-                <button
-                  className="button-secondary"
-                  onClick={() => {
-                    setEditing(null);
-                    setDetail(null);
-                  }}
-                  type="button"
-                >
-                  Cancel
-                </button>
-              )}
+              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+                Cancel
+              </button>
             </div>
           </form>
-        </details>
+        </Modal>
       )}
       <section className="panel">
         <div className="toolbar">
@@ -446,13 +433,9 @@ export function CustomersManager() {
                   )}
                   <td>{customer.customerCode}</td>
                   <td>
-                    <button
-                      className="table-link"
-                      onClick={() => void view(customer)}
-                      type="button"
-                    >
+                    <Link className="table-link" href={`/dashboard/customers/${customer.id}`}>
                       {customer.companyName}
-                    </button>
+                    </Link>
                   </td>
                   <td>
                     {customer.primaryEmail}
@@ -465,13 +448,21 @@ export function CustomersManager() {
                     <span className="status-pill">{customer.status}</span>
                   </td>
                   <td className="space-x-2">
-                    <button
-                      className="button-small"
-                      onClick={() => void view(customer)}
-                      type="button"
+                    <Link
+                      className="button-small inline-block"
+                      href={`/dashboard/customers/${customer.id}`}
                     >
-                      View{canManage ? ' / edit' : ''}
-                    </button>
+                      View
+                    </Link>
+                    {canManage && (
+                      <button
+                        className="button-small"
+                        onClick={() => openEdit(customer)}
+                        type="button"
+                      >
+                        Edit
+                      </button>
+                    )}
                     {can('ADMIN') && customer.status === 'ACTIVE' && (
                       <button
                         className="button-small danger"
@@ -498,83 +489,6 @@ export function CustomersManager() {
         </div>
         <Pagination meta={customers?.meta} onPage={setPage} />
       </section>
-      {detail && (
-        <section className="panel mt-6">
-          <h3 className="font-semibold">{detail.companyName}</h3>
-          <CustomerChannelsManager canManage={canManage} customerId={detail.id} />
-          <h4 className="mt-6 font-medium">Legacy combined contacts</h4>
-          <div className="mt-2 space-y-2">
-            {detail.contacts
-              ?.filter((contact) => contact.active)
-              .map((contact) => (
-                <div
-                  className="rounded-lg border border-[var(--line)] p-3 text-sm"
-                  key={contact.id}
-                >
-                  <strong>
-                    {contact.role}
-                    {contact.primary ? ' · Primary' : ''}
-                  </strong>{' '}
-                  · {contact.name ?? 'Unnamed'} · {contact.email ?? 'No email'} ·{' '}
-                  {contact.phone ?? 'No phone'}
-                </div>
-              ))}
-          </div>
-          {canManage && (
-            <form className="form-grid mt-4" onSubmit={(event) => void addContact(event)}>
-              <label className="field">
-                <span>Contact role</span>
-                <select name="role">
-                  <option>PRIMARY</option>
-                  <option>BILLING</option>
-                  <option>TECHNICAL</option>
-                  <option>MANAGEMENT</option>
-                  <option>OTHER</option>
-                </select>
-              </label>
-              <Field label="Contact name" name="name" value="" />
-              <Field label="Contact email" name="email" value="" type="email" />
-              <Field label="Contact phone" name="phone" value="" />
-              <label className="field">
-                <span>Primary</span>
-                <select name="primary">
-                  <option value="false">No</option>
-                  <option value="true">Yes</option>
-                </select>
-              </label>
-              <div className="field-wide">
-                <button className="button-small" type="submit">
-                  Add contact
-                </button>
-              </div>
-            </form>
-          )}
-          <h4 className="mt-6 font-medium">Subscriptions</h4>
-          {canManage && (
-            <Link
-              className="button-small mt-3 inline-block"
-              href={`/dashboard/subscriptions?customerId=${detail.id}`}
-            >
-              Add another subscription to this customer
-            </Link>
-          )}
-          <div className="mt-3 space-y-2">
-            {detail.subscriptions?.length ? (
-              detail.subscriptions.map((subscription) => (
-                <div
-                  className="rounded-lg border border-[var(--line)] p-3 text-sm"
-                  key={subscription.id}
-                >
-                  {subscription.subscriptionCode} · {subscription.serviceType.name} · renews{' '}
-                  {subscription.renewalDate.slice(0, 10)}
-                </div>
-              ))
-            ) : (
-              <p className="muted text-sm">No subscriptions.</p>
-            )}
-          </div>
-        </section>
-      )}
     </>
   );
 }

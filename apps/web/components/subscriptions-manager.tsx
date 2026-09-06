@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
 import { useControlPanel } from './app-shell';
+import { Modal } from './modal';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 import type { CurrencyOption } from './currencies-manager';
@@ -96,6 +97,7 @@ export function SubscriptionsManager() {
   const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
   const [defaultCustomerId, setDefaultCustomerId] = useState('');
   const [editing, setEditing] = useState<Subscription | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
@@ -127,7 +129,9 @@ export function SubscriptionsManager() {
     setCurrencies(currencyOptions);
   }, [canMap, search, status]);
   useEffect(() => {
-    setDefaultCustomerId(new URLSearchParams(window.location.search).get('customerId') ?? '');
+    const customerId = new URLSearchParams(window.location.search).get('customerId') ?? '';
+    setDefaultCustomerId(customerId);
+    if (customerId) setFormOpen(true);
   }, []);
 
   useEffect(() => {
@@ -173,6 +177,7 @@ export function SubscriptionsManager() {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
+      setFormOpen(false);
       setEditing(null);
       setMessage('Subscription saved and audited.');
       setError('');
@@ -180,6 +185,11 @@ export function SubscriptionsManager() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
     }
+  }
+
+  function closeForm() {
+    setFormOpen(false);
+    setEditing(null);
   }
 
   async function addMapping(event: React.FormEvent<HTMLFormElement>) {
@@ -237,209 +247,304 @@ export function SubscriptionsManager() {
       <Notice message={error} />
       <Notice message={message} tone="success" />
       {canManage && (
-        <details className="panel mb-6" open={Boolean(editing || defaultCustomerId)}>
-          <summary className="cursor-pointer font-semibold">
-            {editing ? `Edit ${editing.subscriptionCode}` : 'Create subscription'}
-          </summary>
-          <form
-            className="form-grid mt-5"
-            key={editing?.id ?? 'new'}
-            onSubmit={(event) => void save(event)}
+        <div className="mb-4">
+          <button
+            className="button-primary"
+            onClick={() => {
+              setEditing(null);
+              setFormOpen(true);
+            }}
+            type="button"
           >
-            {!editing && <Field label="Subscription code" name="subscriptionCode" required />}
-            <label className="field">
-              <span>Customer</span>
-              <select
-                defaultValue={editing?.customerId ?? defaultCustomerId}
-                name="customerId"
+            + Create subscription
+          </button>
+        </div>
+      )}
+      {formOpen && (
+        <Modal
+          maxWidth="56rem"
+          onClose={closeForm}
+          title={editing ? `Edit ${editing.subscriptionCode}` : 'Create subscription'}
+        >
+          {canManage && (
+            <form
+              className="form-grid"
+              key={editing?.id ?? 'new'}
+              onSubmit={(event) => void save(event)}
+            >
+              {!editing && <Field label="Subscription code" name="subscriptionCode" required />}
+              <label className="field">
+                <span>Customer</span>
+                <select
+                  defaultValue={editing?.customerId ?? defaultCustomerId}
+                  name="customerId"
+                  required
+                >
+                  <option value="">Select…</option>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.customerCode} · {customer.companyName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Service Type</span>
+                <select defaultValue={editing?.serviceTypeId ?? ''} name="serviceTypeId" required>
+                  <option value="">Select…</option>
+                  {types
+                    .filter((type) => type.active)
+                    .map((type) => (
+                      <option key={type.id} value={type.id}>
+                        {type.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Package</span>
+                <select defaultValue={editing?.servicePackageId ?? ''} name="servicePackageId">
+                  <option value="">Unclassified</option>
+                  {packages
+                    .filter((item) => !editing || item.serviceTypeId === editing.serviceTypeId)
+                    .map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} · {item.kind}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <Field
+                label="Name / sold package snapshot"
+                name="name"
                 required
-              >
-                <option value="">Select…</option>
-                {customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.customerCode} · {customer.companyName}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Service Type</span>
-              <select defaultValue={editing?.serviceTypeId ?? ''} name="serviceTypeId" required>
-                <option value="">Select…</option>
-                {types
-                  .filter((type) => type.active)
-                  .map((type) => (
-                    <option key={type.id} value={type.id}>
-                      {type.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Package</span>
-              <select defaultValue={editing?.servicePackageId ?? ''} name="servicePackageId">
-                <option value="">Unclassified</option>
-                {packages
-                  .filter((item) => !editing || item.serviceTypeId === editing.serviceTypeId)
-                  .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name} · {item.kind}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <Field
-              label="Name / sold package snapshot"
-              name="name"
-              required
-              value={editing?.name}
-            />
-            <Field
-              label="Start date"
-              name="startDate"
-              required
-              type="date"
-              value={date(editing?.startDate)}
-            />
-            <Field
-              label="Renewal date"
-              name="renewalDate"
-              required
-              type="date"
-              value={date(editing?.renewalDate)}
-            />
-            <label className="field">
-              <span>Billing frequency</span>
-              <select defaultValue={editing?.billingFrequency ?? 'ANNUAL'} name="billingFrequency">
-                {['MONTHLY', 'QUARTERLY', 'SEMI_ANNUAL', 'ANNUAL', 'BIENNIAL', 'CUSTOM'].map(
-                  (item) => (
-                    <option key={item}>{item}</option>
-                  ),
-                )}
-              </select>
-            </label>
-            <label className="field">
-              <span>Renewal interval</span>
-              <select
-                defaultValue={String(editing?.renewalIntervalMonths ?? 12)}
-                name="renewalIntervalMonths"
-              >
-                <option value="12">12 months</option>
-                <option value="24">24 months</option>
-                <option value="36">36 months</option>
-                <option value="60">60 months</option>
-                {editing?.renewalIntervalMonths &&
-                  ![12, 24, 36, 60].includes(editing.renewalIntervalMonths) && (
-                    <option value={editing.renewalIntervalMonths}>
-                      Custom: {editing.renewalIntervalMonths} months
-                    </option>
+                value={editing?.name}
+              />
+              <Field
+                label="Start date"
+                name="startDate"
+                required
+                type="date"
+                value={date(editing?.startDate)}
+              />
+              <Field
+                label="Renewal date"
+                name="renewalDate"
+                required
+                type="date"
+                value={date(editing?.renewalDate)}
+              />
+              <label className="field">
+                <span>Billing frequency</span>
+                <select
+                  defaultValue={editing?.billingFrequency ?? 'ANNUAL'}
+                  name="billingFrequency"
+                >
+                  {['MONTHLY', 'QUARTERLY', 'SEMI_ANNUAL', 'ANNUAL', 'BIENNIAL', 'CUSTOM'].map(
+                    (item) => (
+                      <option key={item}>{item}</option>
+                    ),
                   )}
-              </select>
-            </label>
-            <Field
-              label="Historical contract term (months)"
-              name="contractTermMonths"
-              type="number"
-              value={String(editing?.contractTermMonths ?? '')}
-            />
-            <Field
-              label="Supplier cost"
-              name="supplierCost"
-              type="number"
-              value={editing?.supplierCost}
-            />
-            <Field
-              label="Original subscription amount"
-              name="sellingPrice"
-              required
-              type="number"
-              value={editing?.sellingPrice}
-            />
-            <label className="field">
-              <span>Original currency</span>
-              <select defaultValue={editing?.currency ?? 'JOD'} name="currency" required>
-                {currencies.map((currency) => (
-                  <option key={currency.code} value={currency.code}>
-                    {currency.code} — {currency.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {editing?.currentSellingPriceJod && (
-              <div className="field">
-                <span>Current JOD equivalent</span>
-                <strong>{editing.currentSellingPriceJod} JOD</strong>
-                <small className="muted">
-                  1 {editing.currency} = {editing.currentExchangeRateToJod} JOD
-                </small>
-              </div>
-            )}
-            <label className="field">
-              <span>Provider auto-renew</span>
-              <select
-                defaultValue={String(editing?.providerAutoRenews ?? true)}
-                name="providerAutoRenews"
-              >
-                <option value="true">Yes</option>
-                <option value="false">No</option>
-              </select>
-            </label>
-            <Field
-              label="Grace hours"
-              name="graceHours"
-              required
-              type="number"
-              value={String(editing?.graceHours ?? 24)}
-            />
-            <label className="field">
-              <span>Status</span>
-              <select defaultValue={editing?.status ?? 'ACTIVE'} name="status">
-                <option>ACTIVE</option>
-                <option>SUSPENDED</option>
-                <option>CLOSED</option>
-              </select>
-            </label>
-            <label className="field field-wide">
-              <span>Description</span>
-              <textarea defaultValue={editing?.description ?? ''} name="description" rows={2} />
-            </label>
-            <label className="field field-wide">
-              <span>Domains / identifiers (one domain per line)</span>
-              <textarea
-                defaultValue={
-                  editing?.identifiers
-                    .filter((item) => item.type === 'DOMAIN')
-                    .map((item) => item.value)
-                    .join('\n') ?? ''
-                }
-                name="domains"
-                rows={3}
+                </select>
+              </label>
+              <label className="field">
+                <span>Renewal interval</span>
+                <select
+                  defaultValue={String(editing?.renewalIntervalMonths ?? 12)}
+                  name="renewalIntervalMonths"
+                >
+                  <option value="12">12 months</option>
+                  <option value="24">24 months</option>
+                  <option value="36">36 months</option>
+                  <option value="60">60 months</option>
+                  {editing?.renewalIntervalMonths &&
+                    ![12, 24, 36, 60].includes(editing.renewalIntervalMonths) && (
+                      <option value={editing.renewalIntervalMonths}>
+                        Custom: {editing.renewalIntervalMonths} months
+                      </option>
+                    )}
+                </select>
+              </label>
+              <Field
+                label="Historical contract term (months)"
+                name="contractTermMonths"
+                type="number"
+                value={String(editing?.contractTermMonths ?? '')}
               />
-            </label>
-            <label className="field field-wide">
-              <span>Price difference / negotiated-price reason</span>
-              <textarea
-                defaultValue={editing?.priceOverrideReason ?? ''}
-                name="priceOverrideReason"
-                rows={2}
+              <Field
+                label="Supplier cost"
+                name="supplierCost"
+                type="number"
+                value={editing?.supplierCost}
               />
-            </label>
-            <label className="field field-wide">
-              <span>Notes</span>
-              <textarea defaultValue={editing?.notes ?? ''} name="notes" rows={2} />
-            </label>
-            <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
-                Save subscription
-              </button>
-              {editing && (
-                <button className="button-secondary" onClick={() => setEditing(null)} type="button">
+              <Field
+                label="Original subscription amount"
+                name="sellingPrice"
+                required
+                type="number"
+                value={editing?.sellingPrice}
+              />
+              <label className="field">
+                <span>Original currency</span>
+                <select defaultValue={editing?.currency ?? 'JOD'} name="currency" required>
+                  {currencies.map((currency) => (
+                    <option key={currency.code} value={currency.code}>
+                      {currency.code} — {currency.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {editing?.currentSellingPriceJod && (
+                <div className="field">
+                  <span>Current JOD equivalent</span>
+                  <strong>{editing.currentSellingPriceJod} JOD</strong>
+                  <small className="muted">
+                    1 {editing.currency} = {editing.currentExchangeRateToJod} JOD
+                  </small>
+                </div>
+              )}
+              <label className="field">
+                <span>Provider auto-renew</span>
+                <select
+                  defaultValue={String(editing?.providerAutoRenews ?? true)}
+                  name="providerAutoRenews"
+                >
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
+                </select>
+              </label>
+              <Field
+                label="Grace hours"
+                name="graceHours"
+                required
+                type="number"
+                value={String(editing?.graceHours ?? 24)}
+              />
+              <label className="field">
+                <span>Status</span>
+                <select defaultValue={editing?.status ?? 'ACTIVE'} name="status">
+                  <option>ACTIVE</option>
+                  <option>SUSPENDED</option>
+                  <option>CLOSED</option>
+                </select>
+              </label>
+              <label className="field field-wide">
+                <span>Description</span>
+                <textarea defaultValue={editing?.description ?? ''} name="description" rows={2} />
+              </label>
+              <label className="field field-wide">
+                <span>Domains / identifiers (one domain per line)</span>
+                <textarea
+                  defaultValue={
+                    editing?.identifiers
+                      .filter((item) => item.type === 'DOMAIN')
+                      .map((item) => item.value)
+                      .join('\n') ?? ''
+                  }
+                  name="domains"
+                  rows={3}
+                />
+              </label>
+              <label className="field field-wide">
+                <span>Price difference / negotiated-price reason</span>
+                <textarea
+                  defaultValue={editing?.priceOverrideReason ?? ''}
+                  name="priceOverrideReason"
+                  rows={2}
+                />
+              </label>
+              <label className="field field-wide">
+                <span>Notes</span>
+                <textarea defaultValue={editing?.notes ?? ''} name="notes" rows={2} />
+              </label>
+              <div className="field-wide flex gap-3">
+                <button className="button-primary" type="submit">
+                  Save subscription
+                </button>
+                <button className="button-secondary" onClick={closeForm} type="button">
                   Cancel
                 </button>
+              </div>
+            </form>
+          )}
+          {editing && (
+            <div className={canManage ? 'mt-6 border-t border-[var(--line)] pt-5' : undefined}>
+              <h3 className="text-lg font-semibold">
+                Technical mappings for {editing.subscriptionCode}
+              </h3>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                Mappings are service-specific. Disabling one mapping does not affect unrelated
+                subscriptions.
+              </p>
+              <div className="mt-4 space-y-3">
+                {editing.connections.length ? (
+                  editing.connections.map((mapping) => (
+                    <div
+                      className="rounded-xl border border-[var(--line)] p-4 text-sm"
+                      key={mapping.id}
+                    >
+                      <div className="flex flex-wrap justify-between gap-3">
+                        <div>
+                          <strong>{mapping.technicalConnection.code}</strong> ·{' '}
+                          {mapping.remoteIdentifier}
+                          <p className="muted">
+                            {mapping.technicalConnection.type} ·{' '}
+                            {mapping.active ? 'Active' : 'Inactive'}
+                          </p>
+                        </div>
+                        {canMap && (
+                          <button
+                            className="button-small"
+                            onClick={() => void toggleMapping(mapping)}
+                            type="button"
+                          >
+                            {mapping.active ? 'Disable mapping' : 'Enable mapping'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p className="muted text-sm">Zero mappings. This is valid.</p>
+                )}
+              </div>
+              {canMap && (
+                <form
+                  className="form-grid mt-5 border-t border-[var(--line)] pt-5"
+                  onSubmit={(event) => void addMapping(event)}
+                >
+                  <label className="field">
+                    <span>Technical Connection</span>
+                    <select name="technicalConnectionId" required>
+                      <option value="">Select…</option>
+                      {connections
+                        .filter((item) => item.enabled)
+                        .map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.code} · {item.type}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <Field label="Remote identifier" name="remoteIdentifier" required />
+                  <label className="field field-wide">
+                    <span>Action profile (JSON, configuration only)</span>
+                    <textarea defaultValue="{}" name="actionProfile" rows={3} />
+                  </label>
+                  <label className="field field-wide">
+                    <span>Metadata (JSON)</span>
+                    <textarea defaultValue="{}" name="metadata" rows={3} />
+                  </label>
+                  <div className="field-wide">
+                    <button className="button-primary" type="submit">
+                      Add mapping
+                    </button>
+                  </div>
+                </form>
               )}
             </div>
-          </form>
-        </details>
+          )}
+        </Modal>
       )}
       <section className="panel">
         <div className="toolbar">
@@ -508,6 +613,7 @@ export function SubscriptionsManager() {
                       className="button-small"
                       onClick={() => {
                         setEditing(subscription);
+                        setFormOpen(true);
                         void refreshEditing(subscription.id);
                       }}
                       type="button"
@@ -521,83 +627,6 @@ export function SubscriptionsManager() {
           </table>
         </div>
       </section>
-      {editing && (
-        <section className="panel mt-6">
-          <h3 className="text-lg font-semibold">
-            Technical mappings for {editing.subscriptionCode}
-          </h3>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Mappings are service-specific. Disabling one mapping does not affect unrelated
-            subscriptions.
-          </p>
-          <div className="mt-4 space-y-3">
-            {editing.connections.length ? (
-              editing.connections.map((mapping) => (
-                <div
-                  className="rounded-xl border border-[var(--line)] p-4 text-sm"
-                  key={mapping.id}
-                >
-                  <div className="flex flex-wrap justify-between gap-3">
-                    <div>
-                      <strong>{mapping.technicalConnection.code}</strong> ·{' '}
-                      {mapping.remoteIdentifier}
-                      <p className="muted">
-                        {mapping.technicalConnection.type} ·{' '}
-                        {mapping.active ? 'Active' : 'Inactive'}
-                      </p>
-                    </div>
-                    {canMap && (
-                      <button
-                        className="button-small"
-                        onClick={() => void toggleMapping(mapping)}
-                        type="button"
-                      >
-                        {mapping.active ? 'Disable mapping' : 'Enable mapping'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p className="muted text-sm">Zero mappings. This is valid.</p>
-            )}
-          </div>
-          {canMap && (
-            <form
-              className="form-grid mt-5 border-t border-[var(--line)] pt-5"
-              onSubmit={(event) => void addMapping(event)}
-            >
-              <label className="field">
-                <span>Technical Connection</span>
-                <select name="technicalConnectionId" required>
-                  <option value="">Select…</option>
-                  {connections
-                    .filter((item) => item.enabled)
-                    .map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.code} · {item.type}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <Field label="Remote identifier" name="remoteIdentifier" required />
-              <label className="field field-wide">
-                <span>Action profile (JSON, configuration only)</span>
-                <textarea defaultValue="{}" name="actionProfile" rows={3} />
-              </label>
-              <label className="field field-wide">
-                <span>Metadata (JSON)</span>
-                <textarea defaultValue="{}" name="metadata" rows={3} />
-              </label>
-              <div className="field-wide">
-                <button className="button-primary" type="submit">
-                  Add mapping
-                </button>
-              </div>
-            </form>
-          )}
-        </section>
-      )}
     </>
   );
 }
