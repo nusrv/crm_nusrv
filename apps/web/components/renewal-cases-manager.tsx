@@ -73,14 +73,20 @@ export function RenewalCasesManager() {
     if (daysBeforeDue) params.set('daysBeforeDue', daysBeforeDue);
     if (dueFrom) params.set('dueFrom', dueFrom);
     if (dueTo) params.set('dueTo', dueTo);
+    // /service-types is not paginated: it returns a plain array directly, unlike /renewal-cases
+    // and /communication-outbox, which both return { data, meta }. See subscriptions-manager.tsx
+    // for the same contract used correctly.
     const [caseResult, outboxResult, serviceTypeResult] = await Promise.all([
       apiRequest<PageResult<RenewalCase>>(`/renewal-cases?${params}`),
       apiRequest<PageResult<OutboxMessage>>('/communication-outbox?pageSize=25'),
-      apiRequest<PageResult<ServiceTypeOption>>('/service-types?pageSize=100'),
+      apiRequest<ServiceTypeOption[]>('/service-types'),
     ]);
-    setCases(caseResult.data);
-    setOutbox(outboxResult.data);
-    setServiceTypes(serviceTypeResult.data);
+    // Defensive fallback to [] on every array-typed state, in case a future endpoint's actual
+    // response shape stops matching what's assumed here (as /service-types just did) — the page
+    // should render an empty list, never crash on a stray .map() over undefined.
+    setCases(caseResult.data ?? []);
+    setOutbox(outboxResult.data ?? []);
+    setServiceTypes(serviceTypeResult ?? []);
   }, [daysBeforeDue, dueFrom, dueTo, holdStatus, search, serviceTypeId, status]);
 
   useEffect(() => {
