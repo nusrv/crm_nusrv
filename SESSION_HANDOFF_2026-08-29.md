@@ -990,3 +990,69 @@ is unchanged and still asserted).
 Verified: strict typecheck, lint, 183 tests / 44 suites (12 skipped live-DB specs, unaffected — no
 schema touched this update), both production builds, Prettier (only whitepace/line-wrap changes on
 3 files, reviewed by hand and accepted). **Not yet deployed or tested by the owner.**
+
+## Update — 2026-09-08 filters on Customers and Subscriptions pages
+
+The owner asked for "every kind of filtration from our system, like currency, date, name,
+package" on the Customers and Subscriptions pages. Commit `796620f`. No schema change.
+
+**Customers** (`customers-manager.tsx`): added a Billing Entity filter dropdown (the backend's
+`CustomerListQueryDto.billingEntityId` already supported this — it just wasn't exposed in the UI)
+and a new created-date range (`createdFrom`/`createdTo`, new on both the DTO and
+`CustomersService.list()`'s `where.createdAt`). Search (code/name EN+AR/email/phone) and status
+already existed. Added a "Clear filters" button that appears once any filter is active.
+
+**Subscriptions** (`subscriptions-manager.tsx`): the backend already supported `serviceTypeId` and
+`renewalFrom`/`renewalTo` in `SubscriptionListQueryDto`, but neither was exposed in the UI —
+exposed both. Added three genuinely new filters, on both the DTO and `SubscriptionsService.list()`:
+`servicePackageId`, `currency`, and `billingEntityId` (the last one via a nested `customer: {
+billingEntityId }` relation filter, added only when set — verified with a test that it's omitted
+entirely rather than passed as `undefined` when no Billing Entity filter is chosen, since Prisma
+treats an explicit `undefined` key differently in some contexts). The Package dropdown narrows to
+the selected Service Type, mirroring the same cascading pattern already used in the subscription
+create/edit form. Also added a "Clear filters" button, same pattern as Customers.
+
+Both pages follow the existing filter-bar visual/interaction pattern already established on the
+Renewal Cases page (dropdowns + date-range `<input type="date">` pairs, reloading on every change
+— no debounce, matching how every other filtered list page in this app already works).
+
+**Tests added**: `customers.service.spec.ts` (Billing Entity + created-date-range where-clause
+shape) and a new `subscriptions.service.spec.ts` (all five new/newly-exposed filters' where-clause
+shape, plus a regression test confirming the Billing Entity relation filter is omitted entirely —
+not passed as an explicit `undefined` — when no Billing Entity is selected).
+
+Verified: strict typecheck, lint, 186 tests / 45 suites, both production builds, Prettier (line-wrap
+only on 3 files, reviewed and accepted). **Not yet deployed or tested by the owner.**
+
+## Open — Renewals page ("not working from the beginning")
+
+The owner separately reported the Renewals page (`/dashboard/renewals`,
+`renewal-cases-manager.tsx`) has never worked, without describing the exact symptom. Investigated
+thoroughly before touching anything (nothing changed yet — **this is diagnostic notes, not a
+fix**):
+
+- Routing, RBAC (`RolesGuard` allows any authenticated user through when no `@Roles()` decorator is
+  present, matching `RenewalCasesController`'s unguarded `GET` endpoints), the controller, the
+  service's `list()` where-clause construction, and `BusinessTimeService`'s date math were all read
+  end-to-end and are structurally correct — no crash-causing bug found by static analysis.
+- `RenewalCase` rows are only ever created by `RenewalEngineService.evaluateAll()`, which only runs
+  when a BullMQ job on the `RENEWAL_QUEUE` is processed by the separate **worker** process
+  (`worker-main.ts` / the `customer-cp-worker` systemd service — confirmed distinct from the API
+  process). A daily cron job is registered (`RenewalQueueService.onModuleInit()`, `0 5 0 * * *` in
+  the business timezone) and there's a manual "Run renewal evaluation" trigger, but it's on the
+  **Renewal Settings** page (ADMIN-only), not on the Renewals page itself — easy to have never
+  found.
+- Even when the engine does run, it only creates a `RenewalCase` for a subscription once its
+  `renewalDate` falls within the configured reminder window (up to 30 days out by default, from the
+  seeded `ReminderRule`s). A freshly imported/renewed book of subscriptions with renewal dates
+  further out than that will show **zero rows on this page by design** — which looks identical to
+  "broken" from the owner's side.
+
+**Leading hypotheses, in order of likelihood**: (1) the worker process was never actually running on
+the server, so the daily job queued but never executed and `renewal_cases` has stayed empty since
+day one; (2) it does run, but no subscription has yet entered its 30-day reminder window; (3) an
+actual runtime error only visible in the browser/API logs that this session's static code reading
+couldn't surface without live access. Asked the owner directly what "not working" looks like
+(blank page, error message, wrong/missing data, or something else) before changing any renewal
+logic — this is business-critical and a wrong guess here would be costly. **Next session: read
+their answer first, do not re-guess.**

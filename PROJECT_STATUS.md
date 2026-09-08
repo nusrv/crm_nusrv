@@ -492,6 +492,30 @@ regression test was added since none existed for that specific case.
 Verified: strict typecheck, lint, 183 tests / 44 suites (12 skipped live-DB specs, unaffected — no
 schema touched), both production builds. **Not yet deployed or tested by the owner.**
 
+## Filters on Customers and Subscriptions pages (commit `796620f`)
+
+Customers gained a Billing Entity filter (backend already supported it, just wasn't in the UI) and
+a new created-date range. Subscriptions had Service Type and renewal-date-range support in the
+backend but not the UI — exposed both — and gained three new filters: Package (cascades from the
+selected Service Type), Billing Entity (via the customer relation), and Currency. Both pages got a
+"Clear filters" button, matching the filter-bar pattern already used on Renewal Cases. Verified:
+strict typecheck, lint, 186 tests / 45 suites, both production builds. **Not yet deployed.**
+
+## Open — Renewals page reported as "not working from the beginning"
+
+Investigated thoroughly (routing, RBAC, controller, `RenewalCasesService.list()`'s query, and
+`BusinessTimeService`'s date math) with no crash-causing bug found by static reading. Leading
+hypotheses, most likely first: the worker process (`customer-cp-worker`, separate from the API
+process) that actually creates `RenewalCase` rows may never have been running on the server, so the
+daily cron job (registered, `0 5 0 * * *`) queued but never executed; or it does run but no
+subscription has yet entered its reminder window (cases are only created once a subscription's
+`renewalDate` is within ~30 days), which looks identical to "broken" but is by design; or a runtime
+error only visible live that static code reading can't surface. Also worth noting: the only manual
+"run evaluation now" trigger in the UI lives on the ADMIN-only Renewal Settings page, not on
+Renewals itself — easy to have never found. Asked the owner what "not working" actually looks like
+before touching this business-critical logic. See `SESSION_HANDOFF_2026-08-29.md` for the full
+diagnostic notes — read the owner's answer first next session, don't re-guess.
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then
