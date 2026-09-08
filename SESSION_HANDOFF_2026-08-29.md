@@ -765,3 +765,31 @@ deployed or tested by the owner.
 page-level error/success `<Notice>` components must also be duplicated inside the `Modal` itself -
 the Modal is a full-screen overlay and will otherwise silently hide them. This has now been missed
 twice; check for it explicitly when reviewing any new Modal usage.
+
+## Update — 2026-09-08 the duplicated Notice was still leaking onto the page behind the modal
+
+The owner tested the previous fix and reported the error "still appear behind the popup screen, in
+the customer main page." The previous fix (commit `3a880fe`) only *added* a `<Notice>` inside each
+`Modal` — it never removed or hid the original page-level copy, so the message rendered in both
+places at once, and the page-level copy kept showing (visibly, once the modal closed) because
+nothing ever cleared `error`/`message` state on close. Fixed properly this time: each page-level
+`<Notice>` pair is now gated behind its own "no modal is open" condition, e.g.
+`{!formOpen && (<><Notice .../><Notice .../></>)}`, across the same 9 files from the previous fix
+(`customers-manager.tsx`, `currencies-manager.tsx`, `billing-entities-manager.tsx`,
+`service-types-manager.tsx`, `service-packages-manager.tsx`, `technical-connections-manager.tsx`,
+`customer-detail.tsx` gated on `contactFormOpen`, `customer-channels-manager.tsx` gated on
+`emailFormOpen && phoneFormOpen`, and `legacy-import-manager.tsx` gated on `editing`). The Notice
+inside each Modal is unchanged and remains the only copy visible while that modal is open.
+`subscriptions-manager.tsx`/`subscription-modal.tsx` were confirmed to already use fully
+independent error/message state and needed no change. Commit `acdb80c`.
+
+Verified via the local mirror: strict typecheck, lint, 161 tests / 42 suites, and both production
+builds all pass. Prettier was run on all 9 files; only `legacy-import-manager.tsx` reported a diff,
+but it was a full-file reformat driven by that file's known pre-existing formatting debt (see the
+"never blanket-format legacy-import-manager.tsx" note from the 2026-09-03 update) — discarded, and
+the surgical `git diff` was verified by hand to contain only the intended gating change in all 9
+files. Not yet deployed or tested by the owner.
+
+**Note for future sessions**: the fix for "Notice hidden behind Modal" is two-part, not one — (1)
+render the Notice inside the Modal, AND (2) hide the page-level Notice while that Modal is open.
+Only doing (1) still leaves stale/duplicate messages on the page behind the modal, as happened here.

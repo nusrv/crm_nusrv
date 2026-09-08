@@ -395,6 +395,19 @@ production builds. Not yet deployed or tested by the owner. **Note for future wo
 `Modal`-based form must duplicate its page's error/success `<Notice>` inside the `Modal` — this has
 now been missed twice.
 
+**Follow-up (still-visible-behind-modal bug, commit `acdb80c`)**: the owner tested `3a880fe` and the
+error still appeared "behind the popup screen, in the customer main page." That fix only added the
+Notice inside the Modal — it never hid the original page-level copy, so both rendered at once and
+the page-level one lingered as stale content after the modal closed (nothing ever cleared
+`error`/`message` on close). Fixed by gating each page-level Notice pair behind its own modal-closed
+condition (e.g. `{!formOpen && (...)}`) across the same 9 files. Verified: strict typecheck, lint,
+161 tests / 42 suites, both production builds; `git diff` reviewed by hand to confirm only the
+intended gating change landed (Prettier's full reformat of `legacy-import-manager.tsx`, driven by
+that file's known pre-existing formatting debt, was discarded rather than propagated). Not yet
+deployed or tested by the owner. **Note for future work**: fixing "Notice hidden behind Modal" is
+two steps, not one — render it inside the Modal AND hide the page-level copy while that Modal is
+open. Doing only the first step still leaves a stale/duplicate message on the page behind the modal.
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then
