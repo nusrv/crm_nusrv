@@ -131,7 +131,7 @@ export function SubscriptionsManager() {
           <table>
             <thead>
               <tr>
-                <th>Code / name</th>
+                <th>Name</th>
                 <th>Customer</th>
                 <th>Type</th>
                 <th>Dates</th>
@@ -144,11 +144,7 @@ export function SubscriptionsManager() {
             <tbody>
               {result?.data.map((subscription) => (
                 <tr key={subscription.id}>
-                  <td>
-                    {subscription.name}
-                    <br />
-                    <span className="muted text-xs">{subscription.subscriptionCode}</span>
-                  </td>
+                  <td>{subscription.name}</td>
                   <td>{subscription.customer.companyName}</td>
                   <td>
                     {subscription.serviceType.name}

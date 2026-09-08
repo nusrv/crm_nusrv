@@ -265,8 +265,6 @@ export function CustomerDetail() {
               >
                 <strong>{subscription.name}</strong> · {subscription.serviceType.name} ·{' '}
                 {subscription.status} · renews {subscription.renewalDate.slice(0, 10)}
-                <br />
-                <span className="muted text-xs">{subscription.subscriptionCode}</span>
               </button>
             ))
           ) : (

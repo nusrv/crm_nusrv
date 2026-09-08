@@ -243,12 +243,11 @@ export function SubscriptionModal({
     <Modal
       maxWidth="56rem"
       onClose={onClose}
-      title={
-        loading ? 'Loading…' : editing ? `Edit ${editing.subscriptionCode}` : 'Create subscription'
-      }
+      title={loading ? 'Loading…' : editing ? `Edit ${editing.name}` : 'Create subscription'}
     >
       <Notice message={error} />
       <Notice message={message} tone="success" />
+      {editing && <p className="muted mb-4 text-xs">Code: {editing.subscriptionCode}</p>}
       {loading ? (
         <p className="muted text-sm">Loading subscription…</p>
       ) : (
@@ -456,9 +455,7 @@ export function SubscriptionModal({
           )}
           {editing && (
             <div className={canManage ? 'mt-6 border-t border-[var(--line)] pt-5' : undefined}>
-              <h3 className="text-lg font-semibold">
-                Technical mappings for {editing.subscriptionCode}
-              </h3>
+              <h3 className="text-lg font-semibold">Technical mappings for {editing.name}</h3>
               <p className="mt-1 text-sm text-[var(--muted)]">
                 Mappings are service-specific. Disabling one mapping does not affect unrelated
                 subscriptions.
