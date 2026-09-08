@@ -641,3 +641,44 @@ almost certainly the single highest-impact fix in this whole UI/UX session — *
 box in the live app has likely been silently broken** until now. Recommend the owner specifically
 retest search on the Customers list, Subscriptions list, and Renewal Cases/Communication Outbox
 screens after deploying, not just the Legacy Import combobox that surfaced it.
+
+## Update — 2026-09-08 subscription popup on the customer page, and code/name display
+
+The owner asked two things: why subscription "codes" show as `LEG-S-<16 hex chars>`, and why
+clicking a subscription from the customer detail page navigates away to
+`/dashboard/subscriptions` instead of staying on the customer page.
+
+**The code question** has a real answer, not a bug: `generatedCode()` in
+`legacy-import.service.ts` deterministically hashes the source row reference (SHA-256, truncated)
+to produce that identifier for every legacy/canonical-imported subscription, specifically so
+re-uploading the same workbook is idempotent (same row → same code → no duplicate). It was never
+meant to be the primary human-facing label — the real fix was a display one: the Subscriptions
+table and the customer detail subscription list both showed the generated code as the prominent
+text and the descriptive `name` as the muted secondary line, which is backwards from what's useful.
+Swapped the emphasis in both places so `name` leads and `subscriptionCode` is shown small/secondary
+underneath.
+
+**The navigation question** was a real, valid UX complaint from the prior session's own work: the
+`?edit=<subscriptionId>` deep-link (added two updates ago) opens the Subscriptions page's modal,
+but landing on a whole different page just to view one subscription meant a full page navigation
+(and a "back" click) to see a different one. Fixed properly rather than patched: extracted the
+entire "create/view/manage subscription" modal — form, technical-mappings list, add-mapping form,
+and all its fetch/save logic — out of `subscriptions-manager.tsx` into a new shared
+`apps/web/components/subscription-modal.tsx` (`SubscriptionModal`). It takes a `subscriptionId`
+(`null` means create mode) plus `onClose`/`onSaved` callbacks and owns its own data fetching
+(customers/service types/packages/currencies/technical connections, plus the subscription itself
+when an id is given), so any page can render it without navigating anywhere.
+
+`customer-detail.tsx`'s subscription list items and its "Add another subscription to this
+customer" link now open this same modal in place (local `subscriptionModalOpen`/`subscriptionModalId`
+state) instead of linking away — clicking through several of a customer's subscriptions in a row no
+longer requires repeated back-navigation. `subscriptions-manager.tsx` itself shrank substantially
+(it now owns only the list/search/filter and renders `<SubscriptionModal>` for its own
+create/edit button); its `?customerId=`/`?edit=` deep-link support for direct navigation to that
+page is unchanged and still works exactly as before. Commit `2540803`.
+
+Verified via the local mirror: strict typecheck, lint (including one more instance of the
+`react-hooks/set-state-in-effect` heuristic on a loading-flag effect, fixed the same way as the
+earlier app-shell.tsx case — a targeted `eslint-disable-next-line` with a comment explaining why the
+synchronous `setLoading(true)` is necessary there), 161 tests / 42 suites, and both production
+builds all pass. No schema/migration change. Not yet deployed or tested by the owner.

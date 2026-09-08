@@ -11,9 +11,10 @@
   `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md`
 - Dashboard UI/UX overhaul (modal edit forms, dedicated customer page, collapsible sidebar,
   Legacy Import batch-list redesign and card sizing, sidebar toggle button redesign, subscription
-  deep-linking, viewport-fixed sidebar toggle, Legacy Import customer combobox): code complete,
-  committed on `main` (`80591fb`..`7f4c21f`), not yet deployed — see "Dashboard UI/UX overhaul and
-  collapsed-sidebar layout fix" below
+  deep-linking, viewport-fixed sidebar toggle, Legacy Import customer combobox, shared
+  SubscriptionModal popup, code/name display fix): code complete, committed on `main`
+  (`80591fb`..`2540803`), not yet deployed — see "Dashboard UI/UX overhaul and collapsed-sidebar
+  layout fix" below
 - **High-impact fix**: every text search in the app (Customers, Subscriptions, Renewal Cases,
   Communication Outbox, Legacy Import rows) was silently or explicitly failing due to a
   Postgres-only Prisma filter used against this app's MariaDB datasource — see "Fixed a 500 error
@@ -321,6 +322,25 @@ lint, 161 tests / 42 suites, both production builds. No schema/migration change.
 has probably been silently broken until now. After deploying, specifically retest search on the
 Customers list, Subscriptions list, and Renewal Cases/Communication Outbox screens, not just the
 Legacy Import combobox that surfaced it.
+
+## Subscription popup on the customer page, and code/name display fix
+
+The owner asked why subscription "codes" show as `LEG-S-<16 hex chars>` and why clicking a
+subscription from the customer detail page navigated to `/dashboard/subscriptions` instead of
+staying put. The code is intentional (a deterministic hash of the source row in
+`legacy-import.service.ts`'s `generatedCode()`, ensuring re-importing the same workbook is
+idempotent) but was wrongly shown as the primary label — swapped emphasis in the Subscriptions
+table and customer detail subscription list so the descriptive `name` leads and the generated code
+is small/secondary underneath. The navigation issue was fixed properly: extracted the entire
+create/view/manage subscription modal (form, technical mappings, all fetch/save logic) out of
+`subscriptions-manager.tsx` into a new shared `SubscriptionModal` component
+(`apps/web/components/subscription-modal.tsx`) that any page can render without navigating away.
+`customer-detail.tsx` now opens this modal in place for both viewing an existing subscription and
+adding a new one; `subscriptions-manager.tsx` shrank to just its list/search/filter plus the same
+shared modal, with its `?customerId=`/`?edit=` deep-link support unchanged. Commit `2540803`.
+
+Verified: strict typecheck, lint, 161 tests / 42 suites, both production builds. No schema/
+migration change; not yet deployed or tested by the owner.
 
 ## Staging CAPTCHA deployment patch
 
