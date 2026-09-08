@@ -350,6 +350,20 @@ code itself moved to a small muted `Code: ...` line under the title, visible onl
 subscription's own popup is open. Commit `07c14a9`. Display-only, no backend/search change.
 Verified: strict typecheck, lint, both production builds. Not yet deployed or tested by the owner.
 
+The owner then reported the code was "still there" after deploying — on the **Customers** list, a
+different, untouched screen. Customers get their own analogous generated code (`LEG-C-<hash>`) in
+its own "Code" column. Removed that column from `customers-manager.tsx`, switched the edit modal's
+title from the code to the company name, and kept the code as a small muted reference line under
+the title — same treatment as the subscription modal. The customer detail page's heading still
+shows the code (consistent with "only inside a customer's own page" being acceptable). Commit
+`5f2baa7`. No backend change. Verified: strict typecheck, lint, web production build.
+
+Also noted: the owner separately hit `npm ci` failing on the server due to local npm cache
+corruption at `/var/www/vhosts/nusrv.com/.npm/_cacache` (hundreds of "tarball ... corrupted"
+warnings, then an `ENOENT` on a specific cache file) — unrelated to this repo's code. Recommended
+`rm -rf /var/www/vhosts/nusrv.com/.npm/_cacache` then retry `npm ci`; check disk space if it
+recurs. Not yet confirmed resolved by the owner.
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then

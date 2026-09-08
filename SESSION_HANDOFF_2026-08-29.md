@@ -698,3 +698,25 @@ subscription's record but no longer the star of any screen. Commit `07c14a9`.
 No backend change (this is a display-only change to already-fetched data, not a search/filter
 change — `subscriptionCode` remains a legitimate, unexposed server-side search field). Verified:
 strict typecheck, lint, both production builds. Not yet deployed or tested by the owner.
+
+## Update — 2026-09-08 the same generated code was also on the Customers list
+
+After deploying, the owner reported the code was "still there" — pasting a screenshot of the
+**Customers** list, not Subscriptions. This was a genuinely different, untouched screen: customers
+get their own analogous generated code (`LEG-C-<hash>`, same `generatedCode()` mechanism, just a
+different prefix) shown in its own "Code" column, which the earlier fix never touched. Removed that
+column entirely from `customers-manager.tsx` (company name is already its own clearly-labeled
+column) and switched the edit modal's title from the code to the company name, with the code kept
+as a small muted reference line under the title — identical treatment to the subscription modal.
+The customer detail page's heading still shows the code, which stays consistent with the owner's
+own framing that the code is fine "inside a customer data when i click on it," just not on list
+screens. Commit `5f2baa7`. No backend change. Verified: strict typecheck, lint, web production
+build.
+
+Also worth recording: the owner separately hit `npm ci` failing on the server with hundreds of
+"tarball data ... seems to be corrupted" warnings and a final `ENOENT` on a specific npm cache file
+under `/var/www/vhosts/nusrv.com/.npm/_cacache/...`. This is an npm local-cache corruption issue on
+the server, unrelated to any code in this repo. Recommended fix given to the owner: delete the
+cache directory directly (`rm -rf /var/www/vhosts/nusrv.com/.npm/_cacache`) rather than
+`npm cache clean --force` (which the owner reported didn't work as expected), then retry `npm ci`.
+If it recurs, check server disk space (`df -h`). Not yet confirmed resolved.
