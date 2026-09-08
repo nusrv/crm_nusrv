@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
 import { useControlPanel } from './app-shell';
+import { CustomerCombobox } from './customer-combobox';
 import type { CurrencyOption } from './currencies-manager';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
@@ -37,6 +38,7 @@ interface CustomerOption {
   id: string;
   customerCode: string;
   companyName: string;
+  primaryEmail?: string | null;
 }
 interface PackageOption {
   id: string;
@@ -149,6 +151,8 @@ export function LegacyImportManager() {
   const [subscriptions, setSubscriptions] = useState<SubscriptionDraft[]>([]);
   const [resolution, setResolution] = useState('CREATE_NEW');
   const [candidateCustomerId, setCandidateCustomerId] = useState('');
+  const [candidateCustomerLabel, setCandidateCustomerLabel] = useState('');
+  const [customerSearchLoading, setCustomerSearchLoading] = useState(false);
   const [types, setTypes] = useState<ServiceType[]>([]);
   const [packages, setPackages] = useState<PackageOption[]>([]);
   const [entities, setEntities] = useState<BillingEntity[]>([]);
@@ -209,16 +213,20 @@ export function LegacyImportManager() {
     );
   }, [pendingBatchId, batches, openBatch]);
 
-  // Debounced server-side search for the "existing customer" selector, since the customer count
+  // Debounced server-side search for the "existing customer" combobox, since the customer count
   // can exceed the initial 500-row page (e.g. after a large canonical import).
   useEffect(() => {
     if (resolution !== 'ATTACH_EXISTING') return;
+    setCustomerSearchLoading(true);
     const handle = setTimeout(() => {
       const params = new URLSearchParams({ pageSize: '50' });
       if (customerSearch.trim()) params.set('search', customerSearch.trim());
-      void apiRequest<PageResult<CustomerOption>>(`/customers?${params.toString()}`).then((value) =>
-        setCustomers(value.data),
-      );
+      void apiRequest<PageResult<CustomerOption>>(`/customers?${params.toString()}`)
+        .then((value) => setCustomers(value.data))
+        .catch((cause: unknown) =>
+          setError(cause instanceof Error ? cause.message : 'Customer search failed.'),
+        )
+        .finally(() => setCustomerSearchLoading(false));
     }, 300);
     return () => clearTimeout(handle);
   }, [customerSearch, resolution]);
@@ -231,6 +239,13 @@ export function LegacyImportManager() {
     );
     setResolution(row.customerResolution ?? 'CREATE_NEW');
     setCandidateCustomerId(row.candidateCustomerId ?? '');
+    const candidate = row.duplicateCandidates.find(
+      (item) => item.customerId === row.candidateCustomerId,
+    );
+    setCandidateCustomerLabel(
+      candidate ? `${candidate.customerCode} · ${candidate.companyName}` : '',
+    );
+    setCustomerSearch('');
   }
 
   async function upload(event: React.FormEvent<HTMLFormElement>) {
@@ -282,6 +297,10 @@ export function LegacyImportManager() {
   async function review(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editing) return;
+    if (resolution === 'ATTACH_EXISTING' && !candidateCustomerId) {
+      setError('Select an existing customer from the list before validating.');
+      return;
+    }
     const form = new FormData(event.currentTarget);
     try {
       await apiRequest(`/legacy-import/rows/${editing.id}/review`, {
@@ -593,31 +612,19 @@ export function LegacyImportManager() {
                       </select>
                     </label>
                     {resolution === 'ATTACH_EXISTING' ? (
-                      <>
-                      <label className="field">
-                        <span>Search existing customers</span>
-                        <input
-                          onChange={(event) => setCustomerSearch(event.target.value)}
-                          placeholder="Company name, code, or email…"
-                          value={customerSearch}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Existing customer</span>
-                        <select
-                          onChange={(event) => setCandidateCustomerId(event.target.value)}
-                          required
-                          value={candidateCustomerId}
-                        >
-                          <option value="">Select…</option>
-                          {customers.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.customerCode} · {item.companyName}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      </>
+                      <CustomerCombobox
+                        loading={customerSearchLoading}
+                        onSearchChange={setCustomerSearch}
+                        onSelect={(id, label) => {
+                          setCandidateCustomerId(id);
+                          setCandidateCustomerLabel(label);
+                        }}
+                        options={customers}
+                        required
+                        searchValue={customerSearch}
+                        selectedLabel={candidateCustomerLabel}
+                        value={candidateCustomerId}
+                      />
                     ) : (
                       <>
                         <Text

@@ -102,6 +102,7 @@ export function SubscriptionsManager() {
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [pendingSubscriptionId, setPendingSubscriptionId] = useState('');
   const load = useCallback(async () => {
     const params = new URLSearchParams({ page: '1', pageSize: '100' });
     if (search) params.set('search', search);
@@ -129,10 +130,30 @@ export function SubscriptionsManager() {
     setCurrencies(currencyOptions);
   }, [canMap, search, status]);
   useEffect(() => {
-    const customerId = new URLSearchParams(window.location.search).get('customerId') ?? '';
+    const params = new URLSearchParams(window.location.search);
+    const customerId = params.get('customerId') ?? '';
     setDefaultCustomerId(customerId);
     if (customerId) setFormOpen(true);
+    setPendingSubscriptionId(params.get('edit') ?? '');
   }, []);
+
+  useEffect(() => {
+    if (!pendingSubscriptionId) return;
+    const id = pendingSubscriptionId;
+    setPendingSubscriptionId('');
+    void apiRequest<Subscription>(`/subscriptions/${id}`)
+      .then((subscription) => {
+        setEditing(subscription);
+        setFormOpen(true);
+      })
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : 'Unable to load the requested subscription. It may have been deleted.',
+        ),
+      );
+  }, [pendingSubscriptionId]);
 
   useEffect(() => {
     void load().catch((cause: unknown) =>

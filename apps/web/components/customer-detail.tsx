@@ -236,13 +236,14 @@ export function CustomerDetail() {
         <div className="mt-3 space-y-2">
           {detail.subscriptions?.length ? (
             detail.subscriptions.map((subscription) => (
-              <div
-                className="rounded-lg border border-[var(--line)] p-3 text-sm"
+              <Link
+                className="block rounded-lg border border-[var(--line)] p-3 text-sm transition hover:border-[var(--accent)] hover:bg-[var(--surface)]"
+                href={`/dashboard/subscriptions?edit=${subscription.id}`}
                 key={subscription.id}
               >
                 {subscription.subscriptionCode} · {subscription.serviceType.name} ·{' '}
                 {subscription.status} · renews {subscription.renewalDate.slice(0, 10)}
-              </div>
+              </Link>
             ))
           ) : (
             <p className="muted text-sm">No subscriptions.</p>
