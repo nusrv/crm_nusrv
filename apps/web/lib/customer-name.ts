@@ -19,6 +19,6 @@ export function customerSecondaryName(customer: BilingualCustomerName): string |
 export function customerCombinedLabel(customer: BilingualCustomerName): string {
   const nameEn = customer.nameEn?.trim();
   const nameAr = customer.nameAr?.trim();
-  if (nameEn && nameAr) return `${nameEn} / ${nameAr}`;
+  if (nameEn && nameAr) return `${nameEn} · ${nameAr}`;
   return nameEn || nameAr || '';
 }

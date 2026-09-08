@@ -356,7 +356,21 @@ export class LegacyImportService {
         const customer = parsed.customers.get(subscriptionRow.customerId);
         if (!customer) continue;
         const sourceReference = `${file.originalname}#Subscriptions!${subscriptionRow.subscriptionId}`;
-        const customerSourceReference = `${file.originalname}#Customers!${customer.customerId}`;
+        const billingEntity = billingEntities.find(
+          (entry) =>
+            normalize(entry.name) ===
+            normalize(subscriptionRow.billingEntitySource ?? customer.billingEntityName),
+        );
+        // Billing Entity is part of a canonical customer's identity, not just an attribute of it:
+        // the same source Customer_ID can carry subscriptions under two different Billing
+        // Entities (e.g. one company with both a local and an international account), and those
+        // must become two separate CRM customers. Keying this reference on Customer_ID alone
+        // would make the second Billing Entity's first-approved subscription silently reuse the
+        // first Billing Entity's customer record. When the Billing Entity can't be resolved yet,
+        // fall back to a stable per-row marker rather than treating "unresolved" as one more
+        // shared identity — such a row also fails Billing Entity validation before approval
+        // anyway, so it can never actually reach the reuse lookup below.
+        const customerSourceReference = `${file.originalname}#Customers!${customer.customerId}#BillingEntity!${billingEntity?.id ?? `unresolved:${subscriptionRow.subscriptionId}`}`;
         const primaryEmail = customer.emails[0]?.email;
         const primaryPhone = customer.phones.find((phone) => phone.primary) ?? customer.phones[0];
 
@@ -391,11 +405,6 @@ export class LegacyImportService {
           );
         }
 
-        const billingEntity = billingEntities.find(
-          (entry) =>
-            normalize(entry.name) ===
-            normalize(subscriptionRow.billingEntitySource ?? customer.billingEntityName),
-        );
         const serviceType = serviceTypes.find(
           (entry) => normalize(entry.name) === normalize(suggestions.serviceTypeName),
         );

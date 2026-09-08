@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { customerDisplayName, customerSecondaryName } from '../lib/customer-name';
+import {
+  customerCombinedLabel,
+  customerDisplayName,
+  customerSecondaryName,
+} from '../lib/customer-name';
 
 export interface CustomerComboboxOption {
   id: string;
@@ -11,8 +15,14 @@ export interface CustomerComboboxOption {
   primaryEmail?: string | null;
 }
 
+// The compact label shown once a customer is selected (and typed back into the search box while
+// closed). Similarly-named customers are common — under different Billing Entities on purpose —
+// so lead with the Customer Code and include the email when available, not just the name.
 function optionLabel(option: CustomerComboboxOption) {
-  return customerDisplayName(option);
+  const parts = [option.customerCode, customerCombinedLabel(option), option.primaryEmail].filter(
+    (part): part is string => Boolean(part),
+  );
+  return parts.join(' · ');
 }
 
 export function CustomerCombobox({
@@ -101,6 +111,7 @@ export function CustomerCombobox({
                 type="button"
               >
                 <strong>{customerDisplayName(option)}</strong>
+                <span className="muted text-xs"> · {option.customerCode}</span>
                 {customerSecondaryName(option) && (
                   <>
                     <br />

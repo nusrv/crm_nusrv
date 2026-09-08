@@ -128,6 +128,120 @@ function canonicalWorkbookFixture(): Buffer {
   throw new Error('The XLSX writer returned an unexpected fixture type.');
 }
 
+// Mirrors a real case in the production canonical workbook: one Customer_ID ("CUST-0005",
+// "mpr.com.sa") with subscriptions recorded under both Billing Entities.
+function multiEntityCanonicalWorkbookFixture(): Buffer {
+  const workbook = XLSX.utils.book_new();
+  const sheet = (rows: unknown[][]) => XLSX.utils.aoa_to_sheet(rows);
+  XLSX.utils.book_append_sheet(
+    workbook,
+    sheet([
+      ['Customer_ID', 'Customer_Order', 'Canonical_Name', 'Review_Status', 'Billing_Entities_Seen'],
+      ['CUST-0005', 1, 'mpr.com.sa', 'READY', 'FUTURE_FORESIGHT_INTERNATIONAL, NEW_SERVE_LOCAL'],
+    ]),
+    'Customers',
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    sheet([['Contact_ID', 'Customer_ID', 'Person_Name', 'Role']]),
+    'Contacts',
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    sheet([
+      [
+        'Phone_ID',
+        'Customer_ID',
+        'Contact_ID',
+        'Phone_Type',
+        'E164_Normalized',
+        'Active',
+        'Primary_Draft',
+        'Verification_Status',
+      ],
+    ]),
+    'Phone_Channels',
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    sheet([
+      ['Email_ID', 'Customer_ID', 'Contact_ID', 'Normalized_Email', 'Role', 'Verification_Status'],
+      ['EM-0001', 'CUST-0005', '', 'mpr@example.test', 'GENERAL', 'UNVERIFIED'],
+    ]),
+    'Email_Channels',
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    sheet([
+      [
+        'Subscription_ID',
+        'Source_Sequence',
+        'Source_Row',
+        'Customer_ID',
+        'Billing_Entity_Source',
+        'Service_Type_Source',
+        'Package_Source',
+        'Start_Date',
+        'Current_Term_End_Date',
+        'Renewal_Interval_Months',
+        'Selling_Price_Original',
+        'Currency',
+        'Review_Status',
+      ],
+      [
+        'SUB-2001',
+        1,
+        20,
+        'CUST-0005',
+        'FUTURE_FORESIGHT_INTERNATIONAL',
+        'Hosting',
+        'CUSTOM Plan',
+        new Date('2026-01-01T00:00:00.000Z'),
+        new Date('2027-01-01T00:00:00.000Z'),
+        12,
+        100,
+        'JOD',
+        'READY',
+      ],
+      [
+        'SUB-2002',
+        2,
+        21,
+        'CUST-0005',
+        'FUTURE_FORESIGHT_INTERNATIONAL',
+        'Domain',
+        'CUSTOM Plan',
+        new Date('2026-01-01T00:00:00.000Z'),
+        new Date('2027-01-01T00:00:00.000Z'),
+        12,
+        50,
+        'JOD',
+        'READY',
+      ],
+      [
+        'SUB-2003',
+        3,
+        22,
+        'CUST-0005',
+        'NEW_SERVE_LOCAL',
+        'Hosting',
+        'CUSTOM Plan',
+        new Date('2026-01-01T00:00:00.000Z'),
+        new Date('2027-01-01T00:00:00.000Z'),
+        12,
+        80,
+        'JOD',
+        'READY',
+      ],
+    ]),
+    'Subscriptions',
+  );
+  const output: unknown = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  if (Buffer.isBuffer(output)) return output;
+  if (output instanceof Uint8Array) return Buffer.from(output);
+  throw new Error('The XLSX writer returned an unexpected fixture type.');
+}
+
 function explicitDateWorkbookFixture(): Buffer {
   const workbook = XLSX.utils.book_new();
   const rows: unknown[][] = [
@@ -559,6 +673,356 @@ describe('LegacyImportService', () => {
     expect(tx.subscription.create).toHaveBeenCalledTimes(2);
   });
 
+  it('creates two separate customers, each via the shared CustomerCodeService, when the same canonical Customer_ID has rows under different Billing Entities', async () => {
+    const buildRow = (
+      id: string,
+      subscriptionCode: string,
+      billingEntityId: string,
+      sourceLegacyReference: string,
+    ) => ({
+      id,
+      batchId: 'batch-id',
+      status: LegacyImportRowStatus.READY_FOR_APPROVAL,
+      sourceReference: `canonical.xlsx#Subscriptions!${subscriptionCode}`,
+      customerResolution: LegacyCustomerResolution.CREATE_NEW,
+      candidateCustomerId: null,
+      mappedCustomer: {
+        nameEn: 'mpr.com.sa',
+        primaryEmail: 'mpr@example.test',
+        billingEntityId,
+        preferredLanguage: 'en',
+        sourceLegacyReference,
+      },
+      mappedSubscriptions: [
+        {
+          serviceTypeId: 'service-type-id',
+          name: 'Hosting',
+          startDate: '2026-01-01',
+          renewalDate: '2027-01-01',
+          billingFrequency: BillingFrequency.ANNUAL,
+          sellingPrice: '100.000',
+          currency: 'JOD',
+          providerAutoRenews: true,
+          graceHours: 24,
+          status: 'ACTIVE',
+        },
+      ],
+      subscriptionLinks: [],
+    });
+    const ffRow = buildRow(
+      'row-ff',
+      'SUB-FF',
+      'ff-entity-id',
+      'canonical.xlsx#Customers!CUST-0005#BillingEntity!ff-entity-id',
+    );
+    const nsRow = buildRow(
+      'row-ns',
+      'SUB-NS',
+      'ns-entity-id',
+      'canonical.xlsx#Customers!CUST-0005#BillingEntity!ns-entity-id',
+    );
+    const ffCustomer = { id: 'ff-customer-id', customerCode: 'FF0001', contacts: [] };
+    const nsCustomer = { id: 'ns-customer-id', customerCode: 'NS0001', contacts: [] };
+    const rateToJod = { mul: jest.fn(() => ({ toDecimalPlaces: () => '100.000' })) };
+    const tx = {
+      legacyImportRow: {
+        findUnique: jest
+          .fn<() => Promise<typeof ffRow>>()
+          .mockResolvedValueOnce(ffRow)
+          .mockResolvedValueOnce(nsRow),
+        updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
+        update: jest.fn(() => Promise.resolve({})),
+      },
+      customer: {
+        // Every lookup misses — the two rows' sourceLegacyReference values are distinct, so
+        // neither should ever find the other's customer.
+        findFirst: jest.fn(() => Promise.resolve(null)),
+        create: jest
+          .fn<(input: { data: Record<string, unknown> }) => Promise<typeof ffCustomer>>()
+          .mockResolvedValueOnce(ffCustomer)
+          .mockResolvedValueOnce(nsCustomer),
+      },
+      customerEmailAddress: { createMany: jest.fn(() => Promise.resolve({ count: 1 })) },
+      customerPhoneNumber: { createMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+      subscription: {
+        create: jest
+          .fn<() => Promise<{ id: string }>>()
+          .mockResolvedValueOnce({ id: 'subscription-ff' })
+          .mockResolvedValueOnce({ id: 'subscription-ns' }),
+      },
+      currency: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({
+            code: 'JOD',
+            active: true,
+            rateToJod,
+            effectiveDate: new Date('2026-01-01'),
+          }),
+        ),
+      },
+      legacyImportSubscriptionLink: { create: jest.fn(() => Promise.resolve({ id: 'link-id' })) },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      legacyImportRow: { count: jest.fn(() => Promise.resolve(0)) },
+      legacyImportBatch: { update: jest.fn(() => Promise.resolve({ id: 'batch-id' })) },
+    };
+    const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
+    const customerCode = {
+      next: jest
+        .fn<() => Promise<string>>()
+        .mockResolvedValueOnce('FF0001')
+        .mockResolvedValueOnce('NS0001'),
+    };
+    const service = new LegacyImportService(
+      prisma as never,
+      {} as never,
+      audit as never,
+      customerCode,
+    );
+
+    const ff = await service.approveRow('row-ff', actor);
+    const ns = await service.approveRow('row-ns', actor);
+
+    expect(ff).toEqual(expect.objectContaining({ customerId: 'ff-customer-id' }));
+    expect(ns).toEqual(expect.objectContaining({ customerId: 'ns-customer-id' }));
+    expect(ff.customerId).not.toBe(ns.customerId);
+    expect(tx.customer.create).toHaveBeenCalledTimes(2);
+    // The shared CustomerCodeService is called once per new customer, keyed on that row's own
+    // Billing Entity — never a separate import-only code generator.
+    expect(customerCode.next).toHaveBeenCalledTimes(2);
+    expect(customerCode.next).toHaveBeenNthCalledWith(1, tx, 'ff-entity-id');
+    expect(customerCode.next).toHaveBeenNthCalledWith(2, tx, 'ns-entity-id');
+    expect(tx.customer.create.mock.calls[0]?.[0].data).toMatchObject({
+      customerCode: 'FF0001',
+      billingEntityId: 'ff-entity-id',
+    });
+    expect(tx.customer.create.mock.calls[1]?.[0].data).toMatchObject({
+      customerCode: 'NS0001',
+      billingEntityId: 'ns-entity-id',
+    });
+  });
+
+  it('attaching an explicitly selected existing customer never creates a new customer or code, even when a canonical reference is present', async () => {
+    const row = {
+      id: 'row-id',
+      batchId: 'batch-id',
+      status: LegacyImportRowStatus.READY_FOR_APPROVAL,
+      sourceReference: 'canonical.xlsx#Subscriptions!SUB-0001',
+      customerResolution: LegacyCustomerResolution.ATTACH_EXISTING,
+      candidateCustomerId: 'existing-customer-id',
+      mappedCustomer: null,
+      mappedSubscriptions: [
+        {
+          serviceTypeId: 'service-type-id',
+          name: 'Hosting',
+          startDate: '2026-01-01',
+          renewalDate: '2027-01-01',
+          billingFrequency: BillingFrequency.ANNUAL,
+          sellingPrice: '100.000',
+          currency: 'JOD',
+          providerAutoRenews: true,
+          graceHours: 24,
+          status: 'ACTIVE',
+        },
+      ],
+      subscriptionLinks: [],
+    };
+    const existingCustomer = { id: 'existing-customer-id', customerCode: 'FF0007' };
+    const rateToJod = { mul: jest.fn(() => ({ toDecimalPlaces: () => '100.000' })) };
+    const tx = {
+      legacyImportRow: {
+        findUnique: jest.fn(() => Promise.resolve(row)),
+        updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
+        update: jest.fn(() => Promise.resolve({})),
+      },
+      customer: {
+        findUnique: jest.fn(() => Promise.resolve(existingCustomer)),
+        create: jest.fn(),
+        findFirst: jest.fn(),
+      },
+      subscription: { create: jest.fn(() => Promise.resolve({ id: 'subscription-id' })) },
+      currency: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({
+            code: 'JOD',
+            active: true,
+            rateToJod,
+            effectiveDate: new Date('2026-01-01'),
+          }),
+        ),
+      },
+      legacyImportSubscriptionLink: { create: jest.fn(() => Promise.resolve({ id: 'link-id' })) },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      legacyImportRow: { count: jest.fn(() => Promise.resolve(0)) },
+      legacyImportBatch: { update: jest.fn(() => Promise.resolve({ id: 'batch-id' })) },
+    };
+    const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
+    const customerCode = { next: jest.fn<() => Promise<string>>() };
+    const service = new LegacyImportService(
+      prisma as never,
+      {} as never,
+      audit as never,
+      customerCode,
+    );
+
+    const result = await service.approveRow('row-id', actor);
+
+    expect(result).toEqual(expect.objectContaining({ customerId: 'existing-customer-id' }));
+    expect(tx.customer.findUnique).toHaveBeenCalledWith({ where: { id: 'existing-customer-id' } });
+    expect(tx.customer.create).not.toHaveBeenCalled();
+    expect(tx.customer.findFirst).not.toHaveBeenCalled();
+    expect(customerCode.next).not.toHaveBeenCalled();
+  });
+
+  it('stages the same canonical Customer_ID under two Billing Entities with distinct customer references, and the same reference for rows sharing both', async () => {
+    const createdRows: Array<{ data: Record<string, unknown> }> = [];
+    const tx = {
+      legacyImportBatch: { create: jest.fn(() => Promise.resolve({ id: 'batch-id' })) },
+      legacyImportRow: {
+        create: jest.fn((input: { data: Record<string, unknown> }) => {
+          createdRows.push(input);
+          return Promise.resolve({ id: `row-${String(createdRows.length)}` });
+        }),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      legacyImportBatch: { findUnique: jest.fn(() => Promise.resolve(null)) },
+      customer: { findMany: jest.fn(() => Promise.resolve([])) },
+      billingEntity: {
+        findMany: jest.fn(() =>
+          Promise.resolve([
+            { id: 'ff-entity-id', name: 'FUTURE_FORESIGHT_INTERNATIONAL' },
+            { id: 'ns-entity-id', name: 'NEW_SERVE_LOCAL' },
+          ]),
+        ),
+      },
+      serviceType: {
+        findMany: jest.fn(() =>
+          Promise.resolve([
+            { id: 'hosting-id', name: 'Hosting' },
+            { id: 'domain-id', name: 'Domain' },
+          ]),
+        ),
+      },
+      servicePackage: { findMany: jest.fn(() => Promise.resolve([])) },
+    };
+    const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
+    const encryption = { encrypt: jest.fn(() => 'ciphertext') };
+    const service = new LegacyImportService(
+      prisma as never,
+      encryption as never,
+      audit as never,
+      {} as never,
+    );
+
+    const buffer = multiEntityCanonicalWorkbookFixture();
+    await service.createBatch(
+      { originalname: 'canonical.xlsx', size: buffer.length, buffer },
+      actor,
+    );
+
+    expect(createdRows).toHaveLength(3);
+    const byReference = (subCode: string) => {
+      const row = createdRows.find(
+        (entry) => entry.data.sourceReference === `canonical.xlsx#Subscriptions!${subCode}`,
+      );
+      const mappedCustomer = row?.data.mappedCustomer as {
+        sourceLegacyReference: string;
+        billingEntityId: string;
+      };
+      return mappedCustomer;
+    };
+
+    const ffSub1 = byReference('SUB-2001');
+    const ffSub2 = byReference('SUB-2002');
+    const nsSub = byReference('SUB-2003');
+
+    expect(ffSub1.billingEntityId).toBe('ff-entity-id');
+    expect(ffSub2.billingEntityId).toBe('ff-entity-id');
+    expect(nsSub.billingEntityId).toBe('ns-entity-id');
+
+    // Same Customer_ID, same Billing Entity -> identical reference, so approval reuses one
+    // customer for both FF subscriptions.
+    expect(ffSub1.sourceLegacyReference).toBe(ffSub2.sourceLegacyReference);
+    // Same Customer_ID, different Billing Entity -> a distinct reference, so approval must not
+    // reuse the FF customer for the NS subscription (the exact bug this fix closes).
+    expect(nsSub.sourceLegacyReference).not.toBe(ffSub1.sourceLegacyReference);
+    expect(ffSub1.sourceLegacyReference).toContain('CUST-0005');
+    expect(ffSub1.sourceLegacyReference).toContain('ff-entity-id');
+    expect(nsSub.sourceLegacyReference).toContain('ns-entity-id');
+  });
+
+  it('does not flag a same-named existing customer under a different Billing Entity as a duplicate', async () => {
+    // Already an NS customer named "mpr.com.sa" — an exact name match for the incoming FF/NS rows,
+    // but under a third, unrelated Billing Entity, so it must never surface as a duplicate
+    // candidate for either of them: same name across Billing Entities is a valid, separate record.
+    const existingCustomer = {
+      id: 'existing-customer-id',
+      customerCode: 'NS0099',
+      nameEn: 'mpr.com.sa',
+      nameAr: null,
+      billingEntityId: 'other-entity-id',
+      primaryEmail: 'other@example.test',
+      secondaryEmail: null,
+      phone: null,
+      subscriptions: [],
+    };
+    const createdRows: Array<{ data: Record<string, unknown> }> = [];
+    const tx = {
+      legacyImportBatch: { create: jest.fn(() => Promise.resolve({ id: 'batch-id' })) },
+      legacyImportRow: {
+        create: jest.fn((input: { data: Record<string, unknown> }) => {
+          createdRows.push(input);
+          return Promise.resolve({ id: `row-${String(createdRows.length)}` });
+        }),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      legacyImportBatch: { findUnique: jest.fn(() => Promise.resolve(null)) },
+      customer: { findMany: jest.fn(() => Promise.resolve([existingCustomer])) },
+      billingEntity: {
+        findMany: jest.fn(() =>
+          Promise.resolve([
+            { id: 'ff-entity-id', name: 'FUTURE_FORESIGHT_INTERNATIONAL' },
+            { id: 'ns-entity-id', name: 'NEW_SERVE_LOCAL' },
+          ]),
+        ),
+      },
+      serviceType: {
+        findMany: jest.fn(() =>
+          Promise.resolve([
+            { id: 'hosting-id', name: 'Hosting' },
+            { id: 'domain-id', name: 'Domain' },
+          ]),
+        ),
+      },
+      servicePackage: { findMany: jest.fn(() => Promise.resolve([])) },
+    };
+    const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
+    const encryption = { encrypt: jest.fn(() => 'ciphertext') };
+    const service = new LegacyImportService(
+      prisma as never,
+      encryption as never,
+      audit as never,
+      {} as never,
+    );
+
+    const buffer = multiEntityCanonicalWorkbookFixture();
+    await service.createBatch(
+      { originalname: 'canonical.xlsx', size: buffer.length, buffer },
+      actor,
+    );
+
+    for (const row of createdRows) {
+      expect(row.data.duplicateCandidates).toEqual([]);
+    }
+  });
+
   it('refuses approval while a row still requires manual review', async () => {
     const tx = {
       legacyImportRow: {
@@ -570,12 +1034,7 @@ describe('LegacyImportService', () => {
     const prisma = {
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
-    const service = new LegacyImportService(
-      prisma as never,
-      {} as never,
-      {} as never,
-      {} as never,
-    );
+    const service = new LegacyImportService(prisma as never, {} as never, {} as never, {} as never);
     await expect(service.approveRow('row-id', actor)).rejects.toThrow(
       'must be validated before approval',
     );
@@ -654,7 +1113,10 @@ describe('LegacyImportService', () => {
     const customerRefs = cleanRows.map(
       (row) => (row.data.mappedCustomer as { sourceLegacyReference: string }).sourceLegacyReference,
     );
-    expect(customerRefs[0]).toBe('canonical.xlsx#Customers!CUST-0002');
+    // The reference is Billing-Entity-aware (see the multi-entity tests below): both of
+    // CUST-0002's subscriptions resolve to the same Billing Entity ('entity-id' in this fixture),
+    // so they still share one reference and therefore one customer on approval.
+    expect(customerRefs[0]).toBe('canonical.xlsx#Customers!CUST-0002#BillingEntity!entity-id');
     expect(customerRefs[0]).toBe(customerRefs[1]);
 
     // The canonical sheet gives Start Date / End Date / the renewal interval as typed columns,
