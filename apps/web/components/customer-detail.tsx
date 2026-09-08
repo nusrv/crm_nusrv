@@ -9,6 +9,7 @@ import { CustomerChannelsManager } from './customer-channels-manager';
 import { Modal } from './modal';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
+import { SubscriptionModal } from './subscription-modal';
 
 interface BillingEntity {
   id: string;
@@ -58,6 +59,8 @@ export function CustomerDetail() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [contactFormOpen, setContactFormOpen] = useState(false);
+  const [subscriptionModalOpen, setSubscriptionModalOpen] = useState(false);
+  const [subscriptionModalId, setSubscriptionModalId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setDetail(await apiRequest<Customer>(`/customers/${customerId}`));
@@ -93,6 +96,27 @@ export function CustomerDetail() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Contact save failed.');
     }
+  }
+
+  function openSubscription(id: string) {
+    setSubscriptionModalId(id);
+    setSubscriptionModalOpen(true);
+  }
+
+  function openCreateSubscription() {
+    setSubscriptionModalId(null);
+    setSubscriptionModalOpen(true);
+  }
+
+  function closeSubscriptionModal() {
+    setSubscriptionModalOpen(false);
+    setSubscriptionModalId(null);
+  }
+
+  async function handleSubscriptionSaved() {
+    closeSubscriptionModal();
+    setSuccess('Subscription saved and audited.');
+    await load();
   }
 
   if (!detail) {
@@ -226,30 +250,38 @@ export function CustomerDetail() {
       <section className="panel mt-6">
         <h4 className="font-medium">Subscriptions</h4>
         {canManage && (
-          <Link
-            className="button-small mt-3 inline-block"
-            href={`/dashboard/subscriptions?customerId=${detail.id}`}
-          >
+          <button className="button-small mt-3" onClick={openCreateSubscription} type="button">
             Add another subscription to this customer
-          </Link>
+          </button>
         )}
         <div className="mt-3 space-y-2">
           {detail.subscriptions?.length ? (
             detail.subscriptions.map((subscription) => (
-              <Link
-                className="block rounded-lg border border-[var(--line)] p-3 text-sm transition hover:border-[var(--accent)] hover:bg-[var(--surface)]"
-                href={`/dashboard/subscriptions?edit=${subscription.id}`}
+              <button
+                className="block w-full rounded-lg border border-[var(--line)] p-3 text-left text-sm transition hover:border-[var(--accent)] hover:bg-[var(--surface)]"
                 key={subscription.id}
+                onClick={() => openSubscription(subscription.id)}
+                type="button"
               >
-                {subscription.subscriptionCode} · {subscription.serviceType.name} ·{' '}
+                <strong>{subscription.name}</strong> · {subscription.serviceType.name} ·{' '}
                 {subscription.status} · renews {subscription.renewalDate.slice(0, 10)}
-              </Link>
+                <br />
+                <span className="muted text-xs">{subscription.subscriptionCode}</span>
+              </button>
             ))
           ) : (
             <p className="muted text-sm">No subscriptions.</p>
           )}
         </div>
       </section>
+      {subscriptionModalOpen && (
+        <SubscriptionModal
+          defaultCustomerId={detail.id}
+          onClose={closeSubscriptionModal}
+          onSaved={() => void handleSubscriptionSaved()}
+          subscriptionId={subscriptionModalId}
+        />
+      )}
     </>
   );
 }
