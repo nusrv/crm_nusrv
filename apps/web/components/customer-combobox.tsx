@@ -10,7 +10,7 @@ export interface CustomerComboboxOption {
 }
 
 function optionLabel(option: CustomerComboboxOption) {
-  return `${option.customerCode} · ${option.companyName}`;
+  return option.companyName;
 }
 
 export function CustomerCombobox({
@@ -98,7 +98,7 @@ export function CustomerCombobox({
                 role="option"
                 type="button"
               >
-                <strong>{option.customerCode}</strong> · {option.companyName}
+                <strong>{option.companyName}</strong>
                 {option.primaryEmail && (
                   <>
                     <br />
