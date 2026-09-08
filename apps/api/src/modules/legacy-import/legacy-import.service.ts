@@ -783,11 +783,14 @@ export class LegacyImportService {
       batchId,
       status: query.status,
       sheetName: query.sheetName,
+      // No `mode: 'insensitive'` here: that filter is Postgres/MongoDB-only and Prisma throws a
+      // validation error for it against a mysql datasource. MariaDB's utf8mb4_unicode_ci columns
+      // are already case-insensitive by collation, so a plain `contains` is sufficient.
       ...(search
         ? {
             OR: [
-              { sourceReference: { contains: search, mode: 'insensitive' as const } },
-              { manualReviewReason: { contains: search, mode: 'insensitive' as const } },
+              { sourceReference: { contains: search } },
+              { manualReviewReason: { contains: search } },
             ],
           }
         : {}),

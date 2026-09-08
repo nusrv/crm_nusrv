@@ -12,13 +12,16 @@ export class CommunicationOutboxService {
     const where = {
       status: query.status,
       renewalCaseId: query.renewalCaseId,
+      // No `mode: 'insensitive'` here: that filter is Postgres/MongoDB-only and Prisma throws a
+      // validation error for it against a mysql datasource. MariaDB's utf8mb4_unicode_ci columns
+      // are already case-insensitive by collation, so a plain `contains` is sufficient.
       ...(search
         ? {
             OR: [
-              { recipient: { contains: search, mode: 'insensitive' as const } },
-              { subject: { contains: search, mode: 'insensitive' as const } },
-              { subscription: { name: { contains: search, mode: 'insensitive' as const } } },
-              { customer: { companyName: { contains: search, mode: 'insensitive' as const } } },
+              { recipient: { contains: search } },
+              { subject: { contains: search } },
+              { subscription: { name: { contains: search } } },
+              { customer: { companyName: { contains: search } } },
             ],
           }
         : {}),
