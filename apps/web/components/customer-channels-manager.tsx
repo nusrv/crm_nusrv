@@ -232,6 +232,8 @@ export function CustomerChannelsManager({
             onClose={() => setEmailFormOpen(false)}
             title={editingEmail ? 'Edit email address' : 'Add email address'}
           >
+            <Notice message={error} />
+            <Notice message={message} tone="success" />
             <form
               className="form-grid"
               key={editingEmail?.id ?? 'new-email'}
@@ -333,6 +335,8 @@ export function CustomerChannelsManager({
             onClose={() => setPhoneFormOpen(false)}
             title={editingPhone ? 'Edit phone number' : 'Add phone number'}
           >
+            <Notice message={error} />
+            <Notice message={message} tone="success" />
             <form
               className="form-grid"
               key={editingPhone?.id ?? 'new-phone'}

@@ -93,6 +93,8 @@ export function BillingEntitiesManager() {
           onClose={() => setFormOpen(false)}
           title={editing ? `Edit ${editing.code}` : 'Create Billing Entity'}
         >
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
           <form
             className="form-grid"
             key={editing?.id ?? 'new'}

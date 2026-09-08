@@ -82,6 +82,8 @@ export function ServiceTypesManager() {
           onClose={() => setFormOpen(false)}
           title={editing ? `Edit ${editing.code}` : 'Create Service Type'}
         >
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
           <form
             className="form-grid"
             key={editing?.id ?? 'new'}

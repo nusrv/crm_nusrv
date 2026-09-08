@@ -118,6 +118,8 @@ export function ServicePackagesManager() {
           onClose={() => setFormOpen(false)}
           title={editing ? `Edit ${editing.code}` : 'Create package'}
         >
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
           <form
             className="form-grid"
             key={editing?.id ?? 'new'}

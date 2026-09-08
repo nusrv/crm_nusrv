@@ -210,6 +210,8 @@ export function CustomerDetail() {
         </div>
         {contactFormOpen && (
           <Modal onClose={() => setContactFormOpen(false)} title="Add contact">
+            <Notice message={error} />
+            <Notice message={success} tone="success" />
             <form className="form-grid" onSubmit={(event) => void addContact(event)}>
               <label className="field">
                 <span>Contact role</span>

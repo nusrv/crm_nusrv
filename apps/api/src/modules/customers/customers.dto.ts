@@ -144,10 +144,12 @@ export class CreateCustomerDto {
   secondaryEmail?: string;
 
   @IsOptional()
+  @Transform(({ value }) => (value ? String(value).replace(/[\s()-]/g, '') : undefined))
   @Matches(E164_PHONE)
   phone?: string;
 
   @ValidateIf((input: CreateCustomerDto) => Boolean(input.phone))
+  @Transform(({ value }) => (value ? String(value).replace(/[\s()-]/g, '') : undefined))
   @Matches(COUNTRY_CALLING_CODE)
   phoneCountryCallingCode?: string;
 
@@ -211,10 +213,12 @@ export class UpdateCustomerDto {
   secondaryEmail?: string;
 
   @IsOptional()
+  @Transform(({ value }) => (value ? String(value).replace(/[\s()-]/g, '') : undefined))
   @Matches(E164_PHONE)
   phone?: string;
 
   @IsOptional()
+  @Transform(({ value }) => (value ? String(value).replace(/[\s()-]/g, '') : undefined))
   @Matches(COUNTRY_CALLING_CODE)
   phoneCountryCallingCode?: string;
 

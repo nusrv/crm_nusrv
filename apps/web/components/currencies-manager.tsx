@@ -87,6 +87,8 @@ export function CurrenciesManager() {
           onClose={() => setFormOpen(false)}
           title={editing ? `Edit ${editing.code}` : 'Add supported currency'}
         >
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
           <form className="form-grid" key={editing?.code ?? 'new'} onSubmit={save}>
             <Field
               label="ISO currency code"

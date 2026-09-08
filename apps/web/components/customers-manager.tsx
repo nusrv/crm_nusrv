@@ -272,6 +272,8 @@ export function CustomersManager() {
           onClose={() => setFormOpen(false)}
           title={editing ? `Edit ${editing.companyName}` : 'Create customer'}
         >
+          <Notice message={error} />
+          <Notice message={success} tone="success" />
           {editing && <p className="muted mb-4 text-xs">Code: {editing.customerCode}</p>}
           <form
             className="form-grid"
