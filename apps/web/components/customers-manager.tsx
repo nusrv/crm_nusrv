@@ -270,8 +270,9 @@ export function CustomersManager() {
       {formOpen && (
         <Modal
           onClose={() => setFormOpen(false)}
-          title={editing ? `Edit ${editing.customerCode}` : 'Create customer'}
+          title={editing ? `Edit ${editing.companyName}` : 'Create customer'}
         >
+          {editing && <p className="muted mb-4 text-xs">Code: {editing.customerCode}</p>}
           <form
             className="form-grid"
             key={editing?.id ?? 'new'}
@@ -409,7 +410,6 @@ export function CustomersManager() {
                     />
                   </th>
                 )}
-                <th>Code</th>
                 <th>Company</th>
                 <th>Email / phone</th>
                 <th>Billing Entity</th>
@@ -431,7 +431,6 @@ export function CustomersManager() {
                       />
                     </td>
                   )}
-                  <td>{customer.customerCode}</td>
                   <td>
                     <Link className="table-link" href={`/dashboard/customers/${customer.id}`}>
                       {customer.companyName}
