@@ -1056,3 +1056,37 @@ couldn't surface without live access. Asked the owner directly what "not working
 (blank page, error message, wrong/missing data, or something else) before changing any renewal
 logic — this is business-critical and a wrong guess here would be costly. **Next session: read
 their answer first, do not re-guess.**
+
+## Resolved — Renewals page crash root-caused and fixed (commit `8283162`)
+
+The owner came back with the actual browser error: `Uncaught TypeError: Cannot read properties of
+undefined (reading 'map')`, and had already root-caused it themselves by inspecting the contract —
+correctly. `renewal-cases-manager.tsx` called `apiRequest<PageResult<ServiceTypeOption>>('/service-types?pageSize=100')`
+and then read `.data`, but `GET /service-types` (`ServiceTypesService.list()` →
+`prisma.serviceType.findMany()`, no `@Query()` DTO on the controller, no pagination) returns a
+**plain array**, unlike `/renewal-cases` and `/communication-outbox` (both genuinely paginated
+`{ data, meta }`, verified). `apiRequest<T>()` does a blind `as T` cast with zero runtime
+validation, so the wrong generic type produced `serviceTypeResult.data === undefined` silently at
+the network layer — the crash only surfaced later, at `serviceTypes.map(...)` during render.
+`subscriptions-manager.tsx` already called the same endpoint correctly
+(`apiRequest<ServiceTypeOption[]>('/service-types')`) — that's how the owner found the mismatch.
+
+This retroactively explains the original "not working from the beginning" / "whole tab blank or
+browser error" report from a few updates ago: this was **not** the migration-not-applied hypothesis
+from that investigation (this bug predates the bilingual-name work entirely and is unrelated to it)
+— it was this exact contract mismatch, present since whenever the Service Type filter was first
+wired into this specific component.
+
+Fixed: corrected the call and its consumption to the real contract, and added a defensive `?? []`
+fallback on all three array-typed `setX(...)` calls in this component (cases, outbox, service
+types) so a future contract drift of the same kind degrades to an empty list instead of crashing
+the page. `apps/web` has **no test runner configured at all** (no Jest/RTL/Vitest, no `test` script
+in its `package.json`) — introducing one just for this one regression check would be well beyond a
+focused fix, so instead added the practical equivalent on the API side: a new
+`service-types.service.spec.ts` pinning `ServiceTypesService.list()`'s actual contract (plain
+array, not `{ data, meta }`), so an accidental future change to that shape is caught immediately
+rather than silently reaching a consumer again.
+
+Verified: strict typecheck, lint, 187 tests / 46 suites, web production build. **Not yet tested by
+the owner in the browser** — this was diagnosed and fixed from the reported error text and a static
+read of the actual contract, not reproduced live.

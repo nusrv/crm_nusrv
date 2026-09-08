@@ -501,20 +501,24 @@ selected Service Type), Billing Entity (via the customer relation), and Currency
 "Clear filters" button, matching the filter-bar pattern already used on Renewal Cases. Verified:
 strict typecheck, lint, 186 tests / 45 suites, both production builds. **Not yet deployed.**
 
-## Open — Renewals page reported as "not working from the beginning"
+## Resolved — Renewals page crash (commit `8283162`)
 
-Investigated thoroughly (routing, RBAC, controller, `RenewalCasesService.list()`'s query, and
-`BusinessTimeService`'s date math) with no crash-causing bug found by static reading. Leading
-hypotheses, most likely first: the worker process (`customer-cp-worker`, separate from the API
-process) that actually creates `RenewalCase` rows may never have been running on the server, so the
-daily cron job (registered, `0 5 0 * * *`) queued but never executed; or it does run but no
-subscription has yet entered its reminder window (cases are only created once a subscription's
-`renewalDate` is within ~30 days), which looks identical to "broken" but is by design; or a runtime
-error only visible live that static code reading can't surface. Also worth noting: the only manual
-"run evaluation now" trigger in the UI lives on the ADMIN-only Renewal Settings page, not on
-Renewals itself — easy to have never found. Asked the owner what "not working" actually looks like
-before touching this business-critical logic. See `SESSION_HANDOFF_2026-08-29.md` for the full
-diagnostic notes — read the owner's answer first next session, don't re-guess.
+The reported "not working from the beginning" was an actual browser crash: `Uncaught TypeError:
+Cannot read properties of undefined (reading 'map')`. Root cause: `renewal-cases-manager.tsx`
+called `GET /service-types` expecting a paginated `{ data, meta }` response (like `/renewal-cases`
+and `/communication-outbox`, which genuinely are paginated) and read `.data`, but that endpoint
+returns a **plain array** — `apiRequest<T>()` has no runtime validation, so the wrong generic type
+silently produced `undefined`, and the crash only surfaced later at `.map()` in render.
+`subscriptions-manager.tsx` already called the same endpoint correctly, which is how the owner
+found the mismatch. Fixed the call/consumption, and added a defensive `?? []` fallback on all three
+array-typed state setters in that component. `apps/web` has no test runner configured at all, so
+instead of introducing one, added an API-side contract test pinning `/service-types`'s actual
+(unpaginated) response shape. Verified: strict typecheck, lint, 187 tests / 46 suites, web
+production build. Not yet confirmed fixed by the owner in the browser.
+
+This was unrelated to the bilingual-name/migration work from a few updates ago — that "not yet
+migrated" hypothesis was reasonable given the evidence at the time but wasn't the actual cause;
+this bug predates that work entirely.
 
 ## Staging CAPTCHA deployment patch
 
