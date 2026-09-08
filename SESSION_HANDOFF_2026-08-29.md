@@ -732,3 +732,36 @@ dropdown result and reused it as the label left in the input after selecting a c
 secondary line for telling apart similarly-named customers (the original reason the code was shown
 there at all). Commit `4ab9873`. No backend change. Verified: strict typecheck, lint, web
 production build.
+
+## Update — 2026-09-08 customer phone validation, and errors hidden behind every edit popup
+
+The owner couldn't create a new customer: "phone must match /^\+[1-9]\d{7,14}$/ regular expression"
+and — separately — the error wasn't visible on the Create Customer popup at all, only on the
+Customers list page behind it.
+
+**Root cause 1 (real validation bug).** `CreateCustomerDto`/`UpdateCustomerDto`'s `phone` and
+`phoneCountryCallingCode` fields had no normalization `@Transform` before their strict E.164/
+calling-code regex checks — unlike the newer `CustomerPhoneNumber` DTOs (added in the earlier
+contact-channels work), which already strip spaces, dashes, and parentheses first. Typing a phone
+with any ordinary formatting (e.g. `+962 79 000 0000`, very natural to type) failed validation even
+though the number itself was valid. Added the same `.replace(/[\s()-]/g, '')` transform used
+elsewhere, to both DTOs, both fields.
+
+**Root cause 2 (the exact bug already fixed once, but not everywhere).** The validation error - and
+every error/success message set while any `Modal`-based edit form is open - rendered at the page
+level, behind the Modal's opaque backdrop, invisible. This is the identical bug already fixed for
+the Legacy Import row-inspector popup back in the 2026-09-03 update, and it was accounted for from
+the start when `SubscriptionModal` was built two updates ago — but it was never applied to the
+other 8 `Modal` conversions from the original UI/UX overhaul: Customers, Currencies, Billing
+Entities, Service Types, Package Catalog, Technical Connections, the customer detail page's "Add
+contact" popup, and both contact-channel (email/phone) popups. All eight now also render their
+page's `<Notice>` components inside the `Modal` itself, matching the established pattern.
+
+Commit `3a880fe`. Verified via the local mirror: Prisma generate, strict typecheck, lint, 161 tests
+/ 42 suites (unaffected by the phone transform), and both production builds all pass. Not yet
+deployed or tested by the owner.
+
+**Note for future sessions**: whenever a new `Modal`-based form is added anywhere in this app, its
+page-level error/success `<Notice>` components must also be duplicated inside the `Modal` itself -
+the Modal is a full-screen overlay and will otherwise silently hide them. This has now been missed
+twice; check for it explicitly when reviewing any new Modal usage.

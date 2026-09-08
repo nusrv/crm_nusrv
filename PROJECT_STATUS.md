@@ -371,6 +371,30 @@ keeping `primaryEmail` as the secondary disambiguating line (the original reason
 there). Commit `4ab9873`. No backend change. Verified: strict typecheck, lint, web production
 build.
 
+## Customer phone validation and errors hidden behind every edit popup
+
+Two bugs reported together: creating a customer failed with a phone regex error, and separately the
+error wasn't visible on the Create Customer popup at all — only on the page behind it.
+
+**Validation bug**: `CreateCustomerDto`/`UpdateCustomerDto`'s `phone` and
+`phoneCountryCallingCode` fields had no normalization `@Transform` before their strict regex
+checks, unlike the newer `CustomerPhoneNumber` DTOs which already strip spaces/dashes/parentheses.
+Typing a phone with ordinary formatting (e.g. `+962 79 000 0000`) failed even though the number was
+valid. Added the same transform used elsewhere to both DTOs, both fields.
+
+**Hidden-error bug**: the same bug already fixed once for the Legacy Import row-inspector popup —
+error/success `<Notice>` components rendered at the page level, behind the `Modal`'s opaque
+backdrop, invisible while any Modal-based form was open. `SubscriptionModal` accounted for this
+from the start, but it was never applied to the other 8 `Modal` conversions from the original UI/UX
+overhaul (Customers, Currencies, Billing Entities, Service Types, Package Catalog, Technical
+Connections, the customer detail "Add contact" popup, both contact-channel popups). All eight now
+also render `<Notice>` inside the `Modal` itself.
+
+Commit `3a880fe`. Verified: Prisma generate, strict typecheck, lint, 161 tests / 42 suites, both
+production builds. Not yet deployed or tested by the owner. **Note for future work**: any new
+`Modal`-based form must duplicate its page's error/success `<Notice>` inside the `Modal` — this has
+now been missed twice.
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then
