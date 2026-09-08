@@ -120,14 +120,18 @@ export class CustomerListQueryDto extends PageQueryDto {
 }
 
 export class CreateCustomerDto {
-  @Transform(({ value }) => String(value).trim().toUpperCase())
-  @IsString()
-  @Length(2, 50)
-  customerCode!: string;
+  // customerCode is never accepted from the client: CustomerCodeService generates it from the
+  // Billing Entity's prefix and its own sequence at create time.
 
+  @IsOptional()
   @IsString()
-  @Length(2, 250)
-  companyName!: string;
+  @MaxLength(191)
+  nameEn?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  nameAr?: string;
 
   @IsOptional()
   @IsString()
@@ -192,10 +196,18 @@ export class CreateCustomerDto {
 }
 
 export class UpdateCustomerDto {
+  // customerCode is immutable after creation: it is intentionally absent from this DTO and never
+  // accepted on update, regardless of any other field (including billingEntityId) changing.
+
   @IsOptional()
   @IsString()
-  @Length(2, 250)
-  companyName?: string;
+  @MaxLength(191)
+  nameEn?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  nameAr?: string;
 
   @IsOptional()
   @IsString()

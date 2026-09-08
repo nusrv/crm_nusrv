@@ -2,6 +2,7 @@ export function billingEntityFixture(overrides: Record<string, unknown> = {}) {
   return {
     id: '10000000-0000-4000-8000-000000000001',
     code: 'TEST_LOCAL',
+    customerCodePrefix: 'TL',
     name: 'Test Local Billing Entity',
     legalName: 'Test Local Billing Entity',
     paymentScope: 'LOCAL' as const,
@@ -15,7 +16,8 @@ export function customerFixture(overrides: Record<string, unknown> = {}) {
     id: '20000000-0000-4000-8000-000000000001',
     billingEntityId: '10000000-0000-4000-8000-000000000001',
     customerCode: 'CUS-TEST-001',
-    companyName: 'Example Customer',
+    nameEn: 'Example Customer',
+    nameAr: null,
     primaryEmail: 'billing@example.test',
     ...overrides,
   };

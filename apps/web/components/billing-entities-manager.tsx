@@ -10,6 +10,7 @@ import { PageHeading } from './page-heading';
 interface BillingEntity {
   id: string;
   code: string;
+  customerCodePrefix: string;
   name: string;
   legalName: string;
   paymentScope: 'LOCAL' | 'INTERNATIONAL';
@@ -42,7 +43,7 @@ export function BillingEntitiesManager() {
     const form = new FormData(event.currentTarget);
     const value = (name: string) => String(form.get(name) ?? '').trim();
     const body = {
-      ...(editing ? {} : { code: value('code') }),
+      ...(editing ? {} : { code: value('code'), customerCodePrefix: value('customerCodePrefix') }),
       name: value('name'),
       legalName: value('legalName'),
       paymentScope: value('paymentScope'),
@@ -105,6 +106,13 @@ export function BillingEntitiesManager() {
             onSubmit={(event) => void save(event)}
           >
             {!editing && <Field label="System code" name="code" required />}
+            {!editing && (
+              <Field
+                label="Customer code prefix (e.g. FF, NS)"
+                name="customerCodePrefix"
+                required
+              />
+            )}
             <Field label="Display name" name="name" required value={editing?.name} />
             <Field label="Legal name" name="legalName" required value={editing?.legalName} />
             <label className="field">
@@ -148,6 +156,7 @@ export function BillingEntitiesManager() {
           <thead>
             <tr>
               <th>Code</th>
+              <th>Prefix</th>
               <th>Name</th>
               <th>Scope</th>
               <th>Customers</th>
@@ -159,6 +168,7 @@ export function BillingEntitiesManager() {
             {items.map((item) => (
               <tr key={item.id}>
                 <td>{item.code}</td>
+                <td>{item.customerCodePrefix}</td>
                 <td>
                   {item.name}
                   <br />

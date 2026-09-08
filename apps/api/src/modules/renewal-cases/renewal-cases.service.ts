@@ -24,7 +24,8 @@ const renewalCaseInclude = {
         select: {
           id: true,
           customerCode: true,
-          companyName: true,
+          nameEn: true,
+          nameAr: true,
           primaryEmail: true,
           billingEntity: { select: { id: true, code: true, name: true } },
         },
@@ -75,7 +76,8 @@ export class RenewalCasesService {
               OR: [
                 { subscriptionCode: { contains: search } },
                 { name: { contains: search } },
-                { customer: { companyName: { contains: search } } },
+                { customer: { nameEn: { contains: search } } },
+                { customer: { nameAr: { contains: search } } },
               ],
             }
           : {}),

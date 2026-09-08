@@ -191,9 +191,19 @@ export class LegacyPhoneChannelMappingDto {
 }
 
 export class LegacyCustomerMappingDto {
+  // At least one of nameEn/nameAr is required — enforced in LegacyImportService.validateReview()
+  // for CREATE_NEW/NOT_DUPLICATE rows (there is no clean class-validator way to express "at least
+  // one of two optional sibling fields", and this codebase's convention is to do such cross-field
+  // checks in the service, same as the phone/calling-code and duplicate-email checks elsewhere).
+  @IsOptional()
   @IsString()
-  @Length(2, 250)
-  companyName!: string;
+  @MaxLength(191)
+  nameEn?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  nameAr?: string;
 
   @IsOptional()
   @IsString()

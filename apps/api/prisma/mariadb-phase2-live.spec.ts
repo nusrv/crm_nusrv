@@ -118,6 +118,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
       await prisma.billingEntity.create({
         data: {
           code: 'PHASE2_ENTITY',
+          customerCodePrefix: 'P2',
           name: 'Phase 2 Entity',
           legalName: 'Phase 2 Entity LLC',
           paymentScope: PaymentScope.LOCAL,
@@ -129,7 +130,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
         data: {
           billingEntityId,
           customerCode: 'PHASE2_CUSTOMER',
-          companyName: 'Phase 2 Customer',
+          nameEn: 'Phase 2 Customer',
           contactName: 'Renewal Contact',
           primaryEmail: 'customer@example.test',
           status: CustomerStatus.ACTIVE,

@@ -3,12 +3,14 @@ import type { RoleCode } from '@cp/shared';
 export const billingEntitySeeds = [
   {
     code: 'NEW_SERVE_LOCAL',
+    customerCodePrefix: 'NS',
     name: 'New Serve for Digital Data Transformation',
     legalName: 'New Serve for Digital Data Transformation',
     paymentScope: 'LOCAL' as const,
   },
   {
     code: 'FUTURE_FORESIGHT_INTERNATIONAL',
+    customerCodePrefix: 'FF',
     name: 'Future foresight for Digital Data Transformation',
     legalName: 'Future foresight for Digital Data Transformation',
     paymentScope: 'INTERNATIONAL' as const,

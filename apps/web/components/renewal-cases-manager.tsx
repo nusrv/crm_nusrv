@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
+import { customerDisplayName } from '../lib/customer-name';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 import { useControlPanel } from './app-shell';
@@ -23,7 +24,7 @@ interface RenewalCase {
     id: string;
     subscriptionCode: string;
     name: string;
-    customer: { companyName: string };
+    customer: { nameEn: string | null; nameAr: string | null };
     serviceType: { name: string };
   };
   holds: RenewalHold[];
@@ -43,7 +44,7 @@ interface OutboxMessage {
   daysBeforeDue: number;
   status: string;
   queuedAt: string;
-  customer: { companyName: string };
+  customer: { nameEn: string | null; nameAr: string | null };
   subscription: { name: string };
 }
 
@@ -231,7 +232,9 @@ export function RenewalCasesManager() {
                 <tr key={renewalCase.id}>
                   <td>{renewalCase.dueDate.slice(0, 10)}</td>
                   <td>
-                    <p className="font-medium">{renewalCase.subscription.customer.companyName}</p>
+                    <p className="font-medium">
+                      {customerDisplayName(renewalCase.subscription.customer)}
+                    </p>
                     <p className="text-xs text-[var(--muted)]">{renewalCase.subscription.name}</p>
                   </td>
                   <td>{renewalCase.subscription.serviceType.name}</td>
@@ -289,7 +292,7 @@ export function RenewalCasesManager() {
                 <td>{new Date(message.queuedAt).toLocaleString()}</td>
                 <td>{message.audience}</td>
                 <td>
-                  {message.customer.companyName}
+                  {customerDisplayName(message.customer)}
                   <br />
                   <span className="text-xs text-[var(--muted)]">{message.subscription.name}</span>
                 </td>

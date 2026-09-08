@@ -230,7 +230,12 @@ describe('LegacyImportService', () => {
         }>
       >(() => Promise.resolve({ id: 'audit-id' })),
     };
-    const service = new LegacyImportService(prisma as never, {} as never, audit as never);
+    const service = new LegacyImportService(
+      prisma as never,
+      {} as never,
+      audit as never,
+      {} as never,
+    );
 
     const first = await service.createBatch(
       { originalname: 'dated.xlsx', size: buffer.length, buffer },
@@ -288,7 +293,12 @@ describe('LegacyImportService', () => {
         ) => Promise<{ id: string }>
       >(() => Promise.resolve({ id: 'audit-id' })),
     };
-    const service = new LegacyImportService(prisma as never, {} as never, audit as never);
+    const service = new LegacyImportService(
+      prisma as never,
+      {} as never,
+      audit as never,
+      {} as never,
+    );
 
     await expect(service.deleteBatch('batch-id', actor)).resolves.toEqual({
       id: 'batch-id',
@@ -331,7 +341,12 @@ describe('LegacyImportService', () => {
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const audit = { record: jest.fn() };
-    const service = new LegacyImportService(prisma as never, {} as never, audit as never);
+    const service = new LegacyImportService(
+      prisma as never,
+      {} as never,
+      audit as never,
+      {} as never,
+    );
 
     await expect(service.deleteBatch('batch-id', actor)).rejects.toThrow(
       'contains approved or live-linked records',
@@ -350,7 +365,7 @@ describe('LegacyImportService', () => {
       customerResolution: LegacyCustomerResolution.CREATE_NEW,
       candidateCustomerId: null,
       mappedCustomer: {
-        companyName: 'Legacy Customer',
+        nameEn: 'Legacy Customer',
         primaryEmail: 'legacy@example.test',
         billingEntityId: 'entity-id',
         preferredLanguage: 'en',
@@ -377,7 +392,7 @@ describe('LegacyImportService', () => {
       approvedCustomerId: 'customer-id',
       subscriptionLinks: [{ subscription: { id: 'subscription-id' } }],
     };
-    const customer = { id: 'customer-id', companyName: 'Legacy Customer' };
+    const customer = { id: 'customer-id', nameEn: 'Legacy Customer' };
     const subscription = { id: 'subscription-id', name: 'Legacy Hosting' };
     const rateToJod = { mul: jest.fn(() => ({ toDecimalPlaces: () => '100.000' })) };
     const tx = {
@@ -419,7 +434,13 @@ describe('LegacyImportService', () => {
         () => Promise.resolve({ id: 'audit-id' }),
       ),
     };
-    const service = new LegacyImportService(prisma as never, {} as never, audit as never);
+    const customerCode = { next: jest.fn(() => Promise.resolve('CUS-001')) };
+    const service = new LegacyImportService(
+      prisma as never,
+      {} as never,
+      audit as never,
+      customerCode,
+    );
 
     const first = await service.approveRow('row-id', actor);
     const second = await service.approveRow('row-id', actor);
@@ -450,7 +471,7 @@ describe('LegacyImportService', () => {
       customerResolution: LegacyCustomerResolution.CREATE_NEW,
       candidateCustomerId: null,
       mappedCustomer: {
-        companyName: 'Canonical Customer',
+        nameEn: 'Canonical Customer',
         primaryEmail: 'canonical@example.test',
         billingEntityId: 'entity-id',
         preferredLanguage: 'en',
@@ -518,7 +539,13 @@ describe('LegacyImportService', () => {
       legacyImportBatch: { update: jest.fn(() => Promise.resolve({ id: 'batch-id' })) },
     };
     const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
-    const service = new LegacyImportService(prisma as never, {} as never, audit as never);
+    const customerCode = { next: jest.fn(() => Promise.resolve('CUS-002')) };
+    const service = new LegacyImportService(
+      prisma as never,
+      {} as never,
+      audit as never,
+      customerCode,
+    );
 
     const first = await service.approveRow('row-a', actor);
     const second = await service.approveRow('row-b', actor);
@@ -543,7 +570,12 @@ describe('LegacyImportService', () => {
     const prisma = {
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
-    const service = new LegacyImportService(prisma as never, {} as never, {} as never);
+    const service = new LegacyImportService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
     await expect(service.approveRow('row-id', actor)).rejects.toThrow(
       'must be validated before approval',
     );
@@ -553,7 +585,9 @@ describe('LegacyImportService', () => {
     const existingCustomer = {
       id: 'existing-customer-id',
       customerCode: 'CUS-001',
-      companyName: 'Existing Customer',
+      nameEn: 'Existing Customer',
+      nameAr: null,
+      billingEntityId: 'entity-id',
       primaryEmail: 'dup@example.test',
       secondaryEmail: null,
       phone: null,
@@ -588,7 +622,12 @@ describe('LegacyImportService', () => {
     };
     const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
     const encryption = { encrypt: jest.fn(() => 'ciphertext') };
-    const service = new LegacyImportService(prisma as never, encryption as never, audit as never);
+    const service = new LegacyImportService(
+      prisma as never,
+      encryption as never,
+      audit as never,
+      {} as never,
+    );
 
     const buffer = canonicalWorkbookFixture();
     const result = await service.createBatch(

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
+import { customerCombinedLabel } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
 import { CustomerCombobox } from './customer-combobox';
 import type { CurrencyOption } from './currencies-manager';
@@ -20,7 +21,8 @@ interface Batch {
 interface DuplicateCandidate {
   customerId: string;
   customerCode: string;
-  companyName: string;
+  nameEn: string | null;
+  nameAr: string | null;
   reasons: string[];
   score: number;
 }
@@ -37,7 +39,8 @@ interface BillingEntity {
 interface CustomerOption {
   id: string;
   customerCode: string;
-  companyName: string;
+  nameEn?: string | null;
+  nameAr?: string | null;
   primaryEmail?: string | null;
 }
 interface PackageOption {
@@ -49,7 +52,8 @@ interface PackageOption {
   specifications: Record<string, unknown> | null;
 }
 interface CustomerDraft {
-  companyName?: string;
+  nameEn?: string;
+  nameAr?: string;
   contactName?: string;
   primaryEmail?: string;
   secondaryEmail?: string;
@@ -117,7 +121,7 @@ interface ImportRow {
   customerResolution: string | null;
   candidateCustomerId: string | null;
   manualReviewReason: string | null;
-  approvedCustomer?: { customerCode: string; companyName: string } | null;
+  approvedCustomer?: { customerCode: string; nameEn: string | null; nameAr: string | null } | null;
   subscriptionLinks: Array<{ subscription: { subscriptionCode: string; name: string } }>;
 }
 
@@ -243,7 +247,7 @@ export function LegacyImportManager() {
       (item) => item.customerId === row.candidateCustomerId,
     );
     setCandidateCustomerLabel(
-      candidate ? `${candidate.customerCode} · ${candidate.companyName}` : '',
+      candidate ? `${candidate.customerCode} · ${customerCombinedLabel(candidate)}` : '',
     );
     setCustomerSearch('');
   }
@@ -479,7 +483,10 @@ export function LegacyImportManager() {
                           <td>
                             {row.sheetName}!{row.sourceRowNumber}
                           </td>
-                          <td>{row.mappedCustomer?.companyName ?? 'Unmapped'}</td>
+                          <td>
+                            {(row.mappedCustomer && customerCombinedLabel(row.mappedCustomer)) ||
+                              'Unmapped'}
+                          </td>
                           <td>
                             {primarySubscription?.startDate?.slice(0, 10) ?? '—'} →{' '}
                             {primarySubscription?.renewalDate?.slice(0, 10) ?? '—'}
@@ -577,7 +584,7 @@ export function LegacyImportManager() {
                   <strong>Duplicate suggestions — no automatic merge</strong>
                   {editing.duplicateCandidates.map((item) => (
                     <p className="mt-2 text-sm" key={item.customerId}>
-                      {item.customerCode} · {item.companyName}
+                      {item.customerCode} · {customerCombinedLabel(item)}
                       <br />
                       {item.reasons.join(', ')}
                     </p>
@@ -632,11 +639,18 @@ export function LegacyImportManager() {
                     ) : (
                       <>
                         <Text
-                          label="Company name"
-                          required
-                          value={customer.companyName}
-                          onChange={(value) => setCustomer({ ...customer, companyName: value })}
+                          label="Customer Name (English)"
+                          value={customer.nameEn}
+                          onChange={(value) => setCustomer({ ...customer, nameEn: value })}
                         />
+                        <Text
+                          label="Customer Name (Arabic)"
+                          value={customer.nameAr}
+                          onChange={(value) => setCustomer({ ...customer, nameAr: value })}
+                        />
+                        <p className="muted field-wide text-xs">
+                          At least one of English or Arabic name is required.
+                        </p>
                         <Text
                           label="Contact name"
                           value={customer.contactName}
@@ -923,7 +937,7 @@ export function LegacyImportManager() {
                   <strong>{editing.status}</strong>
                   <p className="mt-2 text-sm">
                     {editing.approvedCustomer
-                      ? `${editing.approvedCustomer.customerCode} · ${editing.approvedCustomer.companyName}`
+                      ? `${editing.approvedCustomer.customerCode} · ${customerCombinedLabel(editing.approvedCustomer)}`
                       : 'Read-only for your role or row status.'}
                   </p>
                   {editing.subscriptionLinks.map((link) => (

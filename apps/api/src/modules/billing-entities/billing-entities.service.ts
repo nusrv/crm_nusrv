@@ -9,6 +9,7 @@ import type { CreateBillingEntityDto, UpdateBillingEntityDto } from './billing-e
 const safeSelect = {
   id: true,
   code: true,
+  customerCodePrefix: true,
   name: true,
   legalName: true,
   paymentScope: true,
@@ -45,6 +46,11 @@ export class BillingEntitiesService {
     try {
       return await this.prisma.$transaction(async (tx) => {
         const entity = await tx.billingEntity.create({ data: input, select: safeSelect });
+        // Pre-create the sequence row here rather than relying solely on CustomerCodeService's
+        // upsert-on-first-use: it closes the (extremely unlikely, but real) race where the very
+        // first two customers under a brand-new Billing Entity are created concurrently before
+        // any sequence row exists for it.
+        await tx.customerCodeSequence.create({ data: { billingEntityId: entity.id } });
         await this.audit.record(
           {
             actorType: ActorType.USER,

@@ -5,7 +5,8 @@ import { pageMetadata } from '../../common/page-query.dto';
 import { throwMappedPrismaError } from '../../common/prisma-errors';
 import { PrismaService } from '../../database/prisma.service';
 import type { Prisma } from '../../generated/prisma/client';
-import { ActorType, CustomerStatus } from '../../generated/prisma/enums';
+import { ActorType, CustomerStatus, SubscriptionStatus } from '../../generated/prisma/enums';
+import { CustomerCodeService } from './customer-code.service';
 import type {
   CreateCustomerContactDto,
   CreateCustomerDto,
@@ -25,6 +26,7 @@ export class CustomersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly customerCode: CustomerCodeService,
   ) {}
 
   async list(query: CustomerListQueryDto) {
@@ -39,7 +41,8 @@ export class CustomersService {
         ? {
             OR: [
               { customerCode: { contains: search } },
-              { companyName: { contains: search } },
+              { nameEn: { contains: search } },
+              { nameAr: { contains: search } },
               { primaryEmail: { contains: search } },
               { phone: { contains: search } },
             ],
@@ -88,12 +91,19 @@ export class CustomersService {
     if (input.secondaryEmail && input.secondaryEmail === input.primaryEmail) {
       throw new BadRequestException('Secondary email must be different from the primary email.');
     }
+    if (!input.nameEn?.trim() && !input.nameAr?.trim()) {
+      throw new BadRequestException(
+        'Provide a Customer Name in English, Arabic, or both — it cannot be empty in both languages.',
+      );
+    }
     try {
       return await this.prisma.$transaction(async (tx) => {
         const sourceSequence = await this.nextSourceSequence(tx);
+        const customerCode = await this.customerCode.next(tx, input.billingEntityId);
         const customer = await tx.customer.create({
           data: {
             ...customerData,
+            customerCode,
             sourceSequence,
             emailAddresses: {
               create: [
@@ -171,6 +181,23 @@ export class CustomersService {
     ) {
       throw new BadRequestException('Phone must start with its country calling code.');
     }
+    const effectiveNameEn = input.nameEn !== undefined ? input.nameEn : oldState.nameEn;
+    const effectiveNameAr = input.nameAr !== undefined ? input.nameAr : oldState.nameAr;
+    if (!effectiveNameEn?.trim() && !effectiveNameAr?.trim()) {
+      throw new BadRequestException(
+        'Provide a Customer Name in English, Arabic, or both — it cannot be empty in both languages.',
+      );
+    }
+    // A customer becoming INACTIVE — through this generic edit form or the dedicated /deactivate
+    // endpoint, which just calls this method — must suspend every one of its currently ACTIVE
+    // subscriptions so they immediately stop generating renewal reminders (enforced independently
+    // and defensively by the renewal engine's own query, not only by this cascade). Reactivating a
+    // customer intentionally does NOT reverse this: a subscription may have been suspended for an
+    // unrelated reason before the customer was deactivated, so blindly restoring everything to
+    // ACTIVE on reactivation could wrongly reactivate a subscription that should stay suspended.
+    // Subscription reactivation remains a deliberate, individual, manual action.
+    const suspendingSubscriptions =
+      input.status === CustomerStatus.INACTIVE && oldState.status !== CustomerStatus.INACTIVE;
     try {
       return await this.prisma.$transaction(async (tx) => {
         const customer = await tx.customer.update({
@@ -178,6 +205,12 @@ export class CustomersService {
           data: customerData,
           include: customerInclude,
         });
+        const suspended = suspendingSubscriptions
+          ? await tx.subscription.updateMany({
+              where: { customerId: id, status: SubscriptionStatus.ACTIVE },
+              data: { status: SubscriptionStatus.SUSPENDED },
+            })
+          : null;
         const eventKey =
           input.status && input.status !== oldState.status
             ? 'customer.status_changed'
@@ -191,6 +224,7 @@ export class CustomersService {
             subjectId: customer.id,
             oldState,
             newState: customer,
+            metadata: suspended ? { subscriptionsSuspended: suspended.count } : undefined,
             ipAddress: context.ipAddress,
           },
           tx,
@@ -269,7 +303,7 @@ export class CustomersService {
     return this.prisma.$transaction(async (tx) => {
       const customer = await tx.customer.findUnique({
         where: { id },
-        select: { id: true, customerCode: true, companyName: true },
+        select: { id: true, customerCode: true, nameEn: true, nameAr: true },
       });
       if (!customer) throw new NotFoundException('Customer not found.');
 

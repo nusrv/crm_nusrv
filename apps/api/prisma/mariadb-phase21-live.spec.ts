@@ -76,6 +76,7 @@ liveDescribe('Phase 2.1 MariaDB operational data integration', () => {
     const billingEntity = await prisma.billingEntity.create({
       data: {
         code: `P21-${randomUUID()}`,
+        customerCodePrefix: `P${randomUUID().slice(0, 3).toUpperCase()}`,
         name: 'P21',
         legalName: 'P21',
         paymentScope: PaymentScope.LOCAL,
@@ -85,7 +86,7 @@ liveDescribe('Phase 2.1 MariaDB operational data integration', () => {
       data: {
         billingEntityId: billingEntity.id,
         customerCode: `P21-C-${randomUUID()}`,
-        companyName: 'P21 Customer',
+        nameEn: 'P21 Customer',
         primaryEmail: `${randomUUID()}@example.test`,
         contacts: {
           create: {

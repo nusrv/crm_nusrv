@@ -84,6 +84,7 @@ liveDescribe('MariaDB zero migration and Prisma integration', () => {
       await prisma.billingEntity.create({
         data: {
           code: `BE-${randomUUID()}`,
+          customerCodePrefix: `T${randomUUID().slice(0, 3).toUpperCase()}`,
           name: 'MariaDB Test Entity',
           legalName: 'MariaDB Test Entity LLC',
           paymentScope: PaymentScope.LOCAL,
@@ -105,7 +106,7 @@ liveDescribe('MariaDB zero migration and Prisma integration', () => {
       data: {
         billingEntityId,
         customerCode: `CUST-${randomUUID()}`,
-        companyName: 'MariaDB Customer',
+        nameEn: 'MariaDB Customer',
         primaryEmail: `customer-${randomUUID()}@example.test`,
         status: CustomerStatus.ACTIVE,
       },
@@ -185,7 +186,7 @@ liveDescribe('MariaDB zero migration and Prisma integration', () => {
         data: {
           billingEntityId: randomUUID(),
           customerCode: `INVALID-${randomUUID()}`,
-          companyName: 'Invalid relation',
+          nameEn: 'Invalid relation',
           primaryEmail: 'invalid@example.test',
         },
       }),
@@ -259,7 +260,7 @@ liveDescribe('MariaDB zero migration and Prisma integration', () => {
         rowFingerprint: randomUUID().replaceAll('-', ''),
         rawValuesCiphertext: 'encrypted-raw-source-values',
         rawPreview: { company: 'Imported Customer', amount: '42.500' },
-        mappedCustomer: { companyName: 'Imported Customer' },
+        mappedCustomer: { nameEn: 'Imported Customer' },
         mappedSubscriptions: [{ serviceType: 'Hosting' }],
         duplicateCandidates: [],
         validationIssues: [],
@@ -278,7 +279,7 @@ liveDescribe('MariaDB zero migration and Prisma integration', () => {
         data: {
           billingEntityId,
           customerCode: `IMPORT-CUST-${randomUUID()}`,
-          companyName: 'Imported Customer',
+          nameEn: 'Imported Customer',
           primaryEmail: `import-${randomUUID()}@example.test`,
           sourceLegacyReference: row.sourceReference,
         },

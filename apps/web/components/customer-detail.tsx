@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { apiRequest } from '../lib/api';
+import { customerCombinedLabel } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
 import { CustomerChannelsManager } from './customer-channels-manager';
 import { Modal } from './modal';
@@ -20,7 +21,8 @@ interface BillingEntity {
 interface Customer {
   id: string;
   customerCode: string;
-  companyName: string;
+  nameEn: string | null;
+  nameAr: string | null;
   contactName: string | null;
   primaryEmail: string;
   secondaryEmail: string | null;
@@ -134,7 +136,7 @@ export function CustomerDetail() {
         ← Back to customers
       </Link>
       <PageHeading
-        title={detail.companyName}
+        title={customerCombinedLabel(detail)}
         description={`${detail.customerCode} · ${detail.billingEntity.name} · ${detail.status}`}
       />
       {!contactFormOpen && (

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
+import { customerDisplayName } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
@@ -18,7 +19,7 @@ interface SubscriptionRow {
   currentSellingPriceJod: string | null;
   supplierCost: string | null;
   status: string;
-  customer: { companyName: string };
+  customer: { nameEn: string | null; nameAr: string | null };
   serviceType: { name: string };
   servicePackage: { name: string } | null;
   packageNameSnapshot: string | null;
@@ -145,7 +146,7 @@ export function SubscriptionsManager() {
               {result?.data.map((subscription) => (
                 <tr key={subscription.id}>
                   <td>{subscription.name}</td>
-                  <td>{subscription.customer.companyName}</td>
+                  <td>{customerDisplayName(subscription.customer)}</td>
                   <td>
                     {subscription.serviceType.name}
                     <br />

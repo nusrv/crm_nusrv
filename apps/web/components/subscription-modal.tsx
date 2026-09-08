@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
+import { customerCombinedLabel } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
 import type { CurrencyOption } from './currencies-manager';
 import { Modal } from './modal';
@@ -10,7 +11,8 @@ import { Notice } from './notice';
 interface CustomerOption {
   id: string;
   customerCode: string;
-  companyName: string;
+  nameEn: string | null;
+  nameAr: string | null;
 }
 interface ServiceTypeOption {
   id: string;
@@ -269,7 +271,7 @@ export function SubscriptionModal({
                   <option value="">Select…</option>
                   {customers.map((customer) => (
                     <option key={customer.id} value={customer.id}>
-                      {customer.customerCode} · {customer.companyName}
+                      {customer.customerCode} · {customerCombinedLabel(customer)}
                     </option>
                   ))}
                 </select>

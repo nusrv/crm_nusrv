@@ -188,30 +188,45 @@ enum ChannelVerificationStatus {
 }
 
 model BillingEntity {
-  id                     String            @id @default(uuid()) @db.VarChar(36)
+  id                     String                @id @default(uuid()) @db.VarChar(36)
   name                   String
-  code                   String            @unique
-  paymentScope           PaymentScope      @map("payment_scope")
-  legalName              String            @map("legal_name")
-  taxNumber              String?           @map("tax_number")
+  code                   String                @unique
+  customerCodePrefix     String                @unique @map("customer_code_prefix") @db.VarChar(10)
+  paymentScope           PaymentScope          @map("payment_scope")
+  legalName              String                @map("legal_name")
+  taxNumber              String?               @map("tax_number")
   address                String?
-  invoiceEmail           String?           @map("invoice_email")
-  bankDetailsCiphertext  String?           @map("bank_details_ciphertext") @db.Text
-  fawtaraConfigReference String?           @map("fawtara_config_reference")
-  active                 Boolean           @default(true)
-  createdAt              DateTime          @default(now()) @map("created_at")
-  updatedAt              DateTime          @updatedAt @map("updated_at")
+  invoiceEmail           String?               @map("invoice_email")
+  bankDetailsCiphertext  String?               @map("bank_details_ciphertext") @db.Text
+  fawtaraConfigReference String?               @map("fawtara_config_reference")
+  active                 Boolean               @default(true)
+  createdAt              DateTime              @default(now()) @map("created_at")
+  updatedAt              DateTime              @updatedAt @map("updated_at")
   customers              Customer[]
   legacyImportRows       LegacyImportRow[]
+  customerCodeSequence   CustomerCodeSequence?
 
   @@map("billing_entities")
+}
+
+// One row per Billing Entity. `lastValue` only ever increments (never decremented, never reused
+// on delete) — it is the sole source of truth for the next `customerCode` suffix under that
+// entity. See CustomerCodeService for the concurrency-safe increment.
+model CustomerCodeSequence {
+  billingEntityId String        @id @map("billing_entity_id") @db.VarChar(36)
+  lastValue       Int           @default(0) @map("last_value")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  billingEntity   BillingEntity @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
+
+  @@map("customer_code_sequences")
 }
 
 model Customer {
   id                    String                 @id @default(uuid()) @db.VarChar(36)
   billingEntityId       String                 @map("billing_entity_id") @db.VarChar(36)
   customerCode          String                 @unique @map("customer_code")
-  companyName           String                 @map("company_name")
+  nameEn                String?                @map("name_en")
+  nameAr                String?                @map("name_ar")
   contactName           String?                @map("contact_name")
   primaryEmail          String                 @map("primary_email")
   secondaryEmail        String?                @map("secondary_email")
@@ -236,7 +251,8 @@ model Customer {
   legacyApprovedRows    LegacyImportRow[]      @relation("LegacyApprovedCustomer")
 
   @@index([billingEntityId])
-  @@index([companyName])
+  @@index([nameEn])
+  @@index([nameAr])
   @@index([primaryEmail])
   @@index([sourceSequence])
   @@map("customers")

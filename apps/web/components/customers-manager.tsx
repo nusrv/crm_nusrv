@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiRequest, type PageResult } from '../lib/api';
+import { customerDisplayName, customerSecondaryName } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
 import { Notice } from './notice';
@@ -18,7 +19,8 @@ interface BillingEntity {
 interface Customer {
   id: string;
   customerCode: string;
-  companyName: string;
+  nameEn: string | null;
+  nameAr: string | null;
   contactName: string | null;
   primaryEmail: string;
   secondaryEmail: string | null;
@@ -35,8 +37,8 @@ interface Customer {
 }
 
 const emptyCustomer = {
-  customerCode: '',
-  companyName: '',
+  nameEn: '',
+  nameAr: '',
   contactName: '',
   primaryEmail: '',
   secondaryEmail: '',
@@ -138,8 +140,8 @@ export function CustomersManager() {
     const value = (name: string) => String(form.get(name) ?? '').trim();
     const callingCode = value('phoneCountryCallingCode');
     const body = {
-      ...(editing ? {} : { customerCode: value('customerCode') }),
-      companyName: value('companyName'),
+      nameEn: value('nameEn') || undefined,
+      nameAr: value('nameAr') || undefined,
       contactName: value('contactName') || undefined,
       primaryEmail: value('primaryEmail'),
       secondaryEmail: value('secondaryEmail') || undefined,
@@ -168,7 +170,11 @@ export function CustomersManager() {
   }
 
   async function deactivate(customer: Customer) {
-    if (!window.confirm(`Deactivate ${customer.companyName}? This does not delete any records.`))
+    if (
+      !window.confirm(
+        `Deactivate ${customerDisplayName(customer)}? This does not delete any records. All of their ACTIVE subscriptions will be suspended and stop generating reminders; they are not automatically reactivated if the customer is reactivated later.`,
+      )
+    )
       return;
     try {
       await apiRequest(`/customers/${customer.id}/deactivate`, { method: 'POST' });
@@ -182,7 +188,7 @@ export function CustomersManager() {
   async function deleteCustomer(customer: Customer) {
     if (
       !window.confirm(
-        `Permanently delete ${customer.companyName} and all their subscriptions? This cannot be undone.`,
+        `Permanently delete ${customerDisplayName(customer)} and all their subscriptions? This cannot be undone.`,
       )
     )
       return;
@@ -245,7 +251,7 @@ export function CustomersManager() {
         deleted += 1;
       } catch (cause) {
         failures.push(
-          `${customer?.companyName ?? id}: ${cause instanceof Error ? cause.message : 'delete failed'}`,
+          `${customer ? customerDisplayName(customer) : id}: ${cause instanceof Error ? cause.message : 'delete failed'}`,
         );
       }
     }
@@ -287,30 +293,26 @@ export function CustomersManager() {
       {formOpen && (
         <Modal
           onClose={() => setFormOpen(false)}
-          title={editing ? `Edit ${editing.companyName}` : 'Create customer'}
+          title={editing ? `Edit ${customerDisplayName(editing)}` : 'Create customer'}
         >
           <Notice message={error} />
           <Notice message={success} tone="success" />
           {editing && <p className="muted mb-4 text-xs">Code: {editing.customerCode}</p>}
+          {!editing && (
+            <p className="muted mb-4 text-xs">
+              Customer code is generated automatically from the Billing Entity once created.
+            </p>
+          )}
           <form
             className="form-grid"
             key={editing?.id ?? 'new'}
             onSubmit={(event) => void save(event)}
           >
-            {!editing && (
-              <Field
-                label="Customer code"
-                name="customerCode"
-                required
-                value={defaults.customerCode}
-              />
-            )}
-            <Field
-              label="Company name"
-              name="companyName"
-              required
-              value={String(defaults.companyName)}
-            />
+            <Field label="Customer Name (English)" name="nameEn" value={String(defaults.nameEn)} />
+            <Field label="Customer Name (Arabic)" name="nameAr" value={String(defaults.nameAr)} />
+            <p className="muted field-wide text-xs">
+              At least one of English or Arabic name is required.
+            </p>
             <Field label="Contact name" name="contactName" value={String(defaults.contactName)} />
             <Field
               label="Primary email"
@@ -397,7 +399,7 @@ export function CustomersManager() {
               setPage(1);
               setSearch(event.target.value);
             }}
-            placeholder="Search code, company, email, phone"
+            placeholder="Search code, name (English/Arabic), email, phone"
             value={search}
           />
           <select
@@ -439,7 +441,7 @@ export function CustomersManager() {
                     />
                   </th>
                 )}
-                <th>Company</th>
+                <th>Customer</th>
                 <th>Email / phone</th>
                 <th>Billing Entity</th>
                 <th>Subscriptions</th>
@@ -453,7 +455,7 @@ export function CustomersManager() {
                   {can('ADMIN') && (
                     <td>
                       <input
-                        aria-label={`Select ${customer.companyName}`}
+                        aria-label={`Select ${customerDisplayName(customer)}`}
                         checked={selected.has(customer.id)}
                         onChange={() => toggleSelected(customer.id)}
                         type="checkbox"
@@ -462,7 +464,15 @@ export function CustomersManager() {
                   )}
                   <td>
                     <Link className="table-link" href={`/dashboard/customers/${customer.id}`}>
-                      {customer.companyName}
+                      <strong>{customerDisplayName(customer)}</strong>
+                      {customerSecondaryName(customer) && (
+                        <>
+                          <br />
+                          <span className="muted" dir="auto">
+                            {customerSecondaryName(customer)}
+                          </span>
+                        </>
+                      )}
                     </Link>
                   </td>
                   <td>

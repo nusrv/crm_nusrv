@@ -1,16 +1,18 @@
 'use client';
 
 import { useEffect, useId, useRef, useState } from 'react';
+import { customerDisplayName, customerSecondaryName } from '../lib/customer-name';
 
 export interface CustomerComboboxOption {
   id: string;
   customerCode: string;
-  companyName: string;
+  nameEn?: string | null;
+  nameAr?: string | null;
   primaryEmail?: string | null;
 }
 
 function optionLabel(option: CustomerComboboxOption) {
-  return option.companyName;
+  return customerDisplayName(option);
 }
 
 export function CustomerCombobox({
@@ -98,7 +100,15 @@ export function CustomerCombobox({
                 role="option"
                 type="button"
               >
-                <strong>{option.companyName}</strong>
+                <strong>{customerDisplayName(option)}</strong>
+                {customerSecondaryName(option) && (
+                  <>
+                    <br />
+                    <span className="muted text-xs" dir="auto">
+                      {customerSecondaryName(option)}
+                    </span>
+                  </>
+                )}
                 {option.primaryEmail && (
                   <>
                     <br />

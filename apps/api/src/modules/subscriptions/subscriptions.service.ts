@@ -12,7 +12,9 @@ import type {
 } from './subscriptions.dto';
 
 const subscriptionInclude = {
-  customer: { select: { id: true, customerCode: true, companyName: true, status: true } },
+  customer: {
+    select: { id: true, customerCode: true, nameEn: true, nameAr: true, status: true },
+  },
   currencyDefinition: true,
   serviceType: { select: { id: true, code: true, name: true, active: true } },
   servicePackage: { include: { terms: { orderBy: { termMonths: 'asc' as const } } } },
@@ -55,7 +57,8 @@ export class SubscriptionsService {
             OR: [
               { subscriptionCode: { contains: search } },
               { name: { contains: search } },
-              { customer: { companyName: { contains: search } } },
+              { customer: { nameEn: { contains: search } } },
+              { customer: { nameAr: { contains: search } } },
             ],
           }
         : {}),

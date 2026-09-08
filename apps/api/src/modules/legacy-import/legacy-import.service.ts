@@ -19,6 +19,7 @@ import {
   LegacyValidationStatus,
 } from '../../generated/prisma/enums';
 import { SecretEncryptionService } from '../../security/secret-encryption.service';
+import { CustomerCodeService } from '../customers/customer-code.service';
 import type {
   ImportBatchListQueryDto,
   ImportRowListQueryDto,
@@ -35,6 +36,7 @@ import {
   type LegacySuggestions,
   type ParsedLegacyRow,
 } from './legacy-workbook.parser';
+import { splitBilingualName } from './name-language.util';
 
 export interface UploadedLegacyFile {
   originalname: string;
@@ -45,7 +47,8 @@ export interface UploadedLegacyFile {
 interface DuplicateCandidate {
   customerId: string;
   customerCode: string;
-  companyName: string;
+  nameEn: string | null;
+  nameAr: string | null;
   reasons: string[];
   score: number;
 }
@@ -71,6 +74,7 @@ export class LegacyImportService {
     private readonly prisma: PrismaService,
     private readonly encryption: SecretEncryptionService,
     private readonly audit: AuditService,
+    private readonly customerCode: CustomerCodeService,
   ) {}
 
   async createBatch(file: UploadedLegacyFile | undefined, context: MutationContext) {
@@ -114,7 +118,9 @@ export class LegacyImportService {
         select: {
           id: true,
           customerCode: true,
-          companyName: true,
+          nameEn: true,
+          nameAr: true,
+          billingEntityId: true,
           primaryEmail: true,
           secondaryEmail: true,
           phone: true,
@@ -154,12 +160,12 @@ export class LegacyImportService {
       });
       for (const row of parsedRows) {
         const activeScope = isActiveSubscriptionSheet(row.sheetName);
-        const duplicateCandidates = activeScope
-          ? this.findDuplicates(row.suggestions, customers)
-          : [];
         const billingEntity = billingEntities.find(
           (entry) => normalize(entry.name) === normalize(row.suggestions.billingEntityName),
         );
+        const duplicateCandidates = activeScope
+          ? this.findDuplicates(row.suggestions, customers, billingEntity?.id)
+          : [];
         const serviceType = serviceTypes.find(
           (entry) => normalize(entry.name) === normalize(row.suggestions.serviceTypeName),
         );
@@ -174,7 +180,7 @@ export class LegacyImportService {
           issues.push('Possible duplicate customer requires an explicit human resolution.');
         }
         const mappedCustomer = compactJson({
-          companyName: row.suggestions.companyName,
+          ...splitBilingualName(row.suggestions.companyName),
           contactName: row.suggestions.contactName,
           primaryEmail: row.suggestions.primaryEmail,
           secondaryEmail: row.suggestions.secondaryEmail,
@@ -305,7 +311,9 @@ export class LegacyImportService {
         select: {
           id: true,
           customerCode: true,
-          companyName: true,
+          nameEn: true,
+          nameAr: true,
+          billingEntityId: true,
           primaryEmail: true,
           secondaryEmail: true,
           phone: true,
@@ -402,6 +410,7 @@ export class LegacyImportService {
             description: subscriptionRow.informationSource,
           },
           customers,
+          billingEntity?.id,
         );
 
         const issues = [...suggestions.issues];
@@ -417,7 +426,7 @@ export class LegacyImportService {
         const uniqueIssues = [...new Set(issues)];
 
         const mappedCustomer = compactJson({
-          companyName: customer.companyName,
+          ...splitBilingualName(customer.companyName),
           contactName: customer.contacts[0]?.personName,
           primaryEmail,
           secondaryEmail: customer.emails[1]?.email,
@@ -800,8 +809,12 @@ export class LegacyImportService {
         where,
         omit: { rawValuesCiphertext: true },
         include: {
-          candidateCustomer: { select: { id: true, customerCode: true, companyName: true } },
-          approvedCustomer: { select: { id: true, customerCode: true, companyName: true } },
+          candidateCustomer: {
+            select: { id: true, customerCode: true, nameEn: true, nameAr: true },
+          },
+          approvedCustomer: {
+            select: { id: true, customerCode: true, nameEn: true, nameAr: true },
+          },
           subscriptionLinks: {
             include: { subscription: { select: { id: true, subscriptionCode: true, name: true } } },
           },
@@ -942,10 +955,11 @@ export class LegacyImportService {
 
         let customer = existingCanonicalCustomer;
         if (!customer) {
+          const customerCode = await this.customerCode.next(tx, customerInput.billingEntityId);
           const created = await tx.customer.create({
             data: {
               ...customerInput,
-              customerCode: this.generatedCode('LEG-C', row.sourceReference),
+              customerCode,
               sourceLegacyReference: canonicalCustomerReference ?? row.sourceReference,
               sourceSequence: canonicalSourceSequence,
               status: CustomerStatus.ACTIVE,
@@ -1216,6 +1230,11 @@ export class LegacyImportService {
       return customer;
     }
     if (!input.customer) throw new BadRequestException('Complete the mapped customer data.');
+    if (!input.customer.nameEn?.trim() && !input.customer.nameAr?.trim()) {
+      throw new BadRequestException(
+        'Provide a Customer Name in English, Arabic, or both — it cannot be empty in both languages.',
+      );
+    }
     const entity = await this.prisma.billingEntity.findUnique({
       where: { id: input.customer.billingEntityId },
       select: { active: true },
@@ -1251,7 +1270,9 @@ export class LegacyImportService {
     customers: Array<{
       id: string;
       customerCode: string;
-      companyName: string;
+      nameEn: string | null;
+      nameAr: string | null;
+      billingEntityId: string;
       primaryEmail: string;
       secondaryEmail: string | null;
       phone: string | null;
@@ -1261,8 +1282,14 @@ export class LegacyImportService {
         sourceLegacyReference: string | null;
       }>;
     }>,
+    // The same company legitimately has one customer record per Billing Entity (see the owner's
+    // Billing Entity business rule) — a name match across different Billing Entities is not a
+    // duplicate. When the row's Billing Entity is known, only that entity's own customers are
+    // considered as candidates at all.
+    billingEntityId?: string,
   ): DuplicateCandidate[] {
-    const sourceName = normalize(suggestions.companyName);
+    const source = splitBilingualName(suggestions.companyName);
+    const sourceNames = [normalize(source.nameEn), normalize(source.nameAr)].filter(Boolean);
     const sourceEmail = normalize(suggestions.primaryEmail);
     const sourcePhone = normalizePhone(suggestions.phone);
     const sourceDomains = extractDomains(
@@ -1271,10 +1298,19 @@ export class LegacyImportService {
         .join(' '),
     );
     return customers
+      .filter((customer) => !billingEntityId || customer.billingEntityId === billingEntityId)
       .map((customer) => {
         const reasons: string[] = [];
-        let score = similarity(sourceName, normalize(customer.companyName));
-        if (sourceName && sourceName === normalize(customer.companyName)) {
+        const candidateNames = [normalize(customer.nameEn), normalize(customer.nameAr)].filter(
+          Boolean,
+        );
+        let score = 0;
+        for (const sourceCandidate of sourceNames) {
+          for (const candidateName of candidateNames) {
+            score = Math.max(score, similarity(sourceCandidate, candidateName));
+          }
+        }
+        if (sourceNames.some((name) => candidateNames.includes(name))) {
           reasons.push('Exact company name');
           score = 1;
         } else if (score >= 0.72) reasons.push('Similar company name');
@@ -1289,7 +1325,8 @@ export class LegacyImportService {
         }
         const existingDomains = extractDomains(
           [
-            customer.companyName,
+            customer.nameEn,
+            customer.nameAr,
             customer.primaryEmail,
             ...customer.subscriptions.flatMap((subscription) => [
               subscription.name,
@@ -1307,7 +1344,8 @@ export class LegacyImportService {
         return {
           customerId: customer.id,
           customerCode: customer.customerCode,
-          companyName: customer.companyName,
+          nameEn: customer.nameEn,
+          nameAr: customer.nameAr,
           reasons,
           score,
         };

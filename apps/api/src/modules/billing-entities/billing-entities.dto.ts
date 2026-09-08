@@ -16,6 +16,15 @@ export class CreateBillingEntityDto {
   @Length(2, 80)
   code!: string;
 
+  // Immutable after creation (absent from UpdateBillingEntityDto, same as `code`): every
+  // Customer Code under this Billing Entity is generated as `${customerCodePrefix}${sequence}`,
+  // so changing this after customers exist would make already-issued codes inconsistent with any
+  // newly generated ones.
+  @Transform(({ value }) => String(value).trim().toUpperCase())
+  @IsString()
+  @Length(1, 10)
+  customerCodePrefix!: string;
+
   @IsString()
   @Length(2, 250)
   name!: string;

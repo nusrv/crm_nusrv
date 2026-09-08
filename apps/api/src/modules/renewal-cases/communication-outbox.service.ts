@@ -21,7 +21,8 @@ export class CommunicationOutboxService {
               { recipient: { contains: search } },
               { subject: { contains: search } },
               { subscription: { name: { contains: search } } },
-              { customer: { companyName: { contains: search } } },
+              { customer: { nameEn: { contains: search } } },
+              { customer: { nameAr: { contains: search } } },
             ],
           }
         : {}),
@@ -30,7 +31,7 @@ export class CommunicationOutboxService {
       this.prisma.communicationOutbox.findMany({
         where,
         include: {
-          customer: { select: { id: true, customerCode: true, companyName: true } },
+          customer: { select: { id: true, customerCode: true, nameEn: true, nameAr: true } },
           subscription: { select: { id: true, subscriptionCode: true, name: true } },
           reminderRule: { select: { id: true, code: true, name: true } },
           notificationRule: { select: { id: true, code: true, name: true } },

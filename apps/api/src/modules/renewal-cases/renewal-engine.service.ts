@@ -12,6 +12,7 @@ import {
   RenewalDecisionOutcome,
   SubscriptionStatus,
 } from '../../generated/prisma/enums';
+import { customerDisplayName } from '../customers/customer-name.util';
 import { BusinessTimeService } from '../../time/business-time.service';
 import { ClockService } from '../../time/clock.service';
 import { aggregateEffectiveHolds, cycleStartDate, isReminderEligible } from './renewal-policy';
@@ -423,8 +424,8 @@ export class RenewalEngineService {
     renewalCaseId: string,
   ): RenewalTemplateValues {
     return {
-      customerCompany: subscription.customer.companyName,
-      customerContact: subscription.customer.contactName ?? subscription.customer.companyName,
+      customerCompany: customerDisplayName(subscription.customer),
+      customerContact: subscription.customer.contactName ?? customerDisplayName(subscription.customer),
       subscriptionName: subscription.name,
       serviceType: subscription.serviceType.name,
       renewalDate: this.businessTime.databaseDateKey(subscription.renewalDate),
