@@ -34,6 +34,20 @@ export class SubscriptionListQueryDto extends PageQueryDto {
   serviceTypeId?: string;
 
   @IsOptional()
+  @IsUUID()
+  servicePackageId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  billingEntityId?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => String(value).trim().toUpperCase())
+  @IsString()
+  @Length(3, 3)
+  currency?: string;
+
+  @IsOptional()
   @IsEnum(SubscriptionStatus)
   status?: SubscriptionStatus;
 

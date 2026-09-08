@@ -81,7 +81,10 @@ describe('CustomersService', () => {
     const customer = { id: 'customer-id', nameEn: null, nameAr: 'Arabic Name' };
     const create = jest.fn(() => Promise.resolve(customer));
     const tx = {
-      customer: { create, aggregate: jest.fn(() => Promise.resolve({ _max: { sourceSequence: null } })) },
+      customer: {
+        create,
+        aggregate: jest.fn(() => Promise.resolve({ _max: { sourceSequence: null } })),
+      },
     };
     const prisma = {
       billingEntity: { findUnique: jest.fn(() => Promise.resolve({ active: true })) },
@@ -119,6 +122,31 @@ describe('CustomersService', () => {
         orderBy: [{ sourceSequence: 'asc' }, { createdAt: 'asc' }, { customerCode: 'asc' }],
       }),
     );
+  });
+
+  it('filters by Billing Entity and created-date range', async () => {
+    const findMany = jest.fn<(input: { where: Record<string, unknown> }) => Promise<never[]>>(() =>
+      Promise.resolve([]),
+    );
+    const prisma = {
+      customer: { findMany, count: jest.fn(() => Promise.resolve(0)) },
+    };
+    const service = new CustomersService(prisma as never, {} as never, {} as never);
+
+    await service.list({
+      page: 1,
+      pageSize: 20,
+      billingEntityId: 'entity-id',
+      createdFrom: '2026-01-01',
+      createdTo: '2026-01-31',
+    });
+
+    const where = findMany.mock.calls[0]?.[0].where;
+    expect(where?.billingEntityId).toBe('entity-id');
+    expect(where?.createdAt).toEqual({
+      gte: new Date('2026-01-01'),
+      lte: new Date('2026-01-31'),
+    });
   });
 
   describe('update — deactivation cascade', () => {

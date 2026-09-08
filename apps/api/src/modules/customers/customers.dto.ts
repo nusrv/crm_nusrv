@@ -1,6 +1,7 @@
 import { Transform } from 'class-transformer';
 import {
   IsBoolean,
+  IsDateString,
   IsEmail,
   IsEnum,
   IsOptional,
@@ -117,6 +118,14 @@ export class CustomerListQueryDto extends PageQueryDto {
   @IsOptional()
   @IsEnum(CustomerStatus)
   status?: CustomerStatus;
+
+  @IsOptional()
+  @IsDateString()
+  createdFrom?: string;
+
+  @IsOptional()
+  @IsDateString()
+  createdTo?: string;
 }
 
 export class CreateCustomerDto {

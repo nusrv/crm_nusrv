@@ -34,6 +34,13 @@ export class CustomersService {
     const where = {
       billingEntityId: query.billingEntityId,
       status: query.status,
+      createdAt:
+        query.createdFrom || query.createdTo
+          ? {
+              gte: query.createdFrom ? new Date(query.createdFrom) : undefined,
+              lte: query.createdTo ? new Date(query.createdTo) : undefined,
+            }
+          : undefined,
       // No `mode: 'insensitive'` here: that filter is Postgres/MongoDB-only and Prisma throws a
       // validation error for it against a mysql datasource. MariaDB's utf8mb4_unicode_ci columns
       // are already case-insensitive by collation, so a plain `contains` is sufficient.

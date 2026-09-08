@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
+import type { CurrencyOption } from './currencies-manager';
 import { customerDisplayName } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
 import { Notice } from './notice';
@@ -27,6 +28,25 @@ interface SubscriptionRow {
   connections: unknown[];
 }
 
+interface ServiceTypeOption {
+  id: string;
+  name: string;
+  active: boolean;
+}
+
+interface PackageOption {
+  id: string;
+  serviceTypeId: string;
+  name: string;
+  active: boolean;
+}
+
+interface BillingEntityOption {
+  id: string;
+  name: string;
+  active: boolean;
+}
+
 export function SubscriptionsManager() {
   const { can } = useControlPanel();
   const canManage = can('ADMIN', 'ACCOUNTANT');
@@ -37,6 +57,16 @@ export function SubscriptionsManager() {
   const [formOpen, setFormOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
+  const [serviceTypeId, setServiceTypeId] = useState('');
+  const [servicePackageId, setServicePackageId] = useState('');
+  const [billingEntityId, setBillingEntityId] = useState('');
+  const [currency, setCurrency] = useState('');
+  const [renewalFrom, setRenewalFrom] = useState('');
+  const [renewalTo, setRenewalTo] = useState('');
+  const [serviceTypes, setServiceTypes] = useState<ServiceTypeOption[]>([]);
+  const [packages, setPackages] = useState<PackageOption[]>([]);
+  const [billingEntities, setBillingEntities] = useState<BillingEntityOption[]>([]);
+  const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -44,8 +74,40 @@ export function SubscriptionsManager() {
     const params = new URLSearchParams({ page: '1', pageSize: '100' });
     if (search) params.set('search', search);
     if (status) params.set('status', status);
-    setResult(await apiRequest<PageResult<SubscriptionRow>>(`/subscriptions?${params.toString()}`));
-  }, [search, status]);
+    if (serviceTypeId) params.set('serviceTypeId', serviceTypeId);
+    if (servicePackageId) params.set('servicePackageId', servicePackageId);
+    if (billingEntityId) params.set('billingEntityId', billingEntityId);
+    if (currency) params.set('currency', currency);
+    if (renewalFrom) params.set('renewalFrom', renewalFrom);
+    if (renewalTo) params.set('renewalTo', renewalTo);
+    const [
+      subscriptionResult,
+      serviceTypeResult,
+      packageResult,
+      billingEntityResult,
+      currencyResult,
+    ] = await Promise.all([
+      apiRequest<PageResult<SubscriptionRow>>(`/subscriptions?${params.toString()}`),
+      apiRequest<ServiceTypeOption[]>('/service-types'),
+      apiRequest<PackageOption[]>('/service-packages'),
+      apiRequest<BillingEntityOption[]>('/billing-entities'),
+      apiRequest<CurrencyOption[]>('/currencies'),
+    ]);
+    setResult(subscriptionResult);
+    setServiceTypes(serviceTypeResult);
+    setPackages(packageResult);
+    setBillingEntities(billingEntityResult);
+    setCurrencies(currencyResult);
+  }, [
+    search,
+    status,
+    serviceTypeId,
+    servicePackageId,
+    billingEntityId,
+    currency,
+    renewalFrom,
+    renewalTo,
+  ]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -115,18 +177,119 @@ export function SubscriptionsManager() {
         />
       )}
       <section className="panel">
-        <div className="toolbar">
+        <div className="toolbar flex flex-wrap items-end gap-3">
           <input
+            aria-label="Search subscriptions"
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search subscription, name, customer"
             value={search}
           />
-          <select onChange={(event) => setStatus(event.target.value)} value={status}>
+          <select
+            aria-label="Subscription status"
+            onChange={(event) => setStatus(event.target.value)}
+            value={status}
+          >
             <option value="">All statuses</option>
             <option>ACTIVE</option>
             <option>SUSPENDED</option>
             <option>CLOSED</option>
           </select>
+          <select
+            aria-label="Service Type filter"
+            onChange={(event) => {
+              setServiceTypeId(event.target.value);
+              setServicePackageId('');
+            }}
+            value={serviceTypeId}
+          >
+            <option value="">All service types</option>
+            {serviceTypes.map((serviceType) => (
+              <option key={serviceType.id} value={serviceType.id}>
+                {serviceType.name}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Package filter"
+            onChange={(event) => setServicePackageId(event.target.value)}
+            value={servicePackageId}
+          >
+            <option value="">All packages</option>
+            {packages
+              .filter((item) => !serviceTypeId || item.serviceTypeId === serviceTypeId)
+              .map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+          </select>
+          <select
+            aria-label="Billing Entity filter"
+            onChange={(event) => setBillingEntityId(event.target.value)}
+            value={billingEntityId}
+          >
+            <option value="">All Billing Entities</option>
+            {billingEntities.map((entity) => (
+              <option key={entity.id} value={entity.id}>
+                {entity.name}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Currency filter"
+            onChange={(event) => setCurrency(event.target.value)}
+            value={currency}
+          >
+            <option value="">All currencies</option>
+            {currencies.map((item) => (
+              <option key={item.code} value={item.code}>
+                {item.code} — {item.name}
+              </option>
+            ))}
+          </select>
+          <label className="field">
+            <span>Renewal from</span>
+            <input
+              aria-label="Renewal from"
+              onChange={(event) => setRenewalFrom(event.target.value)}
+              type="date"
+              value={renewalFrom}
+            />
+          </label>
+          <label className="field">
+            <span>Renewal to</span>
+            <input
+              aria-label="Renewal to"
+              onChange={(event) => setRenewalTo(event.target.value)}
+              type="date"
+              value={renewalTo}
+            />
+          </label>
+          {(search ||
+            status ||
+            serviceTypeId ||
+            servicePackageId ||
+            billingEntityId ||
+            currency ||
+            renewalFrom ||
+            renewalTo) && (
+            <button
+              className="button-small"
+              onClick={() => {
+                setSearch('');
+                setStatus('');
+                setServiceTypeId('');
+                setServicePackageId('');
+                setBillingEntityId('');
+                setCurrency('');
+                setRenewalFrom('');
+                setRenewalTo('');
+              }}
+              type="button"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
         <div className="table-wrap mt-4">
           <table>

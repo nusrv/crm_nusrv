@@ -72,6 +72,9 @@ export function CustomersManager() {
   const [entities, setEntities] = useState<BillingEntity[]>([]);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
+  const [billingEntityId, setBillingEntityId] = useState('');
+  const [createdFrom, setCreatedFrom] = useState('');
+  const [createdTo, setCreatedTo] = useState('');
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [formOpen, setFormOpen] = useState(false);
@@ -84,13 +87,16 @@ export function CustomersManager() {
     const params = new URLSearchParams({ page: String(page), pageSize: '20' });
     if (search.trim()) params.set('search', search.trim());
     if (status) params.set('status', status);
+    if (billingEntityId) params.set('billingEntityId', billingEntityId);
+    if (createdFrom) params.set('createdFrom', createdFrom);
+    if (createdTo) params.set('createdTo', createdTo);
     const [customerResult, entityResult] = await Promise.all([
       apiRequest<PageResult<Customer>>(`/customers?${params.toString()}`),
       apiRequest<BillingEntity[]>('/billing-entities'),
     ]);
     setCustomers(customerResult);
     setEntities(entityResult);
-  }, [page, search, status]);
+  }, [page, search, status, billingEntityId, createdFrom, createdTo]);
 
   useEffect(() => {
     setPendingEditId(new URLSearchParams(window.location.search).get('edit') ?? '');
@@ -392,7 +398,7 @@ export function CustomersManager() {
         </Modal>
       )}
       <section className="panel">
-        <div className="toolbar">
+        <div className="toolbar flex flex-wrap items-end gap-3">
           <input
             aria-label="Search customers"
             onChange={(event) => {
@@ -414,6 +420,61 @@ export function CustomersManager() {
             <option value="ACTIVE">Active</option>
             <option value="INACTIVE">Inactive</option>
           </select>
+          <select
+            aria-label="Billing Entity filter"
+            onChange={(event) => {
+              setPage(1);
+              setBillingEntityId(event.target.value);
+            }}
+            value={billingEntityId}
+          >
+            <option value="">All Billing Entities</option>
+            {entities.map((entity) => (
+              <option key={entity.id} value={entity.id}>
+                {entity.name}
+              </option>
+            ))}
+          </select>
+          <label className="field">
+            <span>Created from</span>
+            <input
+              aria-label="Created from"
+              onChange={(event) => {
+                setPage(1);
+                setCreatedFrom(event.target.value);
+              }}
+              type="date"
+              value={createdFrom}
+            />
+          </label>
+          <label className="field">
+            <span>Created to</span>
+            <input
+              aria-label="Created to"
+              onChange={(event) => {
+                setPage(1);
+                setCreatedTo(event.target.value);
+              }}
+              type="date"
+              value={createdTo}
+            />
+          </label>
+          {(search || status || billingEntityId || createdFrom || createdTo) && (
+            <button
+              className="button-small"
+              onClick={() => {
+                setPage(1);
+                setSearch('');
+                setStatus('');
+                setBillingEntityId('');
+                setCreatedFrom('');
+                setCreatedTo('');
+              }}
+              type="button"
+            >
+              Clear filters
+            </button>
+          )}
           {can('ADMIN') && selected.size > 0 && (
             <button
               className="button-small danger"
