@@ -461,6 +461,37 @@ production builds. **Not yet deployed.** Unlike other recent updates, this one r
 `db:migrate:deploy` before the app will even start against the live schema — see the deploy
 sequence below.
 
+## Legacy Import audit after the bilingual-name/customer-code change (commit `196f8f1`)
+
+The owner asked for a focused audit of Legacy Import specifically. The frontend/backend bilingual
+name contract was already fully consistent (`nameEn`/`nameAr` everywhere, no stale `companyName`)
+— confirmed by grep and by reading every file the owner named. Two real bugs found and fixed
+instead:
+
+- **Mixed Arabic+English source names** (e.g. "Khayrat Al Shobak خيرات الشوبك") previously landed
+  entirely in `nameAr` (any Arabic character present -> whole string classified Arabic).
+  `name-language.util.ts`'s `splitBilingualName()` now safely splits a clean one-sided "Latin
+  block, then Arabic block" (or reverse) into both fields; anything structurally ambiguous
+  (interleaved scripts, a Latin-Arabic-Latin sandwich) still preserves the whole original string
+  unsplit — no translation, nothing invented or discarded.
+- **Canonical customer identity ignored Billing Entity (the critical one)**:
+  `createCanonicalBatch()`'s customer-reuse reference was keyed on source `Customer_ID` alone, so
+  a canonical customer with subscriptions under *both* Billing Entities (a real case in the
+  workbook: `CUST-0005` / `mpr.com.sa`) would have its second Billing Entity's subscription
+  silently reuse the first Billing Entity's customer on approval — merging what must be two
+  separate `FFxxxx`/`NSxxxx` customers into one. Fixed by folding the row's resolved Billing Entity
+  into that reference. `ATTACH_EXISTING` was already fully exempt (verified with a test); Customer
+  Codes still come only from the existing shared `CustomerCodeService`, no second generator.
+
+Also fixed two small UI-wording gaps in the same area: `customerCombinedLabel()`'s separator ("/" ->
+"·") and the Attach Existing Customer combobox now shows the Customer Code alongside the name
+(similarly-named customers across Billing Entities are expected and valid). Duplicate detection's
+Billing-Entity scoping was reviewed and confirmed already correct from the prior update — a
+regression test was added since none existed for that specific case.
+
+Verified: strict typecheck, lint, 183 tests / 44 suites (12 skipped live-DB specs, unaffected — no
+schema touched), both production builds. **Not yet deployed or tested by the owner.**
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then

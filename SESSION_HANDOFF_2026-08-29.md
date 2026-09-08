@@ -929,3 +929,64 @@ type-correctness only (they still construct their test schema from only the very
 against the live database before anything else — unlike prior updates this session, this one cannot
 be smoke-tested without applying the schema migration first. See the implementation report delivered
 in-chat for full manual testing steps.
+
+## Update — 2026-09-08 Legacy Import fixes after the bilingual-name/customer-code change
+
+The owner asked for a focused audit of the Legacy Import flow specifically, after the feature
+above landed, with three named concerns. Commit `196f8f1`. No schema change.
+
+**Audited first, as asked.** Grepped the whole repo and read every file the owner named
+(`CustomerDraft`, `DuplicateCandidate`, `CustomerOption`, `approvedCustomer`, the review form, the
+rows table, `CustomerCombobox`). The bilingual-name frontend/backend contract was already fully
+consistent on `nameEn`/`nameAr` — no stale `companyName` remained anywhere in Legacy Import's own
+code. The `companyName` grep hits that do remain are all the canonical/flat parsers' own raw
+single-string field (`CanonicalCustomer.companyName`, `LegacySuggestions.companyName`) which is
+correct and unrelated to the DB schema — confirmed and left alone. Found and fixed two smaller,
+real gaps in that area instead: `customerCombinedLabel()` used "/" as the separator where the owner
+now explicitly wants "·"; and the Attach Existing Customer combobox didn't surface the Customer
+Code, which the owner asked for since similarly-named customers under different Billing Entities
+are expected. Both fixed in `apps/web/lib/customer-name.ts` / `apps/web/components/customer-combobox.tsx`.
+
+**Real bug #1 — mixed Arabic+English source names.** `splitBilingualName()` (added last update)
+classified a value as Arabic whenever it contained *any* Arabic character, so a name like "Khayrat
+Al Shobak خيرات الشوبك" landed entirely in `nameAr`, burying the English portion inside it.
+Rewrote it in `name-language.util.ts`: it now safely splits a clean "Latin block, then Arabic
+block" or "Arabic block, then Latin block" into both fields (locating the first/last Arabic
+character and requiring the Arabic span itself be free of Latin letters, and the remainder be a
+genuine one-sided Latin name — never a Latin-Arabic-Latin sandwich, which would require reordering
+text rather than just classifying it). Anything structurally ambiguous still falls back to
+preserving the whole original string unsplit, exactly the prior behavior — no translation, no
+invented text, nothing discarded.
+
+**Real bug #2 — the critical one — canonical customer identity ignored Billing Entity.**
+`createCanonicalBatch()` in `legacy-import.service.ts` keyed its sibling-row customer-reuse
+reference (`sourceLegacyReference`, looked up later in `approveRow()`) on the source `Customer_ID`
+alone: `` `${file}#Customers!${customerId}` ``. The owner's own workbook has at least one customer
+(`CUST-0005` / `mpr.com.sa`) with subscriptions recorded under *both* Billing Entities. Under the
+old key, whichever Billing Entity's subscription got approved first would create the customer, and
+the *other* Billing Entity's subscription — approved later — would find that same reference and
+silently reuse it, merging what must be two separate CRM customers (`FFxxxx` and `NSxxxx`) into
+one. Fixed by moving the existing `billingEntity` resolution earlier in the loop and folding its id
+into the reference: `` `${file}#Customers!${customerId}#BillingEntity!${billingEntity?.id ?? ...}` ``.
+`ATTACH_EXISTING` was already fully exempt (it never touches this reference or generates a code —
+verified with a new test) and needed no change. Customer Codes still come only from the existing
+`CustomerCodeService` — no second generator was introduced, per the owner's explicit instruction.
+
+Duplicate detection was reviewed too: already Billing-Entity-scoped from the prior update (a name
+match under a different Billing Entity was already excluded from candidates) — confirmed correct,
+no code change, added a regression test since none existed for that specific negative case.
+
+**Tests added**: 8 new cases in `name-language.util.spec.ts` (Arabic-only, English-only, both
+worked examples from the owner split correctly, reverse order, dash-separator cleanup, two
+ambiguous-fallback cases); 4 new cases in `legacy-import.service.spec.ts` (two Billing Entities for
+one canonical `Customer_ID` produce two distinct references while two subscriptions under the same
+entity still share one; the resulting `approveRow()` behavior creates two separate customers via
+two separate `CustomerCodeService.next()` calls with the correct per-row Billing Entity; explicit
+`ATTACH_EXISTING` creates no customer and never calls the code service; the cross-entity
+duplicate-detection negative case). One pre-existing test's hardcoded reference string was updated
+to the new format (its actual behavior — same customer, same Billing Entity, shares one reference —
+is unchanged and still asserted).
+
+Verified: strict typecheck, lint, 183 tests / 44 suites (12 skipped live-DB specs, unaffected — no
+schema touched this update), both production builds, Prettier (only whitepace/line-wrap changes on
+3 files, reviewed by hand and accepted). **Not yet deployed or tested by the owner.**
