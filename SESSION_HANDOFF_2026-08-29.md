@@ -825,3 +825,41 @@ case explicitly, worth adding if this area gets touched again), both production 
 (no reformatting needed on either touched file). Not yet deployed or tested by the owner — this is
 the fix to retest for the exact repro from the last update: create a customer with Phone
 `0799442940` and calling code `+962`.
+
+## Update — 2026-09-08 a *third*, different customer-create error: "A record with this identifier exists."
+
+The owner retested (rightly frustrated: "what is the meaning of this!!!!!!!!! i didn't add anything
+before this is my first try") and hit a new, generic conflict error on their very first create
+attempt. Root cause: they had typed the same address into both Primary email and Secondary email
+(`jarrar.film@gmail.com` in both). `CustomersService.create()` inserts `primaryEmail` and
+`secondaryEmail` as two separate `CustomerEmailAddress` rows for the new customer, and that table
+has a unique constraint on `(customerId, email)` — two rows with the same brand-new `customerId`
+and the same email address collide with each other on first insert, no prior data involved at all.
+The generic `throwMappedPrismaError()` mapper (`apps/api/src/common/prisma-errors.ts`) turns *any*
+P2002 unique-constraint violation into the same flat "A record with this identifier exists."
+message regardless of which field or constraint actually collided, which is why it looked like
+nonsense: the owner hadn't created anything to conflict with — they'd just entered the same email
+twice, and the system gave no clue which field or why.
+
+Fixed by validating this case explicitly before any DB write is attempted:
+```
+if (input.secondaryEmail && input.secondaryEmail === input.primaryEmail) {
+  throw new BadRequestException('Secondary email must be different from the primary email.');
+}
+```
+in `customers.service.ts` `create()`, right next to the existing phone-country-code check. Confirmed
+the Legacy Import approval path (`legacy-import.service.ts` around line 976) does not have this bug
+— it builds its email rows via a `Map` keyed by address, which naturally dedupes an identical
+primary/secondary pair instead of inserting both. `update()` was also checked and does not touch the
+`emailAddresses` relation at all, so it has no equivalent crash risk to fix.
+
+Commit `d1419f3`. Verified via the local mirror: strict typecheck, lint, 161 tests / 42 suites, API
+production build, Prettier (unchanged). Not yet deployed or tested by the owner.
+
+**Note for future sessions**: `throwMappedPrismaError()` is still a blunt instrument — it maps
+every P2002 across every service to the exact same generic message with no field/constraint
+context. This will keep producing confusing reports like this one for any other duplicate-key
+scenario across the app (billing entities, service types, currencies, technical connections,
+subscriptions, etc.) until someone either enriches that mapper with the Prisma error's constraint
+target or each call site adds its own pre-check the way this fix did. Flagging rather than fixing
+now to stay scoped to the reported bug.

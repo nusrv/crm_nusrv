@@ -419,6 +419,19 @@ on a customer who already had a phone on file failed unless the calling code was
 time — now only re-checks when the phone value actually changes. Verified: strict typecheck, lint,
 161 tests / 42 suites, both production builds. Not yet deployed or tested by the owner.
 
+**A third, distinct create error surfaced next (commit `d1419f3`)**: "A record with this identifier
+exists." on a genuinely first attempt. Cause: `create()` inserts `primaryEmail` and `secondaryEmail`
+as two separate `CustomerEmailAddress` rows unique on `(customerId, email)` — typing the same
+address into both fields collides with itself on a brand-new customer, no prior data involved. The
+generic `throwMappedPrismaError()` mapper turns every P2002 into that same flat message with no
+field context, which is why it looked meaningless. Fixed with an explicit pre-check that rejects a
+duplicate secondary email before any DB write, with a clear message. Legacy Import's approval path
+was checked and does not have this bug (dedupes via a `Map` keyed by address); `update()` doesn't
+touch the `emailAddresses` relation so has no equivalent risk. **Open item**: `throwMappedPrismaError`
+still maps every P2002 across every service to that same generic message — other duplicate-key
+scenarios elsewhere in the app can still produce equally confusing reports until it's enriched with
+constraint context, or each call site adds its own pre-check as this one did.
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then
