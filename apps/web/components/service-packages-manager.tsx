@@ -96,8 +96,12 @@ export function ServicePackagesManager() {
         title="Package Catalog"
         description="Official offers and custom templates. Catalog prices are references; subscription selling prices remain historical values."
       />
-      <Notice message={error} />
-      <Notice message={message} tone="success" />
+      {!formOpen && (
+        <>
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
+        </>
+      )}
       {can('ADMIN') && (
         <div className="mb-4">
           <button

@@ -73,8 +73,12 @@ export function CurrenciesManager() {
         title="Currencies and exchange rates"
         description="The only rate direction used by the system is 1 unit of the selected currency = X JOD. Subscription contract amounts remain stored in their original currency."
       />
-      <Notice message={error} />
-      <Notice message={message} tone="success" />
+      {!formOpen && (
+        <>
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
+        </>
+      )}
       {can('ADMIN') && (
         <div className="mb-4">
           <button className="button-primary" onClick={openCreate} type="button">

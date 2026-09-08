@@ -83,8 +83,12 @@ export function TechnicalConnectionsManager() {
         title="Technical Connections"
         description="Connection inventory and capabilities only. Credentials are encrypted, always masked, and no external actions are available in Phase 1."
       />
-      <Notice message={error} />
-      <Notice message={message} tone="success" />
+      {!formOpen && (
+        <>
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
+        </>
+      )}
       {canManage && (
         <div className="mb-4">
           <button

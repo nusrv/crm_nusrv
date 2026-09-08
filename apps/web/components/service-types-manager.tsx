@@ -61,8 +61,12 @@ export function ServiceTypesManager() {
         title="Service Types"
         description="Configurable commercial service categories. New categories require no schema or code change."
       />
-      <Notice message={error} />
-      <Notice message={message} tone="success" />
+      {!formOpen && (
+        <>
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
+        </>
+      )}
       {can('ADMIN') && (
         <div className="mb-4">
           <button

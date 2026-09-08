@@ -167,8 +167,12 @@ export function CustomerChannelsManager({
 
   return (
     <div className="mt-5 space-y-6">
-      <Notice message={error} />
-      <Notice message={message} tone="success" />
+      {!emailFormOpen && !phoneFormOpen && (
+        <>
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
+        </>
+      )}
       <section>
         <div className="flex items-center justify-between gap-3">
           <h4 className="font-medium">Email addresses</h4>

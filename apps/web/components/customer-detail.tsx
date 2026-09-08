@@ -137,8 +137,12 @@ export function CustomerDetail() {
         title={detail.companyName}
         description={`${detail.customerCode} · ${detail.billingEntity.name} · ${detail.status}`}
       />
-      <Notice message={error} />
-      <Notice message={success} tone="success" />
+      {!contactFormOpen && (
+        <>
+          <Notice message={error} />
+          <Notice message={success} tone="success" />
+        </>
+      )}
       <section className="panel">
         <h4 className="font-medium">Company details</h4>
         <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">

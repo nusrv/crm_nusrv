@@ -366,8 +366,12 @@ export function LegacyImportManager() {
         title="Legacy Excel import"
         description="Source rows are staged intact. Package, date, price, contact, duplicate, split, and merge decisions are explicit and audited."
       />
-      <Notice message={error} />
-      <Notice message={message} tone="success" />
+      {!editing && (
+        <>
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
+        </>
+      )}
       {can('ADMIN') && (
         <form
           className="panel mb-6 flex flex-wrap items-end gap-4"

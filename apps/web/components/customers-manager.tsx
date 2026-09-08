@@ -258,8 +258,12 @@ export function CustomersManager() {
         title="Customers"
         description="Operational customer records. Every customer is assigned to one legal Billing Entity; closing is controlled and non-destructive."
       />
-      <Notice message={error} />
-      <Notice message={success} tone="success" />
+      {!formOpen && (
+        <>
+          <Notice message={error} />
+          <Notice message={success} tone="success" />
+        </>
+      )}
       {canManage && (
         <div className="mb-4">
           <button className="button-primary" onClick={openCreate} type="button">

@@ -72,8 +72,12 @@ export function BillingEntitiesManager() {
         title="Billing Entities"
         description="Legal billing ownership for customers. Seed identifiers are read-only; business fields remain auditable and editable by administrators."
       />
-      <Notice message={error} />
-      <Notice message={message} tone="success" />
+      {!formOpen && (
+        <>
+          <Notice message={error} />
+          <Notice message={message} tone="success" />
+        </>
+      )}
       {can('ADMIN') && (
         <div className="mb-4">
           <button
