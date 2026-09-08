@@ -793,3 +793,35 @@ files. Not yet deployed or tested by the owner.
 **Note for future sessions**: the fix for "Notice hidden behind Modal" is two-part, not one — (1)
 render the Notice inside the Modal, AND (2) hide the page-level Notice while that Modal is open.
 Only doing (1) still leaves stale/duplicate messages on the page behind the modal, as happened here.
+
+## Update — 2026-09-08 the phone validation error itself was still not actually fixed
+
+The owner correctly pushed back after the previous update ("didn't you fix the phone number
+issue!!!!!!") — the earlier `3a880fe` fix only stripped stray whitespace/dashes/parens from an
+already-complete E.164 string. It never addressed the real defect: the Create/Edit Customer form
+has two separate inputs — "Phone" and "Phone country calling code" — and a normal person fills them
+the way the owner did (`0799442940` / `+962`), but the backend DTO validates `phone` alone against
+`E164_PHONE` (`/^\+[1-9]\d{7,14}$/`), which a bare local number without a leading `+` can never
+match. The two fields were never being combined anywhere.
+
+Fixed properly this time: `customers-manager.tsx` now composes the full E.164 number from the two
+fields before sending (`composePhone()` — strips formatting, and if the "Phone" value doesn't
+already start with `+`, prepends the calling code and drops a leading trunk `0` from the local
+part). Left an already-complete `+...` value in "Phone" untouched, in case anyone pastes one
+directly. Also relabeled/placeholder'd both fields ("Phone (local number)" / "e.g. 0799442940" and
+"e.g. +962") so the split is no longer ambiguous.
+
+While tracing this, found and fixed a second, related defect in `customers.service.ts`: `update()`
+enforced "phone must start with its calling code" unconditionally on every PATCH, even when `phone`
+in the payload was just the unchanged value from the edit form's own defaults and the calling-code
+field (never persisted, only ever a write-time consistency check) was left blank — meaning editing
+*any other field* on a customer who already had a phone number on file would fail unless the owner
+re-typed the calling code every single time. Now only re-checks when `input.phone !==
+oldState.phone`.
+
+Commit `78dfedd`. Verified via the local mirror: strict typecheck, lint, 161 tests / 42 suites
+(customers.service tests still pass unchanged — no test covered this update-unless-changed edge
+case explicitly, worth adding if this area gets touched again), both production builds, Prettier
+(no reformatting needed on either touched file). Not yet deployed or tested by the owner — this is
+the fix to retest for the exact repro from the last update: create a customer with Phone
+`0799442940` and calling code `+962`.

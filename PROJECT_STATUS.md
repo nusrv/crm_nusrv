@@ -408,6 +408,17 @@ deployed or tested by the owner. **Note for future work**: fixing "Notice hidden
 two steps, not one — render it inside the Modal AND hide the page-level copy while that Modal is
 open. Doing only the first step still leaves a stale/duplicate message on the page behind the modal.
 
+**The phone validation error itself was still unfixed (commit `78dfedd`)**: the earlier fix only
+stripped whitespace from an already-complete E.164 string; it never combined the form's two
+separate inputs ("Phone" local number + "Phone country calling code"), so any phone typed the
+normal way (e.g. `0799442940` / `+962`) could never pass `E164_PHONE`, which requires a leading
+`+`. `customers-manager.tsx` now composes the full E.164 number from both fields before submitting.
+Also fixed: `customers.service.ts` `update()` was re-validating the calling-code prefix on every
+PATCH even when `phone` was unchanged from the edit form's own defaults, so editing any other field
+on a customer who already had a phone on file failed unless the calling code was retyped every
+time — now only re-checks when the phone value actually changes. Verified: strict typecheck, lint,
+161 tests / 42 suites, both production builds. Not yet deployed or tested by the owner.
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then
