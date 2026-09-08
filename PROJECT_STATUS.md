@@ -364,6 +364,13 @@ warnings, then an `ENOENT` on a specific cache file) — unrelated to this repo'
 `rm -rf /var/www/vhosts/nusrv.com/.npm/_cacache` then retry `npm ci`; check disk space if it
 recurs. Not yet confirmed resolved by the owner.
 
+The owner then asked to confirm whether the code should also be hidden from Legacy Import's
+"Attach existing customer" combobox — it should: `optionLabel()` and the dropdown row still showed
+`customerCode` as the bolded leading text for every result. Switched both to `companyName` only,
+keeping `primaryEmail` as the secondary disambiguating line (the original reason the code was shown
+there). Commit `4ab9873`. No backend change. Verified: strict typecheck, lint, web production
+build.
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then

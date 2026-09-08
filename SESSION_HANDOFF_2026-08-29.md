@@ -720,3 +720,15 @@ the server, unrelated to any code in this repo. Recommended fix given to the own
 cache directory directly (`rm -rf /var/www/vhosts/nusrv.com/.npm/_cacache`) rather than
 `npm cache clean --force` (which the owner reported didn't work as expected), then retry `npm ci`.
 If it recurs, check server disk space (`df -h`). Not yet confirmed resolved.
+
+## Update — 2026-09-08 the generated code was also in the Legacy Import combobox
+
+The owner then asked directly whether they'd already asked for the code to be hidden from "the
+existing customer list in legacy import" too. They effectively had: "I don't want it in search
+boxes" reasonably covers the `CustomerCombobox` built two updates ago for Legacy Import's "Attach
+existing customer" flow, which still showed `customerCode` as the bolded leading text for every
+dropdown result and reused it as the label left in the input after selecting a customer. Fixed:
+`optionLabel()` and the dropdown row now use `companyName` only; `primaryEmail` remains as the
+secondary line for telling apart similarly-named customers (the original reason the code was shown
+there at all). Commit `4ab9873`. No backend change. Verified: strict typecheck, lint, web
+production build.
