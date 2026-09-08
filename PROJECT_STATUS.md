@@ -342,6 +342,14 @@ shared modal, with its `?customerId=`/`?edit=` deep-link support unchanged. Comm
 Verified: strict typecheck, lint, 161 tests / 42 suites, both production builds. No schema/
 migration change; not yet deployed or tested by the owner.
 
+The owner then asked to remove the generated code from list screens entirely, not just
+de-emphasize it. Removed it from the Subscriptions table (column header renamed `Code / name` →
+`Name`) and the customer detail subscription list. Inside `SubscriptionModal`, the modal title and
+"Technical mappings for ..." heading now use the subscription's `name` instead of the code; the
+code itself moved to a small muted `Code: ...` line under the title, visible only when the
+subscription's own popup is open. Commit `07c14a9`. Display-only, no backend/search change.
+Verified: strict typecheck, lint, both production builds. Not yet deployed or tested by the owner.
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then

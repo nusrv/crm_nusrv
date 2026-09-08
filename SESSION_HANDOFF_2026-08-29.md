@@ -682,3 +682,19 @@ Verified via the local mirror: strict typecheck, lint (including one more instan
 earlier app-shell.tsx case — a targeted `eslint-disable-next-line` with a comment explaining why the
 synchronous `setLoading(true)` is necessary there), 161 tests / 42 suites, and both production
 builds all pass. No schema/migration change. Not yet deployed or tested by the owner.
+
+## Update — 2026-09-08 hid the generated subscription code from list screens entirely
+
+The owner followed up on the code/name display fix above: the generated `LEG-S-<hash>` code still
+looked ugly even de-emphasized, and they wanted it gone from every list/search screen, visible only
+when actually opening a specific subscription. Removed it entirely from the Subscriptions table
+(renamed the `Code / name` column header to just `Name`) and the customer detail page's
+subscription list — both now show only the descriptive name. Inside `SubscriptionModal` itself, the
+generated code moved out of the prominent modal title (`Edit LEG-S-...`) and the "Technical
+mappings for ..." heading — both now use the subscription's `name` — down to a small muted
+`Code: ...` reference line under the title, still available when actually looking at that one
+subscription's record but no longer the star of any screen. Commit `07c14a9`.
+
+No backend change (this is a display-only change to already-fetched data, not a search/filter
+change — `subscriptionCode` remains a legitimate, unexposed server-side search field). Verified:
+strict typecheck, lint, both production builds. Not yet deployed or tested by the owner.
