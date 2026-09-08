@@ -10,9 +10,10 @@
 - Phase 2.2 Canonical Data & Migration Finalization: LIVE on `crm.nusrv.com` — see
   `PHASES/PHASE_02_2_CANONICAL_DATA_MIGRATION.md`
 - Dashboard UI/UX overhaul (modal edit forms, dedicated customer page, collapsible sidebar,
-  Legacy Import batch-list redesign and card sizing, sidebar toggle button redesign): code
-  complete, committed on `main` (`80591fb`..`eecee31`), not yet deployed — see "Dashboard UI/UX
-  overhaul and collapsed-sidebar layout fix" below
+  Legacy Import batch-list redesign and card sizing, sidebar toggle button redesign, subscription
+  deep-linking, viewport-fixed sidebar toggle, Legacy Import customer combobox): code complete,
+  committed on `main` (`80591fb`..`7f4c21f`), not yet deployed — see "Dashboard UI/UX overhaul and
+  collapsed-sidebar layout fix" below
 - Deployment model: the owner deploys to `crm.nusrv.com` manually after reviewing each GitHub
   change; Claude Code has no direct Plesk/SSH/database access and does not deploy
 - Phase 3: LOCKED
@@ -271,11 +272,27 @@ unchanged. Commit `eecee31`.
 No schema or migration changes in any of this work — deployment is `npm run build` plus restarting
 the API/web/worker processes. Per the owner's explicit instruction during the layout-bug
 investigation, this work was reviewed and fixed by static code inspection only; no local
-typecheck/lint/test/build was run for the six most recent commits (`5270fb0`, `6869b13`,
-`b2d4761`, `94d08c3`, `d106e33`, `eecee31`) because the workspace lives on a cloud-synced drive that
-cannot run `npm install` — see the environment note under the 2026-08-31 update in
-`SESSION_HANDOFF_2026-08-29.md`. The owner has not yet deployed or tested any of this on
-`crm.nusrv.com`.
+typecheck/lint/test/build was run for six commits (`5270fb0`, `6869b13`, `b2d4761`, `94d08c3`,
+`d106e33`, `eecee31`) because the workspace lives on a cloud-synced drive that cannot run
+`npm install` — see the environment note under the 2026-08-31 update in
+`SESSION_HANDOFF_2026-08-29.md`.
+
+Commit `7f4c21f` (this constraint was not in effect for this one, so it was fully verified via the
+local mirror) added three further, explicitly-scoped improvements: customer subscriptions on the
+customer detail page are now `Link`s to `/dashboard/subscriptions?edit=<id>`, which
+`subscriptions-manager.tsx` reads on mount to fetch that subscription and auto-open its View/Manage
+modal (invalid/deleted IDs surface as a `Notice` error, not a crash); the sidebar toggle button is
+now `position: fixed` relative to the viewport in both states (previously in-flow/absolute),
+staying reachable through page scroll, with `collapsed` state and its `localStorage` persistence
+unchanged; and Legacy Import's separate "Search existing customers" input plus "Existing customer"
+`<select>` under Attach existing customer are merged into one new `CustomerCombobox` component
+(`apps/web/components/customer-combobox.tsx`) that reuses the existing debounced server-side
+`/customers` search, shows `code · company · email` per result, and sets `candidateCustomerId`
+exactly as before — `review()` now explicitly validates that field is set for `ATTACH_EXISTING`
+since a free-text input can't carry native `required` semantics the way the removed `<select>`
+could.
+
+The owner has not yet deployed or tested any of this dashboard UI/UX work on `crm.nusrv.com`.
 
 ## Staging CAPTCHA deployment patch
 

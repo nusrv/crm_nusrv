@@ -564,3 +564,44 @@ scroll behavior are all unchanged. Commit `eecee31`.
 
 No schema/migration change; `npm run build` plus a restart is sufficient. Reviewed by static code
 inspection only (same drive-mounted-workspace constraint); not yet deployed or tested by the owner.
+
+## Update — 2026-09-08 subscription deep-linking, fixed sidebar toggle, customer combobox
+
+Owner requested three specific UI/UX improvements in one detailed message, each with explicit
+acceptance criteria and edge cases to check. This session had normal build/test/lint access (no
+drive-mounted-workspace restriction this time), so all three were fully verified via the local
+mirror, not just statically reviewed. Commit `7f4c21f`.
+
+1. **Clickable customer subscriptions.** `customer-detail.tsx`'s subscription rows (previously
+   plain `<div>`s) are now `Link`s to `/dashboard/subscriptions?edit=<subscriptionId>`.
+   `subscriptions-manager.tsx` reads that `edit` query param on mount, fetches the subscription by
+   its real ID, and opens the existing View/Manage modal automatically — no manual search required.
+   An invalid or deleted ID surfaces as a `Notice` error instead of crashing. The existing
+   `?customerId=` create-flow and normal navigation to `/dashboard/subscriptions` are unaffected
+   (separate query param, separate effect).
+2. **Viewport-fixed sidebar toggle.** The owner explicitly asked to stop relying on in-flow/
+   absolute positioning (which the two prior fixes used) and make the toggle
+   `position: fixed` relative to the browser viewport in both states, so it survives page scroll.
+   Both buttons (collapse and expand) are now top-level `position: fixed` siblings of `<aside>`/
+   `<main>` at `top: 1.25rem`, `left: 254` (sidebar edge) or `left: 10` (collapsed). `collapsed`
+   state, `toggleCollapsed`, and its `localStorage` persistence are untouched. `<main>`'s
+   conditional left padding (`lg:pl-16` only while collapsed, from the previous fix) is kept as-is
+   since it still reserves the gutter the fixed expand button needs to avoid overlapping content.
+3. **Merged Legacy Import customer combobox.** New `apps/web/components/customer-combobox.tsx`
+   (`CustomerCombobox`) replaces the separate "Search existing customers" input +
+   "Existing customer" `<select>` under Attach existing customer with one control: focusing shows
+   the current result set (browsable), typing re-triggers the *existing* debounced server-side
+   `/customers` search unchanged (now also tracked with a loading state and wrapped in error
+   handling it previously lacked), and each result row shows `code · company name` plus email on a
+   second line to distinguish similar names. Selecting sets `candidateCustomerId` exactly as
+   before. Native `required` on the old `<select>` doesn't carry over cleanly to a free-text input,
+   so `review()` now explicitly validates `candidateCustomerId` is set before submitting when
+   `resolution === 'ATTACH_EXISTING'`. `inspect(row)` now also resets the search box and
+   best-effort resolves a label for any already-set `candidateCustomerId` from the row's
+   `duplicateCandidates`, so reopening a row or switching resolutions doesn't leave a stale label
+   next to a different underlying selection — the edge case the owner specifically flagged.
+
+Verified: Prisma generate, strict typecheck, lint (including `jsx-a11y` combobox/listbox role
+requirements — fixed one warning by adding `aria-controls`/`role="listbox"`/`role="option"`), 161
+tests / 42 suites, and both production builds all pass. No schema/migration change. Not yet
+deployed or tested by the owner.
