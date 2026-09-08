@@ -83,6 +83,11 @@ export class CustomersService {
     ) {
       throw new BadRequestException('Phone must start with its country calling code.');
     }
+    // Both are inserted as separate rows keyed on (customerId, email); an identical pair would
+    // hit that unique constraint and surface as an opaque "record already exists" conflict.
+    if (input.secondaryEmail && input.secondaryEmail === input.primaryEmail) {
+      throw new BadRequestException('Secondary email must be different from the primary email.');
+    }
     try {
       return await this.prisma.$transaction(async (tx) => {
         const sourceSequence = await this.nextSourceSequence(tx);
