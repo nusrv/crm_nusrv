@@ -51,6 +51,18 @@ const emptyCustomer = {
   notes: '',
 };
 
+// The Phone field takes a local number (e.g. "0799442940") and the calling code field takes
+// its country prefix (e.g. "+962") separately, but the API requires one combined E.164 value
+// (the calling code as its literal prefix). Combine them the way a customer types them in;
+// if someone pastes an already-complete "+..." number into Phone, leave it untouched.
+function composePhone(rawPhone: string, callingCode: string): string | undefined {
+  const digits = rawPhone.replace(/[\s()-]/g, '');
+  if (!digits) return undefined;
+  if (digits.startsWith('+')) return digits;
+  if (!callingCode) return digits;
+  return `${callingCode}${digits.replace(/^0+/, '')}`;
+}
+
 export function CustomersManager() {
   const { can } = useControlPanel();
   const canManage = can('ADMIN', 'SALES_DEVELOPMENT');
@@ -124,14 +136,15 @@ export function CustomersManager() {
     setSuccess('');
     const form = new FormData(event.currentTarget);
     const value = (name: string) => String(form.get(name) ?? '').trim();
+    const callingCode = value('phoneCountryCallingCode');
     const body = {
       ...(editing ? {} : { customerCode: value('customerCode') }),
       companyName: value('companyName'),
       contactName: value('contactName') || undefined,
       primaryEmail: value('primaryEmail'),
       secondaryEmail: value('secondaryEmail') || undefined,
-      phone: value('phone') || undefined,
-      phoneCountryCallingCode: value('phoneCountryCallingCode') || undefined,
+      phone: composePhone(value('phone'), callingCode),
+      phoneCountryCallingCode: callingCode || undefined,
       address: value('address') || undefined,
       country: value('country') || undefined,
       taxNumber: value('taxNumber') || undefined,
@@ -312,8 +325,18 @@ export function CustomersManager() {
               type="email"
               value={String(defaults.secondaryEmail)}
             />
-            <Field label="Phone" name="phone" value={String(defaults.phone)} />
-            <Field label="Phone country calling code" name="phoneCountryCallingCode" value="" />
+            <Field
+              label="Phone (local number)"
+              name="phone"
+              placeholder="e.g. 0799442940"
+              value={String(defaults.phone)}
+            />
+            <Field
+              label="Phone country calling code"
+              name="phoneCountryCallingCode"
+              placeholder="e.g. +962"
+              value=""
+            />
             <Field label="Country" name="country" value={String(defaults.country)} />
             <Field label="Tax number" name="taxNumber" value={String(defaults.taxNumber)} />
             <label className="field">
@@ -504,17 +527,25 @@ function Field({
   value,
   required,
   type = 'text',
+  placeholder,
 }: {
   label: string;
   name: string;
   value: string;
   required?: boolean;
   type?: string;
+  placeholder?: string;
 }) {
   return (
     <label className="field">
       <span>{label}</span>
-      <input defaultValue={value} name={name} required={required} type={type} />
+      <input
+        defaultValue={value}
+        name={name}
+        placeholder={placeholder}
+        required={required}
+        type={type}
+      />
     </label>
   );
 }

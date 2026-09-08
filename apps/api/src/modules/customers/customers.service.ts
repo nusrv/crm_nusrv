@@ -155,8 +155,13 @@ export class CustomersService {
     if (!oldState) throw new NotFoundException('Customer not found.');
     if (input.billingEntityId) await this.requireActiveBillingEntity(input.billingEntityId);
     const { phoneCountryCallingCode, ...customerData } = input;
+    // Only re-validate the calling-code prefix when the phone value is actually changing.
+    // phoneCountryCallingCode is not persisted on this model (it only confirms consistency at
+    // write time), so re-submitting an unchanged phone from form defaults must not require the
+    // caller to retype the calling code on every unrelated edit.
     if (
       input.phone &&
+      input.phone !== oldState.phone &&
       (!phoneCountryCallingCode || !input.phone.startsWith(phoneCountryCallingCode))
     ) {
       throw new BadRequestException('Phone must start with its country calling code.');
