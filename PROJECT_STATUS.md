@@ -432,6 +432,35 @@ still maps every P2002 across every service to that same generic message — oth
 scenarios elsewhere in the app can still produce equally confusing reports until it's enriched with
 constraint context, or each call site adds its own pre-check as this one did.
 
+## Billing-Entity customer codes, bilingual names, deactivation cascade (commit `647461a`)
+
+Large, explicit spec from the owner covering four related business rules, implemented in full —
+see `SESSION_HANDOFF_2026-08-29.md`'s matching update for the complete breakdown:
+
+- **Customer deactivation suspends every ACTIVE subscription** in the same transaction (via
+  `/deactivate` or a direct status edit — both go through `CustomersService.update()`).
+  Reactivation never touches subscriptions; reactivating a suspended subscription stays manual and
+  individual. The renewal engine's reminder query already filtered `customer.status: ACTIVE`, so no
+  change was needed there — confirmed and regression-tested.
+- **Customer Codes (`FF0001`, `NS0001`, ...) are now system-generated**, one independent sequence
+  per Billing Entity (new `CustomerCodeSequence` model + `CustomerCodeService`, the single
+  authoritative generator for both manual creation and Legacy Import), never client-supplied,
+  never reused after delete, concurrency-safe via a transactional row-lock increment.
+  `BillingEntity` gained a required, immutable, unique `customerCodePrefix`.
+- **Customer names are now bilingual**: `companyName` replaced by nullable `nameEn`/`nameAr`, at
+  least one required (service-layer validation). Legacy Import auto-classifies the single source
+  name column by Arabic-script detection (`name-language.util.ts`), not translation. Duplicate
+  detection now compares both name fields and is scoped to the row's own Billing Entity — a name
+  match across different Billing Entities is no longer a duplicate candidate at all.
+- Schema/migration `20260908000000_customer_code_sequences_and_bilingual_names`. No renumbering of
+  existing `LEG-C-*`/`LEG-S-*` codes, per explicit owner instruction (customers are being deleted
+  and re-imported after this ships).
+
+Verified: `prisma validate` + `db:generate`, strict typecheck, lint, 174 tests / 44 suites, both
+production builds. **Not yet deployed.** Unlike other recent updates, this one requires
+`db:migrate:deploy` before the app will even start against the live schema — see the deploy
+sequence below.
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then
@@ -458,15 +487,21 @@ claim as scoped to that.
 
 ## Required owner/operator actions
 
-1. Deploy the current `main` branch (`git pull`, `npm ci`, `npm run db:generate`, `npm run build`,
-   restart the API/web/worker processes — no migration in this batch) and test the dashboard
-   UI/UX overhaul and the collapsed-sidebar layout fix described above, especially on the Legacy
-   Import page. This has not been tested against a live deployment yet. **Priority**: retest text
-   search on Customers, Subscriptions, Renewal Cases, and Communication Outbox — all were likely
-   silently broken (500 or no results) until the `mode: 'insensitive'` fix above.
-2. Add `USD`, `SAR`, and `EUR` in Currencies / Rates with real rates before approving any row
+1. **This deploy requires a migration** (unlike the last several): `git pull`, `npm ci`,
+   `npm run db:migrate:deploy`, `npm run db:generate`, `npm run build`, restart the API/web/worker
+   processes. The migration drops `customers.company_name` (copying it into `name_en` first) and
+   adds a required `customer_code_prefix` to `billing_entities` (auto-backfilled `FF`/`NS` for the
+   two existing entities). After deploying, create a test customer under each Billing Entity and
+   confirm it gets `FF0001`/`NS0001`; deactivate a customer with an active subscription and confirm
+   the subscription flips to `SUSPENDED`.
+2. Deploy the current `main` branch and test the dashboard UI/UX overhaul and the collapsed-sidebar
+   layout fix described above, especially on the Legacy Import page. This has not been tested
+   against a live deployment yet. **Priority**: retest text search on Customers, Subscriptions,
+   Renewal Cases, and Communication Outbox — all were likely silently broken (500 or no results)
+   until the `mode: 'insensitive'` fix above.
+3. Add `USD`, `SAR`, and `EUR` in Currencies / Rates with real rates before approving any row
    priced in them, if not already done.
-3. Approve the rows that land at `READY_FOR_APPROVAL` directly; work through the remainder's
+4. Approve the rows that land at `READY_FOR_APPROVAL` directly; work through the remainder's
    package-classification decisions (the same 129-row backlog Phase 2.1 already identified).
 
 ## Integration status

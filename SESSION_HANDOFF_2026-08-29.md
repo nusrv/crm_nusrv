@@ -863,3 +863,69 @@ scenario across the app (billing entities, service types, currencies, technical 
 subscriptions, etc.) until someone either enriches that mapper with the Prisma error's constraint
 target or each call site adds its own pre-check the way this fix did. Flagging rather than fixing
 now to stay scoped to the reported bug.
+
+## Update — 2026-09-08 major feature: Billing-Entity customer codes, bilingual names, deactivation cascade
+
+The owner sent a large, explicit 26-section spec covering customer deactivation, Customer Code
+generation, bilingual (English/Arabic) customer names, and Legacy Import consistency. Implemented
+in full; commit `647461a`. This is the biggest single change of the session — read the commit
+message for the complete breakdown; summarized here:
+
+**Customer deactivation suspends subscriptions.** `CustomersService.update()` now suspends every
+ACTIVE subscription (`SUSPENDED`) in the same transaction whenever `status` transitions to
+`INACTIVE` — whether via the dedicated `/deactivate` endpoint or a direct edit-form status change,
+since `deactivate()` just calls `update()`. Reactivation deliberately does **not** touch
+subscriptions (manual reactivation only — an already-suspended-for-another-reason subscription must
+not be silently reactivated). Confirmed `renewal-engine.service.ts`'s `evaluateAll()` already
+filters `status: ACTIVE` AND `customer.status: ACTIVE` server-side, so reminder exclusion needed no
+code change — just new regression-test coverage locking that behavior in.
+
+**Customer Codes are now system-generated, `FFxxxx`/`NSxxxx`, per-Billing-Entity.** New
+`CustomerCodeSequence` model (one row per Billing Entity, monotonic, never reused after delete) and
+`CustomerCodeService.next()` — the single authoritative generator, used by both manual creation and
+Legacy Import approval (no separate numbering paths). Concurrency-safe: `next()` runs inside the
+caller's transaction; the row-level lock from the `UPDATE` on that entity's sequence row serializes
+concurrent creates under the *same* entity while different entities proceed in parallel.
+`BillingEntity` gained a required, unique, immutable-after-creation `customerCodePrefix`.
+`customerCode` was removed entirely from `CreateCustomerDto` (server-generated) — it was already
+absent from `UpdateCustomerDto` (immutable). Legacy Import's `ATTACH_EXISTING` path is untouched: no
+code is ever generated when attaching to an existing customer, only for `CREATE_NEW`.
+
+**Bilingual names.** `Customer.companyName` is replaced by nullable `nameEn`/`nameAr`. "At least one
+required" is enforced in the service layer (not a DB `CHECK`, to match this codebase's established
+pattern of cross-field validation in services — see the phone/calling-code and duplicate-email
+checks from two updates ago). Legacy Import classifies the single source name column via new
+`name-language.util.ts` (Arabic-script Unicode-range detection — classification, not translation),
+applied when staging both the flat legacy workbook and the canonical workbook. Duplicate detection
+now compares both name fields **and is scoped to the row's own Billing Entity** — per the owner's
+explicit business rule, the same company legitimately has one customer record per Billing Entity, so
+a name match across different entities is no longer even considered a duplicate candidate. Every UI
+surface that showed `companyName` (customers list/detail/forms, the customer combobox, subscription
+forms/lists, renewal cases/communication outbox, Legacy Import's review form and duplicate-candidate
+list) now shows `nameEn`/`nameAr` through two new shared display helpers —
+`apps/web/lib/customer-name.ts` (frontend) and `apps/api/.../customers/customer-name.util.ts`
+(backend, used in the renewal reminder template's `customerCompany` merge tag).
+
+**Schema/migration**: `20260908000000_customer_code_sequences_and_bilingual_names`. `customers`:
+drops `company_name` (its value is copied into `name_en` first, unconditionally, as a safety-net
+fallback — not a language-aware migration, since the owner is deleting and re-importing all
+customers after this ships anyway), adds `name_en`/`name_ar` + indexes. `billing_entities`: adds
+required unique `customer_code_prefix`, backfilled `FF`/`NS` for the two existing entities by
+`code`. New `customer_code_sequences` table, seeded at 0 for every existing entity. No renumbering
+of existing `LEG-C-*`/`LEG-S-*` codes was built, per the owner's explicit instruction not to.
+
+**Verification**: `prisma validate` + `db:generate`, strict typecheck, lint (found and fixed one
+`no-irregular-whitespace` hit — the Arabic-script regex's upper bound accidentally included U+FEFF,
+the zero-width-no-break-space/BOM character, which isn't a real Arabic letter anyway; narrowed the
+range by one codepoint), 174 tests / 44 suites passing (new: `customer-code.service.spec.ts`,
+`name-language.util.spec.ts`, a deactivation-cascade suite in `customers.service.spec.ts`; updated
+fixtures/mocks in `customers.service.spec.ts` and `legacy-import.service.spec.ts` for the new
+`CustomerCodeService` constructor dependency), both production builds. The three live-DB-gated specs
+(`mariadb-*-live.spec.ts`, skipped without `MARIADB_TEST_DATABASE_URL`) were updated for
+type-correctness only (they still construct their test schema from only the very first
+`20260823000000` migration, a pre-existing gap unrelated to this change — not attempted here).
+
+**Not yet deployed or tested by the owner.** This needs a real migration run (`db:migrate:deploy`)
+against the live database before anything else — unlike prior updates this session, this one cannot
+be smoke-tested without applying the schema migration first. See the implementation report delivered
+in-chat for full manual testing steps.
