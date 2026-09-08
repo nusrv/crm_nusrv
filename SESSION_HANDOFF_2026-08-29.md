@@ -605,3 +605,39 @@ Verified: Prisma generate, strict typecheck, lint (including `jsx-a11y` combobox
 requirements — fixed one warning by adding `aria-controls`/`role="listbox"`/`role="option"`), 161
 tests / 42 suites, and both production builds all pass. No schema/migration change. Not yet
 deployed or tested by the owner.
+
+## Update — 2026-09-08 fixed a 500 error on every text search in the app
+
+The owner tested the new combobox and reported the filter "not working" plus a browser console
+error. The console error (`Cannot assign to read only property 'open' of object '#<Window>'... at
+blockPopupsFunc`) is a third-party browser-extension popup blocker, unrelated to this app — told
+the owner to disregard it. The real bug: typing a search term returned "internal server error."
+
+**Root cause**, affecting far more than the combobox: every text search across the app —
+Customers, Subscriptions, Renewal Cases, Communication Outbox, and the Legacy Import row search —
+used Prisma's `mode: 'insensitive'` filter on `contains`. That option is valid only for the
+Postgres/MongoDB connectors. Against this app's `mysql` (MariaDB) datasource, Prisma Client throws
+a `PrismaClientValidationError` ("Unknown argument `mode`") the instant a search term is present,
+which surfaces as an unhandled 500. TypeScript never caught this at compile time because `where` is
+assembled as a loose local object (not assigned directly into a typed parameter position), so
+TypeScript's excess-property check never inspected the inner `mode` field. Unit tests didn't catch
+it either — they mock Prisma rather than hitting real MariaDB, and the live-MariaDB test suites are
+skipped by default in every session (see the 2026-08-31 environment note). This bug had almost
+certainly been present since Phase 0/1 — the just-added combobox's new `.catch()` on the search
+request is what finally surfaced it; the old separate search input had no error handling at all, so
+the exact same request was already silently failing there, just presenting as "the filter does
+nothing" instead of an explicit error.
+
+**Fix**: removed `mode: 'insensitive'` from all 16 occurrences across 5 service files
+(`customers.service.ts`, `subscriptions.service.ts`, `legacy-import.service.ts`,
+`communication-outbox.service.ts`, `renewal-cases.service.ts`). Every affected column lives in a
+`utf8mb4_unicode_ci` table (per the Phase 0/1 migration's `COLLATE` clause), and that collation is
+already case-insensitive, so a plain `contains` behaves identically to what `mode: 'insensitive'`
+would have done on Postgres — this is a pure bug fix, not a behavior change. Commit `86c4ef7`.
+
+Verified: Prisma generate, strict typecheck, lint, 161 tests / 42 suites, and both production
+builds all pass. No schema/migration change; `npm run build` plus a restart is sufficient. This is
+almost certainly the single highest-impact fix in this whole UI/UX session — **every text search
+box in the live app has likely been silently broken** until now. Recommend the owner specifically
+retest search on the Customers list, Subscriptions list, and Renewal Cases/Communication Outbox
+screens after deploying, not just the Legacy Import combobox that surfaced it.

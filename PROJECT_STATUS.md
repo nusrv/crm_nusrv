@@ -14,6 +14,10 @@
   deep-linking, viewport-fixed sidebar toggle, Legacy Import customer combobox): code complete,
   committed on `main` (`80591fb`..`7f4c21f`), not yet deployed — see "Dashboard UI/UX overhaul and
   collapsed-sidebar layout fix" below
+- **High-impact fix**: every text search in the app (Customers, Subscriptions, Renewal Cases,
+  Communication Outbox, Legacy Import rows) was silently or explicitly failing due to a
+  Postgres-only Prisma filter used against this app's MariaDB datasource — see "Fixed a 500 error
+  on every text search in the app" below. Commit `86c4ef7`, not yet deployed.
 - Deployment model: the owner deploys to `crm.nusrv.com` manually after reviewing each GitHub
   change; Claude Code has no direct Plesk/SSH/database access and does not deploy
 - Phase 3: LOCKED
@@ -294,6 +298,30 @@ could.
 
 The owner has not yet deployed or tested any of this dashboard UI/UX work on `crm.nusrv.com`.
 
+## Fixed a 500 error on every text search in the app
+
+Every text search across the app — Customers, Subscriptions, Renewal Cases, Communication Outbox,
+and Legacy Import row search — used Prisma's `mode: 'insensitive'` filter on `contains`. That
+option is valid only for the Postgres/MongoDB connectors; against this app's `mysql` (MariaDB)
+datasource, Prisma Client throws a validation error ("Unknown argument `mode`") the instant a
+search term is present, surfacing as an unhandled 500. TypeScript didn't catch it at compile time
+(the `where` object is assembled loosely, so excess-property checking never inspected the inner
+`mode` field), and unit tests didn't catch it either since they mock Prisma rather than hitting real
+MariaDB. This was almost certainly present since Phase 0/1 and had been silently failing
+everywhere; it was only surfaced now because the new Legacy Import customer combobox (see above)
+added proper error handling to its search request, where the old separate search input had none.
+
+Fixed by removing `mode: 'insensitive'` from all 16 occurrences across 5 service files. Every
+affected column lives in a `utf8mb4_unicode_ci` table (per the Phase 0/1 migration), and that
+collation is already case-insensitive, so a plain `contains` behaves identically — this is a pure
+bug fix, not a behavior change. Commit `86c4ef7`. Verified: Prisma generate, strict typecheck,
+lint, 161 tests / 42 suites, both production builds. No schema/migration change.
+
+**This is likely the highest-impact fix in this session** — every text search box in the live app
+has probably been silently broken until now. After deploying, specifically retest search on the
+Customers list, Subscriptions list, and Renewal Cases/Communication Outbox screens, not just the
+Legacy Import combobox that surfaced it.
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then
@@ -323,7 +351,9 @@ claim as scoped to that.
 1. Deploy the current `main` branch (`git pull`, `npm ci`, `npm run db:generate`, `npm run build`,
    restart the API/web/worker processes — no migration in this batch) and test the dashboard
    UI/UX overhaul and the collapsed-sidebar layout fix described above, especially on the Legacy
-   Import page. This has not been tested against a live deployment yet.
+   Import page. This has not been tested against a live deployment yet. **Priority**: retest text
+   search on Customers, Subscriptions, Renewal Cases, and Communication Outbox — all were likely
+   silently broken (500 or no results) until the `mode: 'insensitive'` fix above.
 2. Add `USD`, `SAR`, and `EUR` in Currencies / Rates with real rates before approving any row
    priced in them, if not already done.
 3. Approve the rows that land at `READY_FOR_APPROVAL` directly; work through the remainder's
