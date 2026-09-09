@@ -520,6 +520,34 @@ This was unrelated to the bilingual-name/migration work from a few updates ago �
 migrated" hypothesis was reasonable given the evidence at the time but wasn't the actual cause;
 this bug predates that work entirely.
 
+## Renewals page turned into an operational workspace (commit `835f7d1`)
+
+Full 26-point rework, delivered after the crash fix above: overview cards (due within 7/30 days,
+overdue, awaiting customer, on hold — RenewalCase-based, not raw subscriptions, and independent of
+the table's filters); richer filters (search now covers Customer Code too; a new urgency filter
+replaced the old exact-day `daysBeforeDue` dropdown with proper overdue/today/week/month range
+buckets; new Package and Billing Entity filters; Clear filters); a much richer table
+(Due/Days-left/Customer/Subscription/Service+Package/Amount/Billing-Entity/Status/Reminder/Actions,
+with clickable Customer and Subscription links reusing the existing `?edit=` deep-link); a new
+detail modal (`renewal-case-detail.tsx`) with customer/subscription sections, direct navigation
+links, a renewal timeline built from the *actual configured* `ReminderRule`s (not hardcoded),
+full communication history, and the hold/mark-* workflow actions; the Communication Outbox kept
+but collapsed by default with its own filter, explicitly secondary. New backend:
+`GET /renewal-cases/summary` and four intentional workflow-action endpoints
+(mark-awaiting-customer/accepted/do-not-renew/fulfilled — not a generic status editor; Phase 3
+invoice/payment states deliberately not exposed). No schema change. RenewalCase stayed the core
+entity throughout, per explicit instruction — never became a second subscriptions page.
+
+**Confirmed, unfixed (reported, not silently changed) renewal-engine limitation**: `evaluateAll()`'s
+own subscription query only considers `renewalDate >= today`, so a subscription that's already
+overdue *before the engine ever evaluates it* never gets a `RenewalCase` created and never appears
+on this page at all. A case created while still upcoming, that later becomes overdue, is never
+hidden or deleted — it correctly shows as "N days overdue," exactly as specified. See
+`SESSION_HANDOFF_2026-08-29.md` for the exact query location if this needs a fix later.
+
+Verified: strict typecheck, lint, 202 tests / 46 suites, both production builds. **Not yet tested
+by the owner.**
+
 ## Staging CAPTCHA deployment patch
 
 The internal staff-only Control Panel supports `CAPTCHA_PROVIDER=none` in production. Login then

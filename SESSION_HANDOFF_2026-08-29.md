@@ -1090,3 +1090,109 @@ rather than silently reaching a consumer again.
 Verified: strict typecheck, lint, 187 tests / 46 suites, web production build. **Not yet tested by
 the owner in the browser** — this was diagnosed and fixed from the reported error text and a static
 read of the actual contract, not reproduced live.
+
+## Update — 2026-09-09 Renewals turned into a full operational workspace (commit `835f7d1`)
+
+Once the crash was fixed, the owner asked for a much bigger follow-up: the Renewals page loaded
+but didn't give enough context to actually manage renewals — no price, no package, no Billing
+Entity, no reminder history, no way to see what happens next. Delivered a 26-point spec in full.
+Investigated everything listed (RenewalCase model, RenewalCaseStatus, Subscription, Customer,
+ServicePackage, BillingEntity, CommunicationOutbox, the renewal engine, ReminderRule/
+NotificationRule config, the existing hold flow, the subscription `?edit=` deep-link, the
+`customer-name.ts` bilingual helpers) before writing anything, per the owner's explicit "before
+coding" checklist. **RenewalCase stayed the core entity throughout** — this is still an ops layer
+over the existing engine, never a raw subscription list; a subscription approaching renewal with no
+case yet still correctly shows zero. No schema/migration change.
+
+**Backend** (`renewal-cases.service.ts`/`.controller.ts`/`.dto.ts`):
+- Enriched the existing `renewalCaseInclude`: customer gains `phone`/`contactName`, subscription
+  gains its `servicePackage` relation, plus the single most recent `communicationOutbox` row
+  (bounded `take: 1`, no N+1) for a cheap list-view reminder signal — all other fields the table
+  needed (price, currency, code, name, status) were already coming back from the existing include,
+  just not typed on the frontend yet.
+- New `GET /renewal-cases/summary` (must be declared before `:id` in the controller — verified
+  this ordering matters and got it right): due-within-7/30-days, overdue, awaiting-customer,
+  on-hold. Independent of the table's own filters, like a dashboard header. Found
+  `DashboardService.summary()` already computes `awaitingCustomer`/`renewalCasesOnHold` with the
+  *exact same query shape* I'd independently written — confirmed consistency rather than
+  refactoring to share code (dashboard's "renewals within N days" counts raw ACTIVE subscriptions,
+  a deliberately different, broader concept than this page's RenewalCase-only due/overdue counts,
+  so they aren't the same computation and don't call each other). Due/overdue excludes terminal
+  statuses (`CLOSED`/`FULFILLED`/`REJECTED`/`DO_NOT_RENEW`) — a FULFILLED case isn't "due" anymore
+  no matter its stored `dueDate`.
+- `RenewalCaseListQueryDto` gained `servicePackageId` and `billingEntityId` filters; search now
+  also matches Customer Code (previously just subscription code/name and customer name EN/AR).
+- Four new, intentional, single-purpose workflow actions — explicitly **not** a generic status
+  editor, per the owner's own instruction: `POST :id/mark-awaiting-customer`, `mark-accepted`,
+  `mark-do-not-renew`, `mark-fulfilled`. Each only fires from a non-terminal status (else 409) and
+  sets the one matching field the schema already had for that decision (`acceptedAt`/
+  `doNotRenewAt`/`fulfilledAt`) — same pattern `createHold`/`releaseHold` already use for their own
+  fields. Phase 3's invoice/payment/collection states (`INVOICE_DRAFT` through `PAYMENT_CONFIRMED`)
+  are deliberately **not** exposed as actions — that workflow is still locked and unbuilt; these
+  four are just what the current Phase 2 model already supports. Same RBAC as the hold endpoints.
+
+**Frontend**:
+- New `apps/web/lib/renewal-timing.ts`: `daysUntilDue`/`daysLeftLabel` ("6 days" / "Today" / "3
+  days overdue" — deliberately mirrors `business-time.service.ts`'s own calendar-day-diffing
+  style, but does it client-side without trying to replicate the server's business-timezone
+  awareness, matching how every other date cell in this app already just does `.slice(0, 10)`),
+  `urgencyOf` (overdue/today/week/month), `reminderStatusLabel`.
+- New `apps/web/components/renewal-case-detail.tsx`: a `Modal` (the same pattern used everywhere
+  else in this app for "view/edit one record") showing the full customer + subscription context
+  with direct links to Customer Details and the exact Subscription (reusing the existing `?edit=`
+  deep-link — no new navigation mechanism invented), a renewal timeline built from the *actual
+  configured* `ReminderRule`s (fetched from the already-existing `/renewal-configuration` endpoint
+  — never hardcoded `[30,21,14,7,2,0]`) cross-referenced against that case's own communication
+  history and `evaluationDecisions` (so a milestone that was skipped for a hold shows "Skipped — on
+  hold" rather than just "Pending"), the full communication history table for that case, and the
+  hold/mark-* action buttons.
+- `renewal-cases-manager.tsx` reworked: overview cards reusing the **existing**
+  `.metric-grid`/`.metric-card` CSS already established by `dashboard-summary.tsx` (found this
+  while investigating, used it instead of inventing new card styling); richer filters (search now
+  covers Customer Code + both names + subscription code/name; status; hold state; a new
+  urgency filter that replaced the old exact-single-day `daysBeforeDue` dropdown with proper
+  overdue/today/week/month range buckets computed from the existing `dueFrom`/`dueTo` params —
+  editing the date fields manually clears the urgency selection since they'd otherwise silently
+  disagree; Service Type; Package, cascading from Service Type; Billing Entity; due-date range) and
+  a "Clear filters" button; the table now shows Due/Days-left/Customer (code + bilingual name,
+  clickable)/Subscription (code + name, clickable, deep-links to the exact subscription)/Service +
+  Package/Amount + currency/Billing Entity/Status/Reminder status/Actions; row actions are View
+  (opens the detail modal) plus the existing inline Hold/Release; the Communication Outbox section
+  is kept but now collapsed by default with its own search + status filter and framed explicitly as
+  a secondary/debugging view, not the primary way to understand a renewal; empty states now
+  distinguish "no cases exist" from "no matches for these filters"; the defensive `?? []` fallback
+  from the earlier crash fix is kept on every array-typed state and extended to every new fetch
+  (service types, packages, billing entities, summary) so a future contract mismatch on any of them
+  degrades to an empty state instead of crashing the page again.
+
+**Tests**: `renewal-cases.service.spec.ts` gained coverage for `summary()` (terminal-status
+exclusion verified via the exact `where` clause, direct count assertions), all four mark-* actions
+(one success-path test per action asserting the exact `data` written, plus a parameterized test
+confirming all four refuse to fire from any of the four terminal statuses), and a `list()`
+filter-shape test for the two new filters plus Customer-Code search. `phase-2-rbac.spec.ts`
+extended to cover the four new endpoints (same role set as hold actions) and `GET summary` (no
+role restriction, like `list`).
+
+Verified: strict typecheck, lint, 202 tests / 46 suites, both production builds, Prettier
+(line-wrap only across 3 files, reviewed by hand and accepted). **Not yet tested by the owner in
+the browser.**
+
+**Open items worth knowing about, not fixed here (none required by the task)**:
+- `reminderStatusLabel()` deliberately does not attempt an accurate "N queued" count — only the
+  single most-recent outbox message's own status is cheaply/reliably knowable without a second,
+  unbounded query per row. If a precise queued-count ever becomes worth the extra cost, Prisma 7's
+  filtered relation `_count` (`_count: { select: { communicationOutbox: { where: {...} } } }`)
+  would be the way to add it without N+1.
+- **Confirmed, real renewal-engine limitation, deliberately not changed** (the owner asked for this
+  to be reported rather than silently fixed as part of a UI task): `RenewalEngineService.evaluateAll()`'s
+  own subscription query filters `renewalDate: { gte: businessDate(asOf), lte: addBusinessDays(asOf, maxDays) }`
+  — the `gte: today` means a subscription whose renewal date is already in the past by the time the
+  engine first evaluates it will **never** get a `RenewalCase` created for it at all, and will never
+  appear on the Renewals page. This only affects subscriptions that become overdue *before* the
+  engine ever ran for them (e.g. freshly imported historical data with a past renewal date, or a
+  long worker outage spanning a renewal date) — a case that was already created *before* going
+  overdue is never deleted or filtered out by date direction anywhere, so it correctly keeps
+  showing as "N days overdue" on the new page exactly as the spec asked. If genuinely-overdue
+  subscriptions ever seem to be silently absent from the Renewals page entirely (not just
+  displaying without the "overdue" styling), this query is where to look — not a bug introduced or
+  fixed this session.
