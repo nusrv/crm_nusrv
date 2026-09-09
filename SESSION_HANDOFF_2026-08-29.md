@@ -1399,3 +1399,34 @@ packages.
 
 **Still not pushed** — a second local commit was created on top of the first with these fixes, at
 the owner's explicit request to review the actual migration file before any push or deployment.
+
+### 2026-09-09 (same day, second follow-up) — Two more precise fixes from a direct review of migration.sql
+
+The owner reviewed the fixed migration file itself (not just my description of it) and asked for
+two changes, both purely to the migration SQL — no change to the two-phase rename logic, the
+`ROW_NUMBER()` ordering, the `CASE`-based padding, the transaction wrapping, or the test file:
+
+1. **Move `CREATE TABLE subscription_code_sequences` to after preflight validation succeeds, still
+   before `START TRANSACTION`.** Previously it ran first, so a preflight failure (the temp-code
+   collision guard, or the final-code uniqueness/length checks) would still have left this
+   permanent table behind — harmless (empty, and the next deploy attempt would just reuse it), but
+   not the "leaves nothing behind" guarantee the owner wanted. Reordered so the two temporary
+   tables (and their validating `INSERT`s) run completely first; the permanent table is only
+   created once both have succeeded. Verified directly: reproduced the temp-prefix collision
+   scenario from the prior round again, confirmed the migration still aborts the same way, and
+   confirmed with `SHOW TABLES LIKE 'subscription_code_sequences'` that the table **does not exist
+   at all** afterward (previously it would have).
+2. **Corrected an inaccurate comment.** The prior version claimed `CREATE TEMPORARY TABLE` "is DDL
+   and implicitly commits in MariaDB" the same way a normal `CREATE TABLE` does — the owner
+   corrected this: temporary-table DDL does **not** cause the same implicit commit in MariaDB. The
+   temp tables' placement before `START TRANSACTION` was already correct (per the owner: "the
+   current placement is fine"), just for a different reason than the comment gave — they run first
+   so preflight can complete and potentially fail before the permanent table is created, not because
+   of an implicit-commit concern. Comment corrected to say so, and to correctly attribute the actual
+   implicit-commit behavior to the (now-relocated) permanent `CREATE TABLE` statement instead, which
+   really does cause one.
+
+Re-ran the full live-DB test suite (all 8 scenarios from the prior round, file itself untouched)
+against a real local MariaDB — all pass. Re-ran the full API suite, typecheck, lint, and
+`prisma validate` — all clean (230 tests / 51 suites, 210 passed / 20 skipped). Committed locally as
+a third commit on top of the previous two. **Still not pushed.**

@@ -4,24 +4,14 @@
 -- generate. This migration updates existing Subscription rows IN PLACE — no subscription or
 -- customer is deleted, recreated, or re-imported, and no id changes.
 
-CREATE TABLE `subscription_code_sequences` (
-  `customer_id` VARCHAR(36) NOT NULL,
-  `last_value` INT NOT NULL DEFAULT 0,
-  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
-  PRIMARY KEY (`customer_id`),
-  CONSTRAINT `subscription_code_sequences_customer_id_fkey`
-    FOREIGN KEY (`customer_id`) REFERENCES `customers`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
 -- ============================================================================================
--- Preflight (setup only — no `subscriptions` row is touched yet). Both temporary tables below use
--- `CREATE TEMPORARY TABLE`, which — like `CREATE TABLE` — is DDL and implicitly commits in
--- MariaDB, so they are deliberately outside the `START TRANSACTION` block further down; only the
--- actual data rewrite needs transactional protection. They live only for this session, matching
--- the single connection `prisma migrate deploy` uses to run this file, and are dropped explicitly
--- at the end for hygiene.
+-- Preflight (setup only — no `subscriptions` row is modified yet, and no permanent table exists
+-- yet either). `CREATE TEMPORARY TABLE` does NOT cause an implicit commit in MariaDB the way a
+-- normal `CREATE TABLE` does, but that isn't why these run before `START TRANSACTION` — they run
+-- here so all preflight validation completes (and can fail) before the permanent
+-- `subscription_code_sequences` table is created at all. Both temporary tables live only for this
+-- session, matching the single connection `prisma migrate deploy` uses to run this file, and are
+-- dropped explicitly at the end for hygiene.
 -- ============================================================================================
 
 -- Materialize, once, the temporary code and final code every subscription will receive, and prove
@@ -81,9 +71,27 @@ SELECT `subscription_code` FROM `subscriptions`;
 
 -- If any `temp_code` already exists as some subscription's current code, this INSERT hits the
 -- PRIMARY KEY above and the whole migration aborts right here — nothing in `subscriptions` has
--- been written yet.
+-- been written yet, and the permanent `subscription_code_sequences` table below does not exist yet
+-- either, so a preflight failure leaves no permanent schema artifact behind.
 INSERT INTO `_subscription_code_preflight_check` (`subscription_code`)
 SELECT `temp_code` FROM `_subscription_code_migration_map`;
+
+-- ============================================================================================
+-- All preflight validation has succeeded. Only now create the permanent table — this is real DDL
+-- and, unlike the temporary tables above, DOES cause an implicit commit in MariaDB, so it belongs
+-- outside the `START TRANSACTION` block below regardless; placing it here (after preflight, before
+-- the transaction) means a preflight failure never creates it at all.
+-- ============================================================================================
+CREATE TABLE `subscription_code_sequences` (
+  `customer_id` VARCHAR(36) NOT NULL,
+  `last_value` INT NOT NULL DEFAULT 0,
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+  PRIMARY KEY (`customer_id`),
+  CONSTRAINT `subscription_code_sequences_customer_id_fkey`
+    FOREIGN KEY (`customer_id`) REFERENCES `customers`(`id`)
+    ON DELETE RESTRICT ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- ============================================================================================
 -- Data rewrite. Wrapped in an explicit transaction so that a failure partway through (phase 2, or
