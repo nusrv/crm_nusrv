@@ -1430,3 +1430,23 @@ Re-ran the full live-DB test suite (all 8 scenarios from the prior round, file i
 against a real local MariaDB — all pass. Re-ran the full API suite, typecheck, lint, and
 `prisma validate` — all clean (230 tests / 51 suites, 210 passed / 20 skipped). Committed locally as
 a third commit on top of the previous two. **Still not pushed.**
+
+### 2026-09-09 (same day, third follow-up) — Owner review found the new FK would have broken existing customer deletion
+
+The owner reviewed the migration file again and caught a real regression: `subscription_code_sequences.customer_id`'s FK was `ON DELETE RESTRICT`. `CustomersService.deleteCustomer()` — existing, unmodified, already-audited code — explicitly deletes a customer's subscriptions and other dependents and then calls `tx.customer.delete()`, but has no reason to know about this brand-new table. After this migration, every customer with a subscription gets a sequence row, so deleting such a customer would have hit the new FK and failed outright — a real production break, not a hypothetical one.
+
+Fixed exactly as scoped, nothing else touched:
+- `schema.prisma`: `SubscriptionCodeSequence.customer` relation changed from `onDelete: Restrict` to `onDelete: Cascade`.
+- `migration.sql`: the FK's `ON DELETE RESTRICT` → `ON DELETE CASCADE` (`ON UPDATE CASCADE` was already there — Prisma's own default for MySQL/MariaDB `onUpdate`, matching the `CustomerCodeSequence` precedent, which is why it required no explicit `onUpdate` in the schema either).
+
+This is a schema-level fix only — no change to `CustomersService.deleteCustomer()` itself was needed or made; the database now handles removing the now-orphaned sequence row automatically as part of the customer `DELETE` statement's own cascade.
+
+The rule the owner explicitly wanted preserved was already true by construction and needed no code change: there is no FK between `subscriptions` and `subscription_code_sequences`, so deleting an individual Subscription can never touch the sequence row regardless of how it's deleted.
+
+New live-DB test, `apps/api/prisma/mariadb-subscription-code-sequence-delete-live.spec.ts` (the already-reviewed backfill/preflight/transaction test file was left completely untouched, per instruction), proves both required behaviors against a real MariaDB:
+- Creates 3 subscriptions for a customer via the real `SubscriptionCodeService` (`S01`/`S02`/`S03`), deletes `S03` directly, confirms the sequence's `last_value` is still `3`, then creates another subscription and confirms it gets `S04` — never reusing `S03`.
+- Creates a customer with subscriptions (and therefore a sequence row), then calls the real, unmodified `CustomersService.deleteCustomer()` — not a reimplementation — and confirms it resolves cleanly, the customer is gone, and the sequence row is gone too (cascaded, not orphaned).
+
+Sanity-checked the test has real teeth the same way as the prior rounds: temporarily reverted the FK to `RESTRICT` in the mirror only, re-ran, and got the exact real failure — `Foreign key constraint violated` inside `customers.service.ts:377`, the actual `tx.customer.delete()` call — confirming this is the precise bug the owner described, then restored the fix and re-confirmed green. Also re-ran the previously-reviewed backfill/preflight/transaction live test file (untouched) to confirm the FK change doesn't affect it — all 8 still pass.
+
+Full verification: `prisma validate`, typecheck, lint — all clean. Full API suite: 232 tests / 52 suites (210 passed, 22 skipped — 5 live-DB-only suites now, since this adds one). Production build succeeds. Committed locally as a fourth commit on top of the previous three. **Still not pushed.**

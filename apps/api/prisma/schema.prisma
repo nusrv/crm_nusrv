@@ -411,7 +411,14 @@ model SubscriptionCodeSequence {
   customerId String   @id @map("customer_id") @db.VarChar(36)
   lastValue  Int      @default(0) @map("last_value")
   updatedAt  DateTime @updatedAt @map("updated_at")
-  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  // Cascade, not Restrict: this row is internal sequence state owned entirely by the Customer and
+  // has no value once the Customer is gone. `CustomersService.deleteCustomer()` explicitly deletes
+  // the customer's subscriptions and other dependents but does not (and should not need to) know
+  // about this table — a Restrict here would break that existing, already-audited delete flow for
+  // every customer that has ever had a subscription. Deleting an individual Subscription never
+  // touches this row at all (no FK between Subscription and SubscriptionCodeSequence), so the
+  // sequence's `lastValue` is unaffected by anything except a full Customer deletion.
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   @@map("subscription_code_sequences")
 }

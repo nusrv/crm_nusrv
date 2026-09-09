@@ -82,6 +82,14 @@ SELECT `temp_code` FROM `_subscription_code_migration_map`;
 -- outside the `START TRANSACTION` block below regardless; placing it here (after preflight, before
 -- the transaction) means a preflight failure never creates it at all.
 -- ============================================================================================
+-- ON DELETE CASCADE (not RESTRICT): this row is internal sequence state owned entirely by the
+-- Customer, with no value once the Customer is gone. CustomersService.deleteCustomer() explicitly
+-- deletes the customer's subscriptions and other dependents, then deletes the customer itself — it
+-- does not (and should not need to) know about this table. A RESTRICT here would break that
+-- existing, already-audited delete flow for every customer that has ever had a subscription, since
+-- this migration gives one a sequence row. Deleting an individual Subscription never touches this
+-- row (there is no FK between `subscriptions` and `subscription_code_sequences`), so `last_value`
+-- is unaffected by anything except a full Customer deletion.
 CREATE TABLE `subscription_code_sequences` (
   `customer_id` VARCHAR(36) NOT NULL,
   `last_value` INT NOT NULL DEFAULT 0,
@@ -90,7 +98,7 @@ CREATE TABLE `subscription_code_sequences` (
   PRIMARY KEY (`customer_id`),
   CONSTRAINT `subscription_code_sequences_customer_id_fkey`
     FOREIGN KEY (`customer_id`) REFERENCES `customers`(`id`)
-    ON DELETE RESTRICT ON UPDATE CASCADE
+    ON DELETE CASCADE ON UPDATE CASCADE
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- ============================================================================================
