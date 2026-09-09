@@ -1450,3 +1450,161 @@ New live-DB test, `apps/api/prisma/mariadb-subscription-code-sequence-delete-liv
 Sanity-checked the test has real teeth the same way as the prior rounds: temporarily reverted the FK to `RESTRICT` in the mirror only, re-ran, and got the exact real failure — `Foreign key constraint violated` inside `customers.service.ts:377`, the actual `tx.customer.delete()` call — confirming this is the precise bug the owner described, then restored the fix and re-confirmed green. Also re-ran the previously-reviewed backfill/preflight/transaction live test file (untouched) to confirm the FK change doesn't affect it — all 8 still pass.
 
 Full verification: `prisma validate`, typecheck, lint — all clean. Full API suite: 232 tests / 52 suites (210 passed, 22 skipped — 5 live-DB-only suites now, since this adds one). Production build succeeds. Committed locally as a fourth commit on top of the previous three. **Still not pushed.**
+
+## 2026-09-09 (later same day) — Create/Edit Subscription workflow redesign: locked/searchable Customer selection, and one coherent Start Date + Renewal Interval → Renewal Date model
+
+New task, no schema/migration change — the Subscription Code work above is untouched. Two problems: (1) "Add another subscription to this customer" from Customer Details still showed a full Customer dropdown instead of using the already-known customer, which matters more now that Subscription Code depends on Customer; (2) the create/edit form let Start Date, Renewal Interval, and Renewal Date be filled in as three independent, potentially contradictory fields (e.g. a 60-month interval with a Renewal Date one day after Start Date).
+
+**Customer selection, two modes**: `SubscriptionModal` now takes `lockedCustomer?: CustomerComboboxOption` instead of `defaultCustomerId?: string`. When present (opened from Customer Details, or from the Subscriptions page with a `?customerId=` in the URL), the Customer renders as a read-only `<strong>` — no dropdown, no re-selection — using that customer's real database id. When absent (Subscriptions page's own "+ Create subscription"), the modal renders the **existing** `CustomerCombobox` (`apps/web/components/customer-combobox.tsx`, already used by Legacy Import's Attach-Existing flow — reused as-is, no new component) wired to the same debounced `/customers?search=` pattern already established there, which already searches Customer Code, English name, and Arabic name server-side. The old `/customers?pageSize=500` fetch that powered the giant dropdown is gone entirely. `customer-detail.tsx` passes `lockedCustomer={detail}`-shaped data (id/customerCode/nameEn/nameAr it already has, zero extra fetch); `subscriptions-manager.tsx`'s `?customerId=` path now does one `/customers/:id` GET (not the list) to get that customer's label before locking it.
+
+`customer-detail.tsx` also now deep-links the create modal onto its own URL (`?newSubscription=1` via `router.replace`, stripped on close) so a refresh while it's open reopens it with the same Customer context — `customerId` itself was already sourced from the route and already survived refresh on its own; this just makes the modal's open state survive too.
+
+**One canonical calendar-month helper**: `addCalendarMonths(date, months)` added to `packages/shared/src/index.ts` — genuinely shared, imported by both the backend (`SubscriptionsService`) and the frontend (`subscription-modal.tsx`'s live preview), not two separate implementations of the same algorithm. Calendar-month arithmetic (not `months * 30 days`), UTC-only (date-only fields never shift by timezone), end-of-month clamped via the "day 0 of next month" trick (31 Jan + 1 month → last day of Feb, 28 or 29 depending on leap year — verified both).
+
+**Backend enforcement, not just a UI convenience**: `CreateSubscriptionDto` no longer has a `renewalDate` field at all (same pattern as `subscriptionCode` — the global `whitelist:true` ValidationPipe rejects one if sent) and `renewalIntervalMonths` changed from optional to required. `SubscriptionsService.create()` always computes `renewalDate = addCalendarMonths(startDate, renewalIntervalMonths)` server-side — a caller cannot submit a contradictory combination because there is nothing to submit. `SubscriptionsService.update()` recalculates only when the caller intentionally changes `startDate` or `renewalIntervalMonths` (ignoring any `renewalDate` also present in that same request — the computed value always wins); when neither changes, an explicitly supplied `renewalDate` is still accepted as a direct historical correction, and when nothing at all is supplied, dates are left completely untouched — verified this doesn't silently corrupt a historical record where Start Date moves with no interval to recompute from (rejects via the existing `validateDates` check, now run against the *final* effective combination, not just what changed).
+
+**Billing Frequency deliberately stays fully independent** — never read when computing Renewal Date; a dedicated parametrized test creates the same subscription under all six `BillingFrequency` values and asserts the Renewal Date is identical every time.
+
+**Field semantics found by inspection (section 15/16 of the owner's spec), not guessed**:
+- `renewalIntervalMonths` — already read by the existing (untouched) `cycleStartDate()` in `renewal-policy.ts`, working *backward* from `renewalDate` to compute a RenewalCase's `cycleStartDate`, falling back to a Billing-Frequency-derived month count only when null. This task's *forward* computation (Start Date + Interval → Renewal Date) is the natural complement of that existing backward one — fully compatible, confirmed via a test that feeds a freshly `create()`d subscription's derived `renewalDate` straight into the real, unmodified `cycleStartDate()`.
+- `renewalDate` — the one field `RenewalEngineService` actually queries and reads (`ensureCase()`'s `dueDate: subscription.renewalDate`); nothing about its shape or type changed, only how `SubscriptionsService.create()` computes it — so the engine needed zero changes, confirmed by every existing engine test still passing untouched.
+- `contractTermMonths` — a separate, "Historical contract term (months)" field on the form, referenced nowhere else in application logic; left completely alone, never equated with Renewal Interval.
+- `currentTermEndDate` — already kept in lockstep with `renewalDate` by a pre-existing "Phase 2.2 transitional mapping" comment in `SubscriptionsService`; that lockstep behavior is preserved exactly, just now fed the *derived* value instead of a caller-supplied one.
+- `billingFrequency` — independent business concept (how often billed) from Renewal Interval (when the term ends); the schema's `CUSTOM` value has no accompanying "custom billing frequency in months" field anywhere in the data model — a pre-existing gap, reported rather than invented into being, and explicitly out of this task's scope (the required "Custom" behavior was for Renewal Interval, not Billing Frequency).
+
+**`ServicePackageTerm` (termMonths/currency/standardSellingPrice/standardSupplierCost)**: inspected — `SubscriptionModal` already fetches `servicePackage.terms` into its `PackageOption` type but has never actually read or displayed them anywhere in the form; this was true before this task too. Left exactly as-is (dead-but-harmless fetched data); no package/pricing redesign attempted, per explicit instruction.
+
+**Legacy Import: confirmed untouched and unaffected.** It never calls `SubscriptionsService.create()` — `LegacyImportService.approveRow()` writes subscriptions directly via `tx.subscription.create()` with its own `renewalDate: subscriptionRow.currentTermEndDate ?? subscriptionRow.startDate` (source-workbook-derived) and its own pre-existing `contractTermMonths: subscriptionRow.renewalIntervalMonths` equation — neither of which this task's new DTO/service changes can reach, since the DTO changes only constrain the public `/subscriptions` HTTP contract. No Legacy Import file was modified.
+
+**Editing historical subscriptions**: `renewalIntervalMonths: null` (predates this concept — some imports have it, some don't) makes the edit form fall back to the *old* two-independent-date-fields UI verbatim (Start Date + Renewal Date, both directly editable, no derivation attempted) rather than forcing every historical record through the new interval model. A subscription that *does* have an interval gets the same derived-date UX as create, but the frontend only includes `startDate`/`renewalIntervalMonths` in the PATCH body when the user actually changed them from the values the record loaded with — so opening Edit and only changing Selling Price sends neither field, and the backend's own "only recalculate when they're present" logic leaves the historical Renewal Date exactly as it was.
+
+**Customer immutability on edit**: unchanged from the Subscription Code work — `UpdateSubscriptionDto` still has no `customerId` field, and edit mode still renders Customer as the same read-only `<strong>` it already did.
+
+**Tests**: `apps/api/src/common/calendar-months.spec.ts` (new — the shared helper directly: 12/60/18-custom months, end-of-month non-leap and leap, multi-year rollover, "not months×30", timezone-independence). `subscriptions.dto.spec.ts` (new — `class-validator` `validate()` against `CreateSubscriptionDto`: rejects 0, negative, non-integer, and missing `renewalIntervalMonths`; accepts a valid payload with no `renewalDate` field). `subscriptions.service.spec.ts` gained: a `create()` Renewal Date derivation suite (12/60/18-custom/end-of-month/leap-year, plus the six-Billing-Frequency-independence parametrized test, plus the Renewal-Engine-compatibility test against the real `cycleStartDate()`); an `update()` Renewal Date handling suite (price-only edit preserves dates; Start Date change recalculates; Renewal Interval change recalculates; a caller-supplied conflicting `renewalDate` is ignored when start/interval also change; an explicit `renewalDate` is accepted as a historical correction when neither changes; Start Date moving past an untouched Renewal Date with nothing to reconcile it is rejected). `phase-1-services.spec.ts` and `phase21-subscriptions.service.spec.ts` updated for the new `CreateSubscriptionDto` shape (both now also assert the derived `renewalDate`, not just that the call succeeded).
+
+Verified: `prisma validate` (no-op — no schema change), strict typecheck (all three packages: `@cp/shared`/`@cp/api`/`@cp/web`), lint (all three, zero warnings after the same established `react-hooks/set-state-in-effect` false-positive fix applied twice more), 264 tests / 54 suites (242 passed, 22 skipped — live-DB-only), both production builds (API `nest build`, web `next build` — same 16 routes). **No database migration** — confirmed not needed, per the owner's explicit expectation; `renewalIntervalMonths`/`renewalDate` already existed as the right shape. **Could not manually click through the UI in a browser** — no browser-automation tool is available in this session; this is disclosed rather than claimed as tested. Committed locally (`3824e36`), not pushed.
+
+### 2026-09-09 (later same day, follow-up) — Owner asked for code-only verification of 3 specific properties; found and fixed a real gap
+
+The owner correctly flagged that my manual test step assumed a specific current `NS0007` sequence
+number, which I have no way to know without production DB access — corrected to describe the
+*next* number relative to whatever `SubscriptionCodeSequence` state already exists, not a literal
+example value. Then asked me to verify three things from code and tests only (no DB access needed):
+
+1. **Legacy free-date mode is reachable only when editing an existing subscription with
+   `renewalIntervalMonths: null`.** Confirmed by inspection: `subscription-modal.tsx`'s
+   `hasIntervalModel = !editing || editing.renewalIntervalMonths != null` — the `!editing` short-
+   circuit makes legacy mode structurally unreachable during create, regardless of any other state.
+2. **A new manual subscription cannot be saved without a positive interval and a server-derived
+   date.** Confirmed: `hasIntervalModel` is always `true` when `!editing`, so the frontend's
+   pre-submit guard (`if (hasIntervalModel && (!startDateValue || !(effectiveIntervalMonths > 0)))`)
+   always applies to create; and independently, authoritatively, `CreateSubscriptionDto` has no
+   `renewalDate` field at all and requires a positive `renewalIntervalMonths`
+   (`@IsInt() @Min(1) @Max(120)`, no `@IsOptional()`) — already covered by
+   `subscriptions.dto.spec.ts`.
+3. **An existing modern subscription cannot clear its interval to fall back into legacy mode —
+   this one was actually FALSE before this fix.** `UpdateSubscriptionDto.renewalIntervalMonths` had
+   plain `@IsOptional()`, and class-validator's `@IsOptional()` treats an explicit `null` exactly
+   the same as "omitted" (skips the rest of the validator chain either way) — proved this concretely
+   with a `validate()` test before touching any code, confirming `{ renewalIntervalMonths: null }`
+   passed DTO validation with zero errors. Traced it further into `SubscriptionsService.update()`:
+   `intervalChanged` becomes `true` (since `null !== undefined`), but the recalculation branch's
+   `&& effectiveIntervalMonths` guard is falsy for `null`, so it's skipped — yet the raw
+   `...subscriptionInput` spread (which still contains `renewalIntervalMonths: null` from the
+   original request) flows straight into the Prisma `update()` call with nothing downstream
+   overriding it, which would have written `NULL` to the column. **Fixed**: the field now uses
+   `@ValidateIf((dto) => dto.renewalIntervalMonths !== undefined)` instead of `@IsOptional()` — a
+   genuinely omitted field still leaves the existing value untouched (validation skipped, same as
+   before), but an explicit `null` now runs `@IsInt()` against it and is rejected. Re-ran the exact
+   same `validate()` test after the fix — now returns the expected validation error.
+
+New tests in `subscriptions.dto.spec.ts` covering `UpdateSubscriptionDto.renewalIntervalMonths`
+directly: omitted (passes), a positive value (passes), `0` (rejected), negative (rejected), and the
+specific `null` case (rejected, proving the fix). Full API suite re-run: 269 tests / 54 suites (247
+passed, 22 skipped), typecheck and lint clean. No web files changed in this round — the frontend
+never sends `renewalIntervalMonths: null` (only a positive computed number, or omits the field
+entirely), so this was purely a backend contract gap, now closed at the same layer.
+
+### 2026-09-09 (later same day, second follow-up) — Owner's 5-property check found a second real gap: a modern subscription could still be given an arbitrary Renewal Date
+
+The owner asked for code+test-only verification of 5 specific backend properties. Traced each one
+through `SubscriptionsService.update()` by hand before writing anything:
+
+1. A modern subscription (non-null `renewalIntervalMonths`) cannot have `renewalDate` independently
+   set — **this was false.** `PATCH { renewalDate: '2099-01-01' }` alone (no `startDate`, no
+   `renewalIntervalMonths`) hit the `else if (input.renewalDate)` branch unconditionally — it only
+   checked whether *this request* changed start/interval, never whether the subscription *already
+   had* an interval on record. A modern subscription's own existing interval was never consulted
+   before accepting a direct override.
+2. Start Date change on a modern subscription recalculates from the existing interval — confirmed
+   already correct (existing test).
+3. Renewal Interval change on a modern subscription recalculates from the effective Start Date —
+   confirmed already correct (existing test).
+4. Start Date and Renewal Interval both omitted, an unrelated field (price) changes → Renewal Date
+   preserved exactly — confirmed already correct (existing test, using a *non-null* interval, i.e.
+   already exercising the "modern" case despite its literal test name).
+5. Only a subscription whose *stored* `renewalIntervalMonths` is null may use the legacy
+   manual-date path — confirmed correct for the accept side (existing test); the reject side for a
+   modern subscription was the same gap as #1.
+
+**Fixed** with one condition change: `else if (input.renewalDate)` → `else if (input.renewalDate &&
+!effectiveIntervalMonths)`. `effectiveIntervalMonths` already resolves to the *old* record's
+interval when the request doesn't change it, so gating on it (rather than on "did this request touch
+start/interval") is what makes the legacy-override path unreachable for any subscription that
+already has an interval, regardless of what else a given request does or doesn't include. Comments
+on both the DTO field and the service method updated to state this precisely instead of the
+previous, incomplete "only used when the caller isn't also changing start/interval" description.
+
+New test: seeded a modern subscription (`renewalIntervalMonths: 12`), sent `{ renewalDate:
+'2099-01-01' }` alone, asserted the persisted `renewalDate` is `undefined` (Prisma's "leave this
+column alone," not merely "not 2099"). Verified the test has real teeth the same way as every prior
+round this session: reverted just the condition back to the buggy version in the mirror, re-ran,
+confirmed the exact failure (`renewalDate` came back as `2099-01-01T00:00:00.000Z`), then restored
+the fix and re-confirmed green.
+
+**`UpdateSubscriptionDto` still declares `renewalDate?: string`** (unchanged) — it is not removed,
+but per the above it is now a no-op for any subscription that already has a Renewal Interval,
+covering both ways a request could try to use it (alongside a start/interval change, where the
+recalculated value already won; and alone, where it's now ignored instead of accepted).
+
+Full suite re-run: 270 tests / 54 suites (248 passed, 22 skipped), typecheck and lint clean. No web
+changes — the frontend's interval-driven create/edit path never constructs a request shaped like the
+one this test reproduces.
+
+### 2026-09-09 (later same day, third follow-up) — Semantic hardening: nullish gate, and silent-ignore replaced with an explicit reject contract
+
+Two changes, both to `SubscriptionsService.update()` and `UpdateSubscriptionDto`'s comments only:
+
+1. **`!effectiveIntervalMonths` → `effectiveIntervalMonths == null`.** The owner pointed out the
+   falsy check treats a stored `0` the same as `null`, which is wrong — `0` isn't a valid interval,
+   but it also isn't "no interval," and the rule is specifically about null/absent. New test seeds a
+   subscription with `renewalIntervalMonths: 0` (not producible by current DTO validation, but not
+   impossible in already-existing data predating these rules) and confirms it does **not** enter
+   legacy free-date mode.
+2. **Silent-ignore replaced with an explicit reject.** The owner reconsidered the previous round's
+   fix: a modern subscription (effective interval non-null) receiving an explicit `renewalDate`
+   used to have that field silently discarded. Preferred contract instead:
+   - modern + explicit `renewalDate` → `BadRequestException`, unconditionally (regardless of
+     whether `startDate`/`renewalIntervalMonths` are also present in the same request)
+   - legacy (`renewalIntervalMonths == null`, effective) + explicit `renewalDate` → accepted as
+     before (unchanged)
+   - modern + `startDate`/`renewalIntervalMonths` change, no `renewalDate` → derived as before
+     (unchanged)
+
+   The `update()` method now computes `isModern = effectiveIntervalMonths != null` once and branches
+   on it directly: reject up front if modern and `renewalDate` is present at all; otherwise derive
+   when modern and start/interval changed; otherwise (legacy) accept an explicit `renewalDate` as
+   before. Two existing tests that asserted the old silent-ignore behavior were rewritten to assert
+   rejection instead (`rejects.toThrow(...)`, and `expect(update).not.toHaveBeenCalled()` to prove
+   the Prisma call itself never happens, not just that its result was discarded).
+
+   **Confirmed by inspection, no frontend change needed**: `subscription-modal.tsx`'s `save()` only
+   ever sets `body.renewalDate` in its `else` branch, which is reached exactly when
+   `!hasIntervalModel` — i.e. only for a subscription that already has no interval (the legacy
+   case). Both the create path and the interval-driven edit path never include `renewalDate` in the
+   request body at all, so this backend change has no observable effect on the current UI.
+
+Both changes verified to have real teeth the same way as every prior round: reverted each in the
+mirror in turn, confirmed the exact expected test failures (a resolved promise where a rejection was
+expected, showing the pre-fix persisted values), restored, re-confirmed green. Full suite: 271 tests
+/ 54 suites (249 passed, 22 skipped), typecheck and lint clean.

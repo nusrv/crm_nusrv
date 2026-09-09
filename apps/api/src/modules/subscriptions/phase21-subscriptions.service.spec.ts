@@ -66,7 +66,6 @@ describe('Phase 2.1 subscription package snapshots', () => {
         servicePackageId: 'package-id',
         name: 'Negotiated Premium',
         startDate: '2026-01-01',
-        renewalDate: '2029-01-01',
         billingFrequency: BillingFrequency.CUSTOM,
         renewalIntervalMonths: 36,
         contractTermMonths: 36,
@@ -91,9 +90,11 @@ describe('Phase 2.1 subscription package snapshots', () => {
       priceOverrideReason: 'Historical negotiated price',
       identifiers: { create: [{ type: SubscriptionIdentifierType.DOMAIN, value: 'example.test' }] },
     });
-    // Phase 2.2 transitional mapping: currentTermEndDate is kept in lockstep with the renewal
-    // engine's operational renewalDate field rather than left unpopulated.
-    expect(data?.currentTermEndDate).toEqual(new Date('2029-01-01'));
+    // Renewal Date is derived from Start Date (2026-01-01) + Renewal Interval (36 months), never
+    // accepted from the caller. Phase 2.2 transitional mapping: currentTermEndDate is kept in
+    // lockstep with the renewal engine's operational renewalDate field rather than left unpopulated.
+    expect(data?.renewalDate).toEqual(new Date('2029-01-01T00:00:00.000Z'));
+    expect(data?.currentTermEndDate).toEqual(new Date('2029-01-01T00:00:00.000Z'));
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ eventKey: 'subscription.created' }),
       tx,

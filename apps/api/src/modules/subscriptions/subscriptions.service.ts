@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { addCalendarMonths } from '@cp/shared';
 import { AuditService } from '../../audit/audit.service';
 import type { MutationContext } from '../../common/mutation-context';
 import { pageMetadata } from '../../common/page-query.dto';
@@ -94,7 +95,13 @@ export class SubscriptionsService {
   }
 
   async create(input: CreateSubscriptionDto, context: MutationContext) {
-    this.validateDates(input.startDate, input.renewalDate);
+    // The canonical Renewal Date for a NEW subscription is always derived here, server-side, from
+    // Start Date + Renewal Interval (calendar-month arithmetic) — never accepted from the caller
+    // (see the comment on CreateSubscriptionDto). Since renewalIntervalMonths is required and
+    // @Min(1)-validated, the result is always strictly after startDate — no separate
+    // after-start-date check is needed the way update() needs one.
+    const startDate = new Date(input.startDate);
+    const renewalDate = addCalendarMonths(startDate, input.renewalIntervalMonths);
     const servicePackage = await this.requireParents(
       input.customerId,
       input.serviceTypeId,
@@ -114,12 +121,12 @@ export class SubscriptionsService {
               .rateToJod!.mul(input.sellingPrice)
               .toDecimalPlaces(3),
             exchangeRateEffectiveDate: currencyDefinition.effectiveDate,
-            startDate: new Date(input.startDate),
-            renewalDate: new Date(input.renewalDate),
+            startDate,
+            renewalDate,
             // Transitional mapping (Phase 2.2): `renewalDate` remains the field the renewal
             // engine reads; `currentTermEndDate` is the new, unambiguous name for the same
             // "when does the current term end" concept and is kept in lockstep here.
-            currentTermEndDate: new Date(input.renewalDate),
+            currentTermEndDate: renewalDate,
             packageNameSnapshot: servicePackage?.name,
             packageSpecificationsSnapshot: servicePackage?.specifications ?? undefined,
             customPackage: servicePackage?.kind === 'CUSTOM_TEMPLATE',
@@ -156,9 +163,55 @@ export class SubscriptionsService {
 
   async update(id: string, input: UpdateSubscriptionDto, context: MutationContext) {
     const oldState = await this.findOne(id);
-    const startDate = input.startDate ?? oldState.startDate.toISOString();
-    const renewalDate = input.renewalDate ?? oldState.renewalDate.toISOString();
-    this.validateDates(startDate, renewalDate);
+
+    // Renewal Date handling. "Modern" means an effective Renewal Interval is on record — either
+    // the request is setting one now, or the existing row already has one; "legacy" means it is
+    // (and remains) null, i.e. a historical subscription that predates this concept.
+    //
+    //   modern    + explicit renewalDate                -> REJECTED (BadRequestException). The
+    //               interval already defines the one correct value; a caller must never be able to
+    //               silently or explicitly override it with an unrelated date. This is an explicit
+    //               contract, not a silent discard — the request fails outright rather than having
+    //               its renewalDate quietly ignored.
+    //   modern    + Start Date and/or Renewal Interval change (no renewalDate)  -> DERIVED.
+    //   modern    + neither of the above (e.g. only price changes)             -> UNTOUCHED.
+    //   legacy    + explicit renewalDate  -> accepted as-is (a direct historical correction —
+    //               there is no interval to derive a canonical value from in the first place).
+    //   legacy    + no explicit renewalDate -> UNTOUCHED, same as modern.
+    //
+    // `effectiveIntervalMonths == null` (nullish, not falsy) is deliberate: a stored/effective
+    // interval of `0` is not a valid interval, but it is also not "no interval" — it must not be
+    // treated as legacy just because it is falsy.
+    const startDateChanged = input.startDate !== undefined;
+    const intervalChanged = input.renewalIntervalMonths !== undefined;
+    const effectiveIntervalMonths = intervalChanged
+      ? input.renewalIntervalMonths
+      : oldState.renewalIntervalMonths;
+    const isModern = effectiveIntervalMonths != null;
+
+    if (isModern && input.renewalDate !== undefined) {
+      throw new BadRequestException(
+        'Renewal Date cannot be set directly for a subscription with a Renewal Interval. Change Start Date or Renewal Interval instead — Renewal Date is derived automatically.',
+      );
+    }
+
+    let renewalDate: Date | undefined;
+    if (isModern) {
+      if (startDateChanged || intervalChanged) {
+        const effectiveStartDate = input.startDate ? new Date(input.startDate) : oldState.startDate;
+        renewalDate = addCalendarMonths(effectiveStartDate, effectiveIntervalMonths);
+      }
+    } else if (input.renewalDate) {
+      renewalDate = new Date(input.renewalDate);
+    }
+    // Validate the FINAL effective combination, not just what changed — this catches the case
+    // where Start Date moves alone with no interval available to recompute from and no explicit
+    // renewalDate supplied either, which could otherwise silently leave Start Date on/after the
+    // untouched old Renewal Date.
+    const finalStartDate = input.startDate ? new Date(input.startDate) : oldState.startDate;
+    const finalRenewalDate = renewalDate ?? oldState.renewalDate;
+    this.validateDates(finalStartDate.toISOString(), finalRenewalDate.toISOString());
+
     const parentChanged = input.serviceTypeId || input.servicePackageId;
     const servicePackage = parentChanged
       ? await this.requireParents(
@@ -179,8 +232,8 @@ export class SubscriptionsService {
       sellingPriceJod: currencyDefinition?.rateToJod?.mul(sellingPrice).toDecimalPlaces(3),
       exchangeRateEffectiveDate: currencyDefinition?.effectiveDate,
       startDate: input.startDate ? new Date(input.startDate) : undefined,
-      renewalDate: input.renewalDate ? new Date(input.renewalDate) : undefined,
-      currentTermEndDate: input.renewalDate ? new Date(input.renewalDate) : undefined,
+      renewalDate,
+      currentTermEndDate: renewalDate,
       packageNameSnapshot: input.servicePackageId ? servicePackage?.name : undefined,
       packageSpecificationsSnapshot: input.servicePackageId
         ? (servicePackage?.specifications ?? undefined)

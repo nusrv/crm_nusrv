@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { apiRequest } from '../lib/api';
 import { customerCombinedLabel } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
@@ -55,6 +55,8 @@ interface Customer {
 export function CustomerDetail() {
   const params = useParams<{ id: string }>();
   const customerId = params.id;
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { can } = useControlPanel();
   const canManage = can('ADMIN', 'SALES_DEVELOPMENT');
   const [detail, setDetail] = useState<Customer | null>(null);
@@ -75,6 +77,20 @@ export function CustomerDetail() {
         setError(cause instanceof Error ? cause.message : 'Unable to load customer.'),
       );
   }, [customerId]);
+
+  // Deep-link the create-subscription modal onto this page's own URL (?newSubscription=1) so a
+  // refresh while it's open reopens it with the same Customer context — `customerId` itself is
+  // already sourced from the route, which Next.js already preserves across a refresh on its own.
+  useEffect(() => {
+    if (searchParams.get('newSubscription') === '1') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSubscriptionModalId(null);
+      setSubscriptionModalOpen(true);
+    }
+    // Only ever read this once per mount — the modal's own open/close handlers own the param
+    // afterward, so this must not re-fire just because searchParams' identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function addContact(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -108,11 +124,15 @@ export function CustomerDetail() {
   function openCreateSubscription() {
     setSubscriptionModalId(null);
     setSubscriptionModalOpen(true);
+    router.replace(`/dashboard/customers/${customerId}?newSubscription=1`, { scroll: false });
   }
 
   function closeSubscriptionModal() {
     setSubscriptionModalOpen(false);
     setSubscriptionModalId(null);
+    if (searchParams.get('newSubscription') === '1') {
+      router.replace(`/dashboard/customers/${customerId}`, { scroll: false });
+    }
   }
 
   async function handleSubscriptionSaved() {
@@ -283,7 +303,12 @@ export function CustomerDetail() {
       </section>
       {subscriptionModalOpen && (
         <SubscriptionModal
-          defaultCustomerId={detail.id}
+          lockedCustomer={{
+            id: detail.id,
+            customerCode: detail.customerCode,
+            nameEn: detail.nameEn,
+            nameAr: detail.nameAr,
+          }}
           onClose={closeSubscriptionModal}
           onSaved={() => void handleSubscriptionSaved()}
           subscriptionId={subscriptionModalId}

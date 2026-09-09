@@ -38,7 +38,7 @@ describe('Phase 1 audited services', () => {
     };
     const createSubscription = jest.fn<
       (input: {
-        data: { customerId: string; serviceTypeId: string };
+        data: { customerId: string; serviceTypeId: string; renewalDate: Date };
       }) => Promise<typeof subscription>
     >(() => Promise.resolve(subscription));
     const tx = { subscription: { create: createSubscription } };
@@ -71,7 +71,7 @@ describe('Phase 1 audited services', () => {
         serviceTypeId: 'type-id',
         name: 'Hosting',
         startDate: '2026-01-01',
-        renewalDate: '2027-01-01',
+        renewalIntervalMonths: 12,
         billingFrequency: BillingFrequency.ANNUAL,
         sellingPrice: '100.000',
         currency: 'JOD',
@@ -85,6 +85,9 @@ describe('Phase 1 audited services', () => {
     const createInput = createSubscription.mock.calls[0]?.[0];
     expect(createInput?.data.customerId).toBe('customer-id');
     expect(createInput?.data.serviceTypeId).toBe('type-id');
+    // Renewal Date is derived server-side from Start Date + Renewal Interval, never accepted from
+    // the caller.
+    expect(createInput?.data.renewalDate).toEqual(new Date('2027-01-01T00:00:00.000Z'));
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ eventKey: 'subscription.created' }),
       tx,

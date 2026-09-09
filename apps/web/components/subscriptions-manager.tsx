@@ -5,6 +5,7 @@ import { apiRequest, type PageResult } from '../lib/api';
 import type { CurrencyOption } from './currencies-manager';
 import { customerDisplayName } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
+import type { CustomerComboboxOption } from './customer-combobox';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 import { SubscriptionModal } from './subscription-modal';
@@ -52,7 +53,9 @@ export function SubscriptionsManager() {
   const canManage = can('ADMIN', 'ACCOUNTANT');
   const canMap = can('ADMIN', 'IT');
   const [result, setResult] = useState<PageResult<SubscriptionRow> | null>(null);
-  const [defaultCustomerId, setDefaultCustomerId] = useState('');
+  const [lockedCustomer, setLockedCustomer] = useState<CustomerComboboxOption | undefined>(
+    undefined,
+  );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -112,8 +115,15 @@ export function SubscriptionsManager() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const customerId = params.get('customerId') ?? '';
-    setDefaultCustomerId(customerId);
     if (customerId) {
+      // Fetch the one Customer's own label (never the giant customer list) so the create form can
+      // show it locked, exactly as when arriving from Customer Details — a `customerId` in the URL
+      // means the Customer is already known and must not be re-selected.
+      void apiRequest<CustomerComboboxOption>(`/customers/${customerId}`)
+        .then(setLockedCustomer)
+        .catch((cause: unknown) =>
+          setError(cause instanceof Error ? cause.message : 'Unable to load that customer.'),
+        );
       setEditingId(null);
       setFormOpen(true);
     }
@@ -131,6 +141,9 @@ export function SubscriptionsManager() {
   }, [load]);
 
   function openCreate() {
+    // Mode B: general "Add Subscription" — no Customer known yet, so the modal shows the
+    // searchable Customer Combobox rather than a locked value.
+    setLockedCustomer(undefined);
     setEditingId(null);
     setFormOpen(true);
   }
@@ -143,6 +156,7 @@ export function SubscriptionsManager() {
   function closeForm() {
     setFormOpen(false);
     setEditingId(null);
+    setLockedCustomer(undefined);
   }
 
   function handleSaved() {
@@ -170,7 +184,7 @@ export function SubscriptionsManager() {
       )}
       {formOpen && (
         <SubscriptionModal
-          defaultCustomerId={defaultCustomerId}
+          lockedCustomer={lockedCustomer}
           onClose={closeForm}
           onSaved={handleSaved}
           subscriptionId={editingId}

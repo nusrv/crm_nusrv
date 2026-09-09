@@ -1,19 +1,18 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { addCalendarMonths } from '@cp/shared';
 import { apiRequest, type PageResult } from '../lib/api';
 import { customerCombinedLabel } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
+import { CustomerCombobox, type CustomerComboboxOption } from './customer-combobox';
 import type { CurrencyOption } from './currencies-manager';
 import { Modal } from './modal';
 import { Notice } from './notice';
 
-interface CustomerOption {
-  id: string;
-  customerCode: string;
-  nameEn: string | null;
-  nameAr: string | null;
-}
+const PRESET_INTERVALS = ['12', '24', '36', '60'] as const;
+type IntervalPreset = (typeof PRESET_INTERVALS)[number] | 'CUSTOM';
+
 interface ServiceTypeOption {
   id: string;
   code: string;
@@ -76,7 +75,7 @@ interface Subscription {
   graceHours: number;
   status: string;
   notes: string | null;
-  customer: CustomerOption;
+  customer: CustomerComboboxOption;
   serviceType: ServiceTypeOption;
   servicePackage: PackageOption | null;
   packageNameSnapshot: string | null;
@@ -86,19 +85,34 @@ interface Subscription {
   connections: Mapping[];
 }
 
+const toDateInput = (value?: string) => (value ? value.slice(0, 10) : '');
+
+/** `null` covers 60 months, "custom" values, and — importantly — 60 not appearing verbatim. */
+function presetForMonths(months: number | null): IntervalPreset {
+  if (months && (PRESET_INTERVALS as readonly string[]).includes(String(months))) {
+    return String(months) as IntervalPreset;
+  }
+  return 'CUSTOM';
+}
+
 /**
  * Shared "create / view / manage" subscription popup. Used both by the Subscriptions list page
  * and by any other page (e.g. customer detail) that wants to show a single subscription without
  * navigating away.
+ *
+ * Two create modes: pass `lockedCustomer` when the Customer is already known (e.g. opened from
+ * Customer Details) — it is shown read-only and never re-selectable, since Subscription Code
+ * generation depends on it. Omit it to show the searchable Customer Combobox instead (never a
+ * plain `<select>` of every customer).
  */
 export function SubscriptionModal({
   subscriptionId,
-  defaultCustomerId,
+  lockedCustomer,
   onClose,
   onSaved,
 }: {
   subscriptionId: string | null;
-  defaultCustomerId?: string;
+  lockedCustomer?: CustomerComboboxOption;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -107,7 +121,6 @@ export function SubscriptionModal({
   const canMap = can('ADMIN', 'IT');
   const [editing, setEditing] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(Boolean(subscriptionId));
-  const [customers, setCustomers] = useState<CustomerOption[]>([]);
   const [types, setTypes] = useState<ServiceTypeOption[]>([]);
   const [packages, setPackages] = useState<PackageOption[]>([]);
   const [connections, setConnections] = useState<ConnectionOption[]>([]);
@@ -115,27 +128,48 @@ export function SubscriptionModal({
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
+  // Mode B (general Subscriptions page, no lockedCustomer): searchable Customer Combobox state.
+  const [customerOptions, setCustomerOptions] = useState<CustomerComboboxOption[]>([]);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [customerSearchLoading, setCustomerSearchLoading] = useState(false);
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [selectedCustomerLabel, setSelectedCustomerLabel] = useState('');
+
+  // Start Date / Renewal Interval / live "Next Renewal Date" preview. Used for create (always) and
+  // for editing a subscription that already has a Renewal Interval. A historical subscription with
+  // no Renewal Interval (`renewalIntervalMonths: null`) instead falls back to the plain two-date
+  // legacy fields further below — see `hasIntervalModel`.
+  const [startDateValue, setStartDateValue] = useState('');
+  const [intervalPreset, setIntervalPreset] = useState<IntervalPreset>('12');
+  const [customMonthsValue, setCustomMonthsValue] = useState('12');
+  const [originalStartDate, setOriginalStartDate] = useState('');
+  const [originalIntervalMonths, setOriginalIntervalMonths] = useState<number | null>(null);
+
+  const hasIntervalModel = !editing || editing.renewalIntervalMonths != null;
+  const effectiveIntervalMonths =
+    intervalPreset === 'CUSTOM' ? Number(customMonthsValue) : Number(intervalPreset);
+  const previewRenewalDate =
+    startDateValue && effectiveIntervalMonths > 0
+      ? addCalendarMonths(new Date(startDateValue), effectiveIntervalMonths)
+      : null;
+
   const refreshEditing = useCallback(async (id: string) => {
     setEditing(await apiRequest<Subscription>(`/subscriptions/${id}`));
   }, []);
 
   useEffect(() => {
     void Promise.all([
-      apiRequest<PageResult<CustomerOption>>('/customers?pageSize=500'),
       apiRequest<ServiceTypeOption[]>('/service-types'),
       apiRequest<PackageOption[]>('/service-packages?active=true'),
       canMap ? apiRequest<ConnectionOption[]>('/technical-connections') : Promise.resolve([]),
       apiRequest<CurrencyOption[]>('/currencies?active=true'),
     ])
-      .then(
-        ([customerPage, serviceTypes, packageOptions, technicalConnections, currencyOptions]) => {
-          setCustomers(customerPage.data);
-          setTypes(serviceTypes);
-          setPackages(packageOptions);
-          setConnections(technicalConnections);
-          setCurrencies(currencyOptions);
-        },
-      )
+      .then(([serviceTypes, packageOptions, technicalConnections, currencyOptions]) => {
+        setTypes(serviceTypes);
+        setPackages(packageOptions);
+        setConnections(technicalConnections);
+        setCurrencies(currencyOptions);
+      })
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'));
   }, [canMap]);
 
@@ -156,25 +190,55 @@ export function SubscriptionModal({
       .finally(() => setLoading(false));
   }, [subscriptionId, refreshEditing]);
 
-  const date = (value?: string) => (value ? value.slice(0, 10) : '');
+  // Initialize the date/interval controls once the record to edit has actually loaded (create
+  // mode's own initial state above already covers create, which never goes through this).
+  useEffect(() => {
+    if (!editing) return;
+    const start = toDateInput(editing.startDate);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setStartDateValue(start);
+    setOriginalStartDate(start);
+    setOriginalIntervalMonths(editing.renewalIntervalMonths);
+    setIntervalPreset(presetForMonths(editing.renewalIntervalMonths));
+    setCustomMonthsValue(String(editing.renewalIntervalMonths ?? 12));
+  }, [editing]);
+
+  // Mode B customer search: same debounced-search pattern already used by the Legacy Import
+  // customer combobox, against the same /customers endpoint (search by Customer Code, English
+  // name, or Arabic name — all already supported server-side).
+  useEffect(() => {
+    if (editing || lockedCustomer) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCustomerSearchLoading(true);
+    const handle = setTimeout(() => {
+      const params = new URLSearchParams({ pageSize: '50' });
+      if (customerSearch.trim()) params.set('search', customerSearch.trim());
+      void apiRequest<PageResult<CustomerComboboxOption>>(`/customers?${params.toString()}`)
+        .then((value) => setCustomerOptions(value.data))
+        .catch((cause: unknown) =>
+          setError(cause instanceof Error ? cause.message : 'Customer search failed.'),
+        )
+        .finally(() => setCustomerSearchLoading(false));
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [customerSearch, editing, lockedCustomer]);
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const value = (name: string) => String(form.get(name) ?? '').trim();
-    const body = {
-      // Subscription Code is always server-generated (never client-supplied) and Customer is
-      // immutable once a subscription exists (its code encodes the owning Customer's code), so
-      // customerId is only ever sent on create.
-      ...(editing ? {} : { customerId: value('customerId') }),
+
+    if (hasIntervalModel && (!startDateValue || !(effectiveIntervalMonths > 0))) {
+      setError('Start Date and a positive Renewal Interval are required.');
+      return;
+    }
+
+    const body: Record<string, unknown> = {
       serviceTypeId: value('serviceTypeId'),
       servicePackageId: value('servicePackageId') || undefined,
       name: value('name'),
       description: value('description') || undefined,
-      startDate: value('startDate'),
-      renewalDate: value('renewalDate'),
       billingFrequency: value('billingFrequency'),
-      renewalIntervalMonths: Number(value('renewalIntervalMonths')),
       contractTermMonths: value('contractTermMonths')
         ? Number(value('contractTermMonths'))
         : undefined,
@@ -192,6 +256,36 @@ export function SubscriptionModal({
       status: value('status'),
       notes: value('notes') || undefined,
     };
+
+    if (!editing) {
+      // Create: Customer Code is server-generated from whichever real Customer id is used here —
+      // the locked customer's id when opened from Customer Details, or the combobox selection.
+      const customerId = lockedCustomer?.id ?? selectedCustomerId;
+      if (!customerId) {
+        setError('Select a Customer.');
+        return;
+      }
+      body.customerId = customerId;
+      body.startDate = startDateValue;
+      body.renewalIntervalMonths = effectiveIntervalMonths;
+      // No `renewalDate` — the server derives it from Start Date + Renewal Interval.
+    } else if (hasIntervalModel) {
+      // Edit, interval-driven: only send Start Date / Renewal Interval when the user actually
+      // changed them, so the backend leaves a historical Renewal Date alone when it should.
+      // Never send `renewalDate` directly from this mode — the server recalculates it from
+      // whichever of these two changed.
+      if (startDateValue !== originalStartDate) body.startDate = startDateValue;
+      if (effectiveIntervalMonths !== originalIntervalMonths) {
+        body.renewalIntervalMonths = effectiveIntervalMonths;
+      }
+    } else {
+      // Edit, legacy/no-interval-model: preserved exactly as before this task — the subscription
+      // predates the Renewal Interval concept, so Start Date and Renewal Date remain independent,
+      // directly editable fields with no derivation attempted.
+      body.startDate = value('startDate');
+      body.renewalDate = value('renewalDate');
+    }
+
     try {
       await apiRequest(`/subscriptions${editing ? `/${editing.id}` : ''}`, {
         method: editing ? 'PATCH' : 'POST',
@@ -283,18 +377,31 @@ export function SubscriptionModal({
                     encodes this Customer. Use a Transfer workflow (not available yet) to move it.
                   </small>
                 </div>
-              ) : (
-                <label className="field">
+              ) : lockedCustomer ? (
+                <div className="field">
                   <span>Customer</span>
-                  <select defaultValue={defaultCustomerId ?? ''} name="customerId" required>
-                    <option value="">Select…</option>
-                    {customers.map((customer) => (
-                      <option key={customer.id} value={customer.id}>
-                        {customer.customerCode} · {customerCombinedLabel(customer)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                  <strong>
+                    {lockedCustomer.customerCode} · {customerCombinedLabel(lockedCustomer)}
+                  </strong>
+                  <small className="muted">
+                    Locked because this subscription is being added from Customer Details.
+                  </small>
+                </div>
+              ) : (
+                <CustomerCombobox
+                  loading={customerSearchLoading}
+                  onSearchChange={setCustomerSearch}
+                  onSelect={(id, label) => {
+                    setSelectedCustomerId(id);
+                    setSelectedCustomerLabel(label);
+                  }}
+                  options={customerOptions}
+                  placeholder="Search Customer Code, English or Arabic name…"
+                  required
+                  searchValue={customerSearch}
+                  selectedLabel={selectedCustomerLabel}
+                  value={selectedCustomerId}
+                />
               )}
               <label className="field">
                 <span>Service Type</span>
@@ -328,22 +435,75 @@ export function SubscriptionModal({
                 required
                 value={editing?.name}
               />
-              <Field
-                label="Start date"
-                name="startDate"
-                required
-                type="date"
-                value={date(editing?.startDate)}
-              />
-              <Field
-                label="Renewal date"
-                name="renewalDate"
-                required
-                type="date"
-                value={date(editing?.renewalDate)}
-              />
+              {hasIntervalModel ? (
+                <>
+                  <label className="field">
+                    <span>Start Date</span>
+                    <input
+                      onChange={(event) => setStartDateValue(event.target.value)}
+                      required
+                      type="date"
+                      value={startDateValue}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Renewal Interval</span>
+                    <select
+                      onChange={(event) => setIntervalPreset(event.target.value as IntervalPreset)}
+                      value={intervalPreset}
+                    >
+                      {PRESET_INTERVALS.map((months) => (
+                        <option key={months} value={months}>
+                          {months} months
+                        </option>
+                      ))}
+                      <option value="CUSTOM">Custom</option>
+                    </select>
+                  </label>
+                  {intervalPreset === 'CUSTOM' && (
+                    <label className="field">
+                      <span>Custom Renewal Interval (months)</span>
+                      <input
+                        min={1}
+                        onChange={(event) => setCustomMonthsValue(event.target.value)}
+                        required
+                        type="number"
+                        value={customMonthsValue}
+                      />
+                    </label>
+                  )}
+                  <div className="field">
+                    <span>Next Renewal Date</span>
+                    <strong>{previewRenewalDate ? toDateInput(previewRenewalDate.toISOString()) : '—'}</strong>
+                    <small className="muted">
+                      Automatically calculated from Start Date and Renewal Interval.
+                    </small>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <Field
+                    label="Start Date"
+                    name="startDate"
+                    required
+                    type="date"
+                    value={toDateInput(editing?.startDate)}
+                  />
+                  <Field
+                    label="Renewal Date"
+                    name="renewalDate"
+                    required
+                    type="date"
+                    value={toDateInput(editing?.renewalDate)}
+                  />
+                  <p className="field-wide muted text-xs">
+                    This historical subscription has no Renewal Interval on record, so Start Date
+                    and Renewal Date remain independently editable rather than derived.
+                  </p>
+                </>
+              )}
               <label className="field">
-                <span>Billing frequency</span>
+                <span>Billing Frequency</span>
                 <select
                   defaultValue={editing?.billingFrequency ?? 'ANNUAL'}
                   name="billingFrequency"
@@ -354,24 +514,10 @@ export function SubscriptionModal({
                     ),
                   )}
                 </select>
-              </label>
-              <label className="field">
-                <span>Renewal interval</span>
-                <select
-                  defaultValue={String(editing?.renewalIntervalMonths ?? 12)}
-                  name="renewalIntervalMonths"
-                >
-                  <option value="12">12 months</option>
-                  <option value="24">24 months</option>
-                  <option value="36">36 months</option>
-                  <option value="60">60 months</option>
-                  {editing?.renewalIntervalMonths &&
-                    ![12, 24, 36, 60].includes(editing.renewalIntervalMonths) && (
-                      <option value={editing.renewalIntervalMonths}>
-                        Custom: {editing.renewalIntervalMonths} months
-                      </option>
-                    )}
-                </select>
+                <small className="muted">
+                  Billing Frequency controls how often the customer is billed; it does not change
+                  the subscription Renewal Interval.
+                </small>
               </label>
               <Field
                 label="Historical contract term (months)"

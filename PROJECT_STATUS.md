@@ -24,8 +24,13 @@
 - **Subscription Code redesign** (`<CUSTOMER_CODE>-S<NN>`, replacing `LEG-S-*`, existing data
   backfilled in place, no re-import): code complete; owner review of the migration SQL caught 3 real
   production-safety bugs (LPAD truncation, missing transaction wrapping, unproven temp-namespace
-  collision-safety), all fixed and re-verified against a real local MariaDB; committed locally as two
-  commits, **not yet pushed** — see "Subscription Code redesign" below
+  collision-safety) plus a 4th (the new FK would have broken existing customer deletion), all fixed
+  and re-verified against a real local MariaDB; committed locally as four commits, **pushed to
+  `origin/main`** — see "Subscription Code redesign" below
+- **Create/Edit Subscription workflow redesign** (locked/searchable Customer selection depending on
+  entry point; one coherent Start Date + Renewal Interval → Renewal Date model, enforced
+  server-side, not just in the UI): code complete, no database migration needed, not yet
+  committed — see "Create/Edit Subscription workflow redesign" below
 - Phase 3: LOCKED
 - Phase 4+: LOCKED
 
@@ -553,7 +558,7 @@ hidden or deleted — it correctly shows as "N days overdue," exactly as specifi
 Verified: strict typecheck, lint, 202 tests / 46 suites, both production builds. **Not yet tested
 by the owner.**
 
-## Subscription Code redesign — `<CUSTOMER_CODE>-S<NN>`, replacing `LEG-S-*` (committed locally, not pushed)
+## Subscription Code redesign — `<CUSTOMER_CODE>-S<NN>`, replacing `LEG-S-*` (pushed to `origin/main`, not yet deployed)
 
 Same treatment the Customer Code work gave `customerCode`, now applied to `subscriptionCode`: a new
 `SubscriptionCodeSequence` model + `SubscriptionCodeService` (one row per Customer, concurrency-safe
@@ -595,10 +600,47 @@ explicit transaction) and re-verified against a real MariaDB, including delibera
 original bug first to confirm the fix actually addresses it, not just re-running the happy path. See
 `SESSION_HANDOFF_2026-08-29.md`'s "2026-09-09 (same day, follow-up)" entry for the full detail.
 
-**Committed locally as two commits, still not pushed** — the owner asked to review the actual
-migration file before any push or deployment; **not yet tested by the owner in the browser.** See
+A fourth review round then caught the new `subscription_code_sequences` FK being `ON DELETE
+RESTRICT`, which would have broken the existing, unmodified `CustomersService.deleteCustomer()` flow
+for every customer with a subscription. Fixed to `ON DELETE CASCADE ON UPDATE CASCADE` (schema +
+migration), with a new live-DB test proving both that deleting one Subscription never touches the
+sequence and that a Customer with a generated sequence still deletes cleanly through the real
+`deleteCustomer()` workflow.
+
+**Committed locally as four commits and pushed to `origin/main`** (`a3e73b6..190a11b`) after the
+owner's review. **Not yet tested by the owner in the browser** and **not yet deployed** — see
 `SESSION_HANDOFF_2026-08-29.md` for exact deployment steps (this one needs a real
 `db:migrate:deploy` — it rewrites data, not just schema).
+
+## Create/Edit Subscription workflow redesign — locked/searchable Customer selection, one coherent date model (not yet committed)
+
+Two problems fixed: (1) "Add another subscription to this customer" from Customer Details still
+showed a full Customer dropdown instead of using the already-known customer; (2) Start Date, Renewal
+Interval, and Renewal Date could be filled in as three independent, contradictory fields.
+
+Customer selection now has two modes on the shared `SubscriptionModal`: a `lockedCustomer` prop
+(opened from Customer Details, or the Subscriptions page with `?customerId=` in the URL) renders the
+Customer read-only using its real database id — no dropdown, no re-selection; without it, the
+**existing** `CustomerCombobox` (already used by Legacy Import, reused as-is) provides searchable
+selection by Customer Code, English name, or Arabic name. The old 500-row customer-list fetch that
+powered the giant dropdown is gone.
+
+Renewal Date is no longer independently enterable: a new shared `addCalendarMonths(date, months)`
+helper (`packages/shared`, imported by both frontend and backend — one algorithm, not two) computes
+it from Start Date + Renewal Interval, calendar-month-accurate with end-of-month clamping (31 Jan + 1
+month → last day of Feb). `CreateSubscriptionDto` no longer accepts a `renewalDate` field at all —
+the server always derives it — and `renewalIntervalMonths` is now required. `SubscriptionsService.
+update()` only recalculates when Start Date or Renewal Interval actually change; opening Edit and
+saving unrelated fields never touches a historical Renewal Date. Billing Frequency remains fully
+independent (verified via a parametrized test across all six values). Legacy Import, the Renewal
+Engine, and `contractTermMonths`/`ServicePackageTerm` were inspected and confirmed unaffected/unused
+respectively — none were touched.
+
+No database migration — none was needed. Verified: `prisma validate`, strict typecheck and lint
+across all three packages (`@cp/shared`/`@cp/api`/`@cp/web`), 264 tests / 54 suites (242 passed, 22
+skipped — live-DB-only), both production builds. **No browser-automation tool is available in this
+session, so the UI was not manually clicked through** — disclosed rather than claimed as tested. See
+`SESSION_HANDOFF_2026-08-29.md`'s "2026-09-09 (later same day)" entry for full detail.
 
 ## Staging CAPTCHA deployment patch
 
