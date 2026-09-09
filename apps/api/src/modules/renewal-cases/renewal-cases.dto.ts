@@ -44,6 +44,14 @@ export class RenewalCaseListQueryDto extends PageQueryDto {
   serviceTypeId?: string;
 
   @IsOptional()
+  @IsUUID()
+  servicePackageId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  billingEntityId?: string;
+
+  @IsOptional()
   @IsEnum(RenewalCaseStatus)
   status?: RenewalCaseStatus;
 

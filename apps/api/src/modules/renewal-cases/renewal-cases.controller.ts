@@ -13,6 +13,13 @@ export class RenewalCasesController {
     return this.renewalCases.list(query);
   }
 
+  // Declared before ':id' so this literal segment is matched first — otherwise Nest would treat
+  // "summary" as an :id value and route here to findOne() instead.
+  @Get('summary')
+  summary() {
+    return this.renewalCases.summary();
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.renewalCases.findOne(id);
@@ -41,5 +48,33 @@ export class RenewalCasesController {
       actorId: req.user.id,
       ipAddress: ip,
     });
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')
+  @Post(':id/mark-awaiting-customer')
+  markAwaitingCustomer(
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest,
+    @Ip() ip: string,
+  ) {
+    return this.renewalCases.markAwaitingCustomer(id, { actorId: req.user.id, ipAddress: ip });
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')
+  @Post(':id/mark-accepted')
+  markAccepted(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Ip() ip: string) {
+    return this.renewalCases.markAccepted(id, { actorId: req.user.id, ipAddress: ip });
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')
+  @Post(':id/mark-do-not-renew')
+  markDoNotRenew(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Ip() ip: string) {
+    return this.renewalCases.markDoNotRenew(id, { actorId: req.user.id, ipAddress: ip });
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')
+  @Post(':id/mark-fulfilled')
+  markFulfilled(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Ip() ip: string) {
+    return this.renewalCases.markFulfilled(id, { actorId: req.user.id, ipAddress: ip });
   }
 }

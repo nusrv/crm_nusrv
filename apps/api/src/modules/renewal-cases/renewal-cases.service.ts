@@ -8,7 +8,7 @@ import { AuditService } from '../../audit/audit.service';
 import type { MutationContext } from '../../common/mutation-context';
 import { pageMetadata } from '../../common/page-query.dto';
 import { PrismaService } from '../../database/prisma.service';
-import { ActorType } from '../../generated/prisma/enums';
+import { ActorType, CustomerDecision, RenewalCaseStatus } from '../../generated/prisma/enums';
 import { BusinessTimeService } from '../../time/business-time.service';
 import { ClockService } from '../../time/clock.service';
 import {
@@ -16,6 +16,16 @@ import {
   RenewalCaseListQueryDto,
   RenewalHoldFilter,
 } from './renewal-cases.dto';
+
+// Resolved/dead-end states: a case here is no longer "in flight", so manual workflow actions
+// (mark awaiting customer / accepted / do-not-renew / fulfilled) refuse to fire from any of them,
+// and the Renewals overview's due/overdue counts exclude them regardless of their dueDate.
+const TERMINAL_STATUSES: RenewalCaseStatus[] = [
+  RenewalCaseStatus.CLOSED,
+  RenewalCaseStatus.FULFILLED,
+  RenewalCaseStatus.REJECTED,
+  RenewalCaseStatus.DO_NOT_RENEW,
+];
 
 const renewalCaseInclude = {
   subscription: {
@@ -26,14 +36,25 @@ const renewalCaseInclude = {
           customerCode: true,
           nameEn: true,
           nameAr: true,
+          contactName: true,
           primaryEmail: true,
+          phone: true,
           billingEntity: { select: { id: true, code: true, name: true } },
         },
       },
       serviceType: { select: { id: true, code: true, name: true } },
+      servicePackage: { select: { id: true, name: true } },
     },
   },
   holds: { orderBy: { createdAt: 'desc' as const } },
+  // Cheap operational signal for the list view (bounded to one extra row per case, no N+1):
+  // the single most recent outbox message tells us "not sent / queued / delivered / failed"
+  // without pulling the full history, which the detail view fetches separately.
+  communicationOutbox: {
+    orderBy: { queuedAt: 'desc' as const },
+    take: 1,
+    select: { status: true, queuedAt: true, audience: true },
+  },
   _count: { select: { communicationOutbox: true } },
 } as const;
 
@@ -68,6 +89,8 @@ export class RenewalCasesService {
       subscription: {
         customerId: query.customerId,
         serviceTypeId: query.serviceTypeId,
+        servicePackageId: query.servicePackageId,
+        ...(query.billingEntityId ? { customer: { billingEntityId: query.billingEntityId } } : {}),
         // No `mode: 'insensitive'` here: that filter is Postgres/MongoDB-only and Prisma throws a
         // validation error for it against a mysql datasource. MariaDB's utf8mb4_unicode_ci
         // columns are already case-insensitive by collation, so a plain `contains` is sufficient.
@@ -78,6 +101,7 @@ export class RenewalCasesService {
                 { name: { contains: search } },
                 { customer: { nameEn: { contains: search } } },
                 { customer: { nameAr: { contains: search } } },
+                { customer: { customerCode: { contains: search } } },
               ],
             }
           : {}),
@@ -100,6 +124,41 @@ export class RenewalCasesService {
       this.prisma.renewalCase.count({ where }),
     ]);
     return { data, meta: pageMetadata(total, query.page, query.pageSize), asOf: now.toISOString() };
+  }
+
+  /**
+   * Overview counts for the Renewals page's summary cards. Deliberately independent of the
+   * table's own filters — this reflects the overall renewal-case landscape, not the current
+   * search/status selection, the same way a dashboard header would. Excludes resolved/dead-end
+   * cases (see TERMINAL_STATUSES) from the due/overdue buckets: a FULFILLED or DO_NOT_RENEW case
+   * is no longer "due" in an operational sense no matter what its stored dueDate says.
+   */
+  async summary() {
+    const now = this.clock.now();
+    const today = this.businessTime.businessDate(now);
+    const in7Days = this.businessTime.addBusinessDays(now, 7);
+    const in30Days = this.businessTime.addBusinessDays(now, 30);
+    const activeHold = {
+      active: true,
+      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+    };
+    const notTerminal = { status: { notIn: TERMINAL_STATUSES } };
+    const [dueWithin7Days, dueWithin30Days, overdue, awaitingCustomer, onHold] = await Promise.all([
+      this.prisma.renewalCase.count({
+        where: { ...notTerminal, dueDate: { gte: today, lte: in7Days } },
+      }),
+      this.prisma.renewalCase.count({
+        where: { ...notTerminal, dueDate: { gte: today, lte: in30Days } },
+      }),
+      this.prisma.renewalCase.count({
+        where: { ...notTerminal, dueDate: { lt: today } },
+      }),
+      this.prisma.renewalCase.count({
+        where: { status: RenewalCaseStatus.AWAITING_CUSTOMER },
+      }),
+      this.prisma.renewalCase.count({ where: { holds: { some: activeHold } } }),
+    ]);
+    return { dueWithin7Days, dueWithin30Days, overdue, awaitingCustomer, onHold };
   }
 
   async findOne(id: string) {
@@ -181,6 +240,89 @@ export class RenewalCasesService {
         tx,
       );
       return hold;
+    });
+  }
+
+  // Four intentional, single-purpose business actions — not a generic status editor. Each only
+  // fires from a non-terminal state (see TERMINAL_STATUSES) and sets the one matching timestamp
+  // field the schema already has for that decision (acceptedAt / doNotRenewAt / fulfilledAt),
+  // exactly like createHold/releaseHold above set their own dedicated fields. Phase 3's
+  // invoice/payment/collection states are deliberately not exposed here — that workflow remains
+  // locked and unbuilt; these four are the ones the current Phase 2 domain model already supports.
+
+  async markAwaitingCustomer(id: string, context: MutationContext) {
+    return this.transitionStatus(
+      id,
+      RenewalCaseStatus.AWAITING_CUSTOMER,
+      {},
+      'renewal.case.marked_awaiting_customer',
+      context,
+    );
+  }
+
+  async markAccepted(id: string, context: MutationContext) {
+    return this.transitionStatus(
+      id,
+      RenewalCaseStatus.ACCEPTED,
+      { customerDecision: CustomerDecision.ACCEPTED, acceptedAt: this.clock.now() },
+      'renewal.case.marked_accepted',
+      context,
+    );
+  }
+
+  async markDoNotRenew(id: string, context: MutationContext) {
+    return this.transitionStatus(
+      id,
+      RenewalCaseStatus.DO_NOT_RENEW,
+      { customerDecision: CustomerDecision.REJECTED, doNotRenewAt: this.clock.now() },
+      'renewal.case.marked_do_not_renew',
+      context,
+    );
+  }
+
+  async markFulfilled(id: string, context: MutationContext) {
+    return this.transitionStatus(
+      id,
+      RenewalCaseStatus.FULFILLED,
+      { fulfilledAt: this.clock.now() },
+      'renewal.case.marked_fulfilled',
+      context,
+    );
+  }
+
+  private async transitionStatus(
+    id: string,
+    status: RenewalCaseStatus,
+    extraData: Record<string, unknown>,
+    eventKey: string,
+    context: MutationContext,
+  ) {
+    const oldState = await this.prisma.renewalCase.findUnique({ where: { id } });
+    if (!oldState) throw new NotFoundException('Renewal Case not found.');
+    if (TERMINAL_STATUSES.includes(oldState.status)) {
+      throw new ConflictException(
+        `Renewal Case is already ${oldState.status} and cannot be moved to ${status}.`,
+      );
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const renewalCase = await tx.renewalCase.update({
+        where: { id },
+        data: { status, ...extraData },
+      });
+      await this.audit.record(
+        {
+          actorType: ActorType.USER,
+          actorId: context.actorId,
+          eventKey,
+          subjectType: 'RenewalCase',
+          subjectId: id,
+          oldState,
+          newState: renewalCase,
+          ipAddress: context.ipAddress,
+        },
+        tx,
+      );
+      return renewalCase;
     });
   }
 }

@@ -44,17 +44,24 @@ describe('Phase 2 RBAC', () => {
     expect(allowed(roles, 'MANAGEMENT')).toBe(false);
   });
 
-  it.each(['createHold', 'releaseHold'])(
-    'allows operational roles except Management to %s',
+  it.each([
+    'createHold',
+    'releaseHold',
+    'markAwaitingCustomer',
+    'markAccepted',
+    'markDoNotRenew',
+    'markFulfilled',
+  ])('allows operational roles except Management to %s', (method) => {
+    const roles = methodRoles(RenewalCasesController, method) ?? [];
+    expect(roles).toEqual(['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT']);
+    for (const role of roles) expect(allowed(roles, role)).toBe(true);
+    expect(allowed(roles, 'MANAGEMENT')).toBe(false);
+  });
+
+  it.each(['list', 'summary'])(
+    'keeps renewal case %s available to every authenticated operational role',
     (method) => {
-      const roles = methodRoles(RenewalCasesController, method) ?? [];
-      expect(roles).toEqual(['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT']);
-      for (const role of roles) expect(allowed(roles, role)).toBe(true);
-      expect(allowed(roles, 'MANAGEMENT')).toBe(false);
+      expect(methodRoles(RenewalCasesController, method)).toBeUndefined();
     },
   );
-
-  it('keeps renewal case listing available to every authenticated operational role', () => {
-    expect(methodRoles(RenewalCasesController, 'list')).toBeUndefined();
-  });
 });
