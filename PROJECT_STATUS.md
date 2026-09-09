@@ -22,8 +22,10 @@
 - Deployment model: the owner deploys to `crm.nusrv.com` manually after reviewing each GitHub
   change; Claude Code has no direct Plesk/SSH/database access and does not deploy
 - **Subscription Code redesign** (`<CUSTOMER_CODE>-S<NN>`, replacing `LEG-S-*`, existing data
-  backfilled in place, no re-import): code complete, verified including an end-to-end migration test
-  against a real local MariaDB, **not yet committed** — see "Subscription Code redesign" below
+  backfilled in place, no re-import): code complete; owner review of the migration SQL caught 3 real
+  production-safety bugs (LPAD truncation, missing transaction wrapping, unproven temp-namespace
+  collision-safety), all fixed and re-verified against a real local MariaDB; committed locally as two
+  commits, **not yet pushed** — see "Subscription Code redesign" below
 - Phase 3: LOCKED
 - Phase 4+: LOCKED
 
@@ -551,7 +553,7 @@ hidden or deleted — it correctly shows as "N days overdue," exactly as specifi
 Verified: strict typecheck, lint, 202 tests / 46 suites, both production builds. **Not yet tested
 by the owner.**
 
-## Subscription Code redesign — `<CUSTOMER_CODE>-S<NN>`, replacing `LEG-S-*` (not yet committed)
+## Subscription Code redesign — `<CUSTOMER_CODE>-S<NN>`, replacing `LEG-S-*` (committed locally, not pushed)
 
 Same treatment the Customer Code work gave `customerCode`, now applied to `subscriptionCode`: a new
 `SubscriptionCodeSequence` model + `SubscriptionCodeService` (one row per Customer, concurrency-safe
@@ -580,10 +582,23 @@ detail modal showed a bare "Code:" under both its Customer and Subscription sect
 
 Verified: `prisma validate`/`generate`, strict typecheck, lint (both packages, zero warnings), 222
 tests / 50 suites (210 passed, 12 skipped — live-DB suites only), both production builds, and the
-migration itself against a real MariaDB as described above. **Not yet committed, not yet tested by
-the owner in the browser.** See `SESSION_HANDOFF_2026-08-29.md`'s 2026-09-09 entry for full detail
-and exact deployment steps (this one needs a real `db:migrate:deploy` — it rewrites data, not just
-schema).
+migration itself against a real MariaDB as described above.
+
+**Owner review round (same day) caught 3 real production-safety bugs in the migration SQL before
+allowing a push**: `LPAD` silently truncating past 2 digits (would have collided subscription #100
+with #10), the data rewrite not being wrapped in a transaction (a mid-failure would have left
+production on temporary codes), and the temporary rename namespace not being provably collision-safe
+against historical free-text codes. All three fixed (the migration now does a preflight
+validate-and-guard pass via two temporary mapping tables — real `UNIQUE`/`CHECK`/`PRIMARY KEY`
+constraints proving no collision or length overflow is possible — then wraps the actual rename in an
+explicit transaction) and re-verified against a real MariaDB, including deliberately reproducing each
+original bug first to confirm the fix actually addresses it, not just re-running the happy path. See
+`SESSION_HANDOFF_2026-08-29.md`'s "2026-09-09 (same day, follow-up)" entry for the full detail.
+
+**Committed locally as two commits, still not pushed** — the owner asked to review the actual
+migration file before any push or deployment; **not yet tested by the owner in the browser.** See
+`SESSION_HANDOFF_2026-08-29.md` for exact deployment steps (this one needs a real
+`db:migrate:deploy` — it rewrites data, not just schema).
 
 ## Staging CAPTCHA deployment patch
 

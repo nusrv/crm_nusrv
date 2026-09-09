@@ -1340,3 +1340,62 @@ Case detail view after deploying to confirm the new labels and generated-code be
 
 No `.env` changes, no new environment variables, no Redis/worker changes, no changes to any other
 migration.
+
+### 2026-09-09 (same day, follow-up) — Owner review caught 3 real production-safety bugs in the migration; fixed and re-verified
+
+The owner reviewed the migration SQL above before allowing a push and found genuine correctness
+issues my earlier "verified end-to-end" claim had missed — each one was reproduced against a real
+local MariaDB, fixed, and re-verified, not just reasoned about a second time:
+
+1. **`LPAD(..., 2, '0')` truncates rather than pads** — MariaDB's `LPAD` shortens a source string
+   that's *longer* than the target length, so `LPAD('100', 2, '0')` returns `'10'`, not `'100'`.
+   Subscription #100 for a customer would have collided with #10. Fixed by replacing the padding
+   with `CASE WHEN rn < 10 THEN CONCAT('0', rn) ELSE CAST(rn AS CHAR) END`, which only prepends a
+   zero when needed and never truncates, for any row count. Reproduced the bug and the fix against
+   a real MariaDB with 101 subscriptions for one customer, asserting the exact `S09`/`S10`/`S11` and
+   `S98`/`S99`/`S100`/`S101` boundary values and zero duplicate codes.
+2. **The data rewrite wasn't wrapped in a transaction** — a failure between phase 1 (temp rename)
+   and the sequence-seeding step would have left production subscriptions stuck on
+   `__scode_migrating__<id>` codes. Fixed by wrapping phase 1 + phase 2 + sequence seeding in an
+   explicit `START TRANSACTION` / `COMMIT` (the two `CREATE TABLE`/`CREATE TEMPORARY TABLE`
+   statements stay outside it, since DDL implicitly commits in MariaDB regardless). Verified by
+   splicing a deliberately-failing statement into a *copy* of the real migration SQL in place of the
+   real phase-2 rename, applying it, confirming the failure, then reconnecting with a **fresh
+   session** (so the check can't be fooled by reading the failed session's own uncommitted writes)
+   and confirming the original codes were completely untouched.
+3. **The temporary namespace wasn't provably collision-proof against historical free-text codes** —
+   my original claim that `CONCAT('__scode_migrating__', id)` "cannot collide" was only true among
+   the temp codes themselves (each is a function of a unique id); it did not rule out an existing,
+   historical free-text code already equalling *another* row's computed temp code. Fixed with an
+   explicit preflight guard, using the same `utf8mb4_unicode_ci` collation as
+   `subscriptions.subscription_code` itself: every current code and every computed temp code are
+   inserted into a `PRIMARY KEY`-constrained temporary table before phase 1 runs; a collision throws
+   a duplicate-key error there, before any real `subscriptions` row is touched. This also folded in
+   the requested final-code length guard (item 4 of the owner's list): the same preflight step
+   materializes every computed `final_code` into a temporary mapping table with `UNIQUE` and
+   `CHECK (CHAR_LENGTH(final_code) <= 191)` constraints, so a final code that wouldn't fit
+   `subscription_code`'s actual column type (confirmed `VARCHAR(191)` against the original phase-0
+   migration) or that collides with another subscription's final code aborts before phase 1 too —
+   rather than being asserted safe in a comment. Reproduced the temp-prefix collision scenario
+   (an existing subscription's code deliberately set to another subscription's would-be temp code)
+   against real MariaDB and confirmed the migration aborts with the original codes fully intact.
+
+The migration is now: two temporary mapping/guard tables built and validated first (real DB
+constraints, not comments, proving no collision and no length overflow is possible) → a
+`START TRANSACTION` block doing phase 1 (rename to temp) → phase 2 (rename to final) → sequence
+seeding → `COMMIT` → temp table cleanup.
+
+`apps/api/prisma/mariadb-subscription-code-backfill-live.spec.ts` (the permanent live-DB regression
+test, gated behind `MARIADB_TEST_DATABASE_URL` like the project's other live suites) was rewritten
+to cover all 8 scenarios the owner asked for: the collision/swap scenario, the deliberate temp-code
+collision (preflight guard), 101 subscriptions for one customer (the `S99`/`S100`/`S101` boundary),
+createdAt ties broken by id, transactional rollback on an injected phase-2 failure, unchanged
+subscription ids throughout, correct sequence seeding, and — using the real
+`SubscriptionCodeService` against the post-migration database, not a reimplementation — that the
+first subscription created after a 101-subscription backfill gets `S102`. All 8 pass against a real
+local MariaDB 12.1 instance (verified in-session; cleaned up afterward). Full API suite (230 tests /
+51 suites, 210 passed / 20 skipped — live-DB-only), typecheck, and lint all still clean on both
+packages.
+
+**Still not pushed** — a second local commit was created on top of the first with these fixes, at
+the owner's explicit request to review the actual migration file before any push or deployment.
