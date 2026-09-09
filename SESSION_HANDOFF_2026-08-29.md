@@ -1608,3 +1608,39 @@ Both changes verified to have real teeth the same way as every prior round: reve
 mirror in turn, confirmed the exact expected test failures (a resolved promise where a rejection was
 expected, showing the pre-fix persisted values), restored, re-confirmed green. Full suite: 271 tests
 / 54 suites (249 passed, 22 skipped), typecheck and lint clean.
+
+## 2026-09-09 (later same day, fourth follow-up) — Added Subscription deletion (owner is testing with real customers and hit a mistake with no way to remove it)
+
+Investigated first (the owner had already been told, correctly, that there was no delete path at
+all — no `DELETE` route, no service method, no UI button; the only way a subscription disappeared
+was as a side effect of deleting its entire Customer). Added it properly rather than a shortcut:
+
+`SubscriptionsService.remove(id, context)` — new method, cascade order copied directly from
+`CustomersService.deleteCustomer()`'s established pattern, scoped to one subscription instead of a
+whole customer: blocks with a `BadRequestException` if the subscription has any non-terminal
+Renewal Case (`status notIn ['CLOSED','ERROR']` — same whitelist customer-delete already uses), then
+deletes `communicationOutbox` (by `renewalCaseId`, then again by `subscriptionId` for the same
+belt-and-suspenders redundancy the customer-delete code already has), `renewalEvaluationDecision`,
+`renewalHold`, `renewalCase`, `legacyImportSubscriptionLink`, `subscriptionIdentifier`,
+`subscriptionConnection`, then the subscription itself, inside one transaction, with an audit event.
+Deliberately does **not** touch `SubscriptionCodeSequence` — no FK exists between it and
+Subscription, so a deleted subscription's number is never reused, consistent with everything already
+verified about that table this session. `DELETE /subscriptions/:id` added to the controller,
+`@Roles('ADMIN', 'ACCOUNTANT')` — same roles as create/update on this resource (narrower than
+customer-delete's `ADMIN`-only, since a single subscription is a much smaller blast radius than an
+entire customer).
+
+Frontend: `SubscriptionModal` gained a `Delete subscription` button (edit mode only, `canManage`-
+gated) with a `window.confirm(...)` matching the exact wording style of the existing customer-delete
+confirm in `customers-manager.tsx`. Added a new `onDeleted` callback prop (distinct from `onSaved`,
+so the success message reads "Subscription deleted and audited." instead of the misleading "saved")
+threaded through both callers (`subscriptions-manager.tsx`, `customer-detail.tsx`).
+
+New tests: cascade order and audit event asserted call-by-call; blocked when an active Renewal Case
+exists (verified this guard has real teeth — removed it in the mirror, confirmed the test failed
+with the delete going through anyway, restored, reconfirmed green); `NotFoundException` for a
+missing id. No RBAC test added — `create`/`update` on the same controller aren't separately
+RBAC-tested either, so there's no existing pattern to extend.
+
+Verified: typecheck and lint clean on both packages, 274 tests / 54 suites (252 passed, 22 skipped),
+both production builds succeed. **Not yet committed** at the time of writing this entry.

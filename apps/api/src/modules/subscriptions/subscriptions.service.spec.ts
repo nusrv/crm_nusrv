@@ -455,3 +455,99 @@ describe('SubscriptionsService.update Renewal Date handling', () => {
     ).rejects.toThrow('Renewal date must be after start date.');
   });
 });
+
+describe('SubscriptionsService.remove', () => {
+  function harness(renewalCaseCount: number) {
+    const subscription = {
+      id: 'subscription-id',
+      subscriptionCode: 'FF0001-S01',
+      name: 'Hosting',
+      customerId: 'customer-id',
+    };
+    const tx = {
+      subscription: {
+        findUnique: jest.fn(() => Promise.resolve(subscription)),
+        delete: jest.fn(() => Promise.resolve(subscription)),
+      },
+      renewalCase: {
+        count: jest.fn(() => Promise.resolve(renewalCaseCount)),
+        findMany: jest.fn(() => Promise.resolve([{ id: 'case-1' }, { id: 'case-2' }])),
+        deleteMany: jest.fn(() => Promise.resolve({ count: 2 })),
+      },
+      communicationOutbox: { deleteMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+      renewalEvaluationDecision: { deleteMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+      renewalHold: { deleteMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+      legacyImportSubscriptionLink: { deleteMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+      subscriptionIdentifier: { deleteMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+      subscriptionConnection: { deleteMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const audit = { record: jest.fn(() => Promise.resolve(undefined)) };
+    const service = new SubscriptionsService(prisma as never, audit as never, {} as never);
+    return { service, tx, audit };
+  }
+
+  it('cascades every dependent row in order, deletes the subscription, and audits it', async () => {
+    const { service, tx, audit } = harness(0);
+
+    const result = await service.remove('subscription-id', { actorId: 'actor-id' });
+
+    expect(result).toEqual({ id: 'subscription-id', deleted: true });
+    expect(tx.renewalCase.findMany).toHaveBeenCalledWith({
+      where: { subscriptionId: 'subscription-id' },
+      select: { id: true },
+    });
+    expect(tx.communicationOutbox.deleteMany).toHaveBeenCalledWith({
+      where: { renewalCaseId: { in: ['case-1', 'case-2'] } },
+    });
+    expect(tx.renewalEvaluationDecision.deleteMany).toHaveBeenCalledWith({
+      where: { renewalCaseId: { in: ['case-1', 'case-2'] } },
+    });
+    expect(tx.renewalHold.deleteMany).toHaveBeenCalledWith({
+      where: { renewalCaseId: { in: ['case-1', 'case-2'] } },
+    });
+    expect(tx.renewalCase.deleteMany).toHaveBeenCalledWith({
+      where: { subscriptionId: 'subscription-id' },
+    });
+    expect(tx.legacyImportSubscriptionLink.deleteMany).toHaveBeenCalledWith({
+      where: { subscriptionId: 'subscription-id' },
+    });
+    expect(tx.subscriptionIdentifier.deleteMany).toHaveBeenCalledWith({
+      where: { subscriptionId: 'subscription-id' },
+    });
+    expect(tx.subscriptionConnection.deleteMany).toHaveBeenCalledWith({
+      where: { subscriptionId: 'subscription-id' },
+    });
+    expect(tx.communicationOutbox.deleteMany).toHaveBeenCalledWith({
+      where: { subscriptionId: 'subscription-id' },
+    });
+    expect(tx.subscription.delete).toHaveBeenCalledWith({ where: { id: 'subscription-id' } });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ eventKey: 'subscription.deleted', subjectId: 'subscription-id' }),
+      tx,
+    );
+  });
+
+  it('refuses to delete a subscription with an active (non-terminal) Renewal Case', async () => {
+    const { service, tx } = harness(1);
+
+    await expect(service.remove('subscription-id', { actorId: 'actor-id' })).rejects.toThrow(
+      'Cannot delete a subscription with active renewal cases. Close or cancel them first.',
+    );
+    expect(tx.subscription.delete).not.toHaveBeenCalled();
+  });
+
+  it('throws NotFoundException for a subscription that does not exist', async () => {
+    const tx = { subscription: { findUnique: jest.fn(() => Promise.resolve(null)) } };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new SubscriptionsService(prisma as never, {} as never, {} as never);
+
+    await expect(service.remove('missing-id', { actorId: 'actor-id' })).rejects.toThrow(
+      'Subscription not found.',
+    );
+  });
+});

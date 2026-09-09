@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Ip, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Ip, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../../identity/auth-user';
 import { Roles } from '../../identity/roles.decorator';
 import {
@@ -37,5 +37,11 @@ export class SubscriptionsController {
     @Ip() ip: string,
   ) {
     return this.subscriptions.update(id, input, { actorId: req.user.id, ipAddress: ip });
+  }
+
+  @Roles('ADMIN', 'ACCOUNTANT')
+  @Delete(':id')
+  remove(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Ip() ip: string) {
+    return this.subscriptions.remove(id, { actorId: req.user.id, ipAddress: ip });
   }
 }

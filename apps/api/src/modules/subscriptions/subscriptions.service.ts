@@ -278,6 +278,64 @@ export class SubscriptionsService {
     }
   }
 
+  // Cascade order mirrors CustomersService.deleteCustomer() exactly, scoped to one subscription
+  // instead of a whole customer's worth: every dependent row that has an onDelete: Restrict FK back
+  // to this subscription (directly, or via its RenewalCases) must be removed first, in dependency
+  // order, since MySQL/Prisma won't cascade those automatically. Deleting one Subscription never
+  // touches SubscriptionCodeSequence — there is no FK between them — so the customer's next
+  // generated code correctly continues past this one rather than reusing its number.
+  async remove(id: string, context: MutationContext) {
+    return this.prisma.$transaction(async (tx) => {
+      const subscription = await tx.subscription.findUnique({
+        where: { id },
+        select: { id: true, subscriptionCode: true, name: true, customerId: true },
+      });
+      if (!subscription) throw new NotFoundException('Subscription not found.');
+
+      const activeRenewalCases = await tx.renewalCase.count({
+        where: { subscriptionId: id, status: { notIn: ['CLOSED', 'ERROR'] } },
+      });
+      if (activeRenewalCases > 0) {
+        throw new BadRequestException(
+          'Cannot delete a subscription with active renewal cases. Close or cancel them first.',
+        );
+      }
+
+      const renewalCaseIds = (
+        await tx.renewalCase.findMany({ where: { subscriptionId: id }, select: { id: true } })
+      ).map((r) => r.id);
+
+      await tx.communicationOutbox.deleteMany({ where: { renewalCaseId: { in: renewalCaseIds } } });
+      await tx.renewalEvaluationDecision.deleteMany({
+        where: { renewalCaseId: { in: renewalCaseIds } },
+      });
+      await tx.renewalHold.deleteMany({ where: { renewalCaseId: { in: renewalCaseIds } } });
+      await tx.renewalCase.deleteMany({ where: { subscriptionId: id } });
+      await tx.legacyImportSubscriptionLink.deleteMany({ where: { subscriptionId: id } });
+      await tx.subscriptionIdentifier.deleteMany({ where: { subscriptionId: id } });
+      await tx.subscriptionConnection.deleteMany({ where: { subscriptionId: id } });
+      await tx.communicationOutbox.deleteMany({ where: { subscriptionId: id } });
+
+      await tx.subscription.delete({ where: { id } });
+
+      await this.audit.record(
+        {
+          actorType: ActorType.USER,
+          actorId: context.actorId,
+          eventKey: 'subscription.deleted',
+          subjectType: 'Subscription',
+          subjectId: id,
+          oldState: subscription,
+          newState: { deleted: true },
+          ipAddress: context.ipAddress,
+        },
+        tx,
+      );
+
+      return { id, deleted: true };
+    });
+  }
+
   private withCurrentJod<
     T extends {
       sellingPrice: { toString(): string };

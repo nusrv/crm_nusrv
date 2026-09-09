@@ -165,6 +165,12 @@ export function SubscriptionsManager() {
     void load();
   }
 
+  function handleDeleted() {
+    closeForm();
+    setMessage('Subscription deleted and audited.');
+    void load();
+  }
+
   const date = (value?: string) => (value ? value.slice(0, 10) : '');
 
   return (
@@ -186,6 +192,7 @@ export function SubscriptionsManager() {
         <SubscriptionModal
           lockedCustomer={lockedCustomer}
           onClose={closeForm}
+          onDeleted={handleDeleted}
           onSaved={handleSaved}
           subscriptionId={editingId}
         />

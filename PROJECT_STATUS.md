@@ -29,8 +29,12 @@
   `origin/main`** — see "Subscription Code redesign" below
 - **Create/Edit Subscription workflow redesign** (locked/searchable Customer selection depending on
   entry point; one coherent Start Date + Renewal Interval → Renewal Date model, enforced
-  server-side, not just in the UI): code complete, no database migration needed, not yet
-  committed — see "Create/Edit Subscription workflow redesign" below
+  server-side, not just in the UI): code complete, no database migration needed, **pushed to
+  `origin/main`** (`752ab58`) — see "Create/Edit Subscription workflow redesign" below
+- **Subscription deletion** (there was no delete path at all before this — only whole-Customer
+  deletion cascaded through it): added `DELETE /subscriptions/:id`, cascade-order copied from the
+  existing Customer-delete pattern, blocked when active Renewal Cases exist, plus a UI delete button.
+  Code complete, no database migration, **not yet committed** — see "Subscription deletion" below
 - Phase 3: LOCKED
 - Phase 4+: LOCKED
 
@@ -612,7 +616,7 @@ owner's review. **Not yet tested by the owner in the browser** and **not yet dep
 `SESSION_HANDOFF_2026-08-29.md` for exact deployment steps (this one needs a real
 `db:migrate:deploy` — it rewrites data, not just schema).
 
-## Create/Edit Subscription workflow redesign — locked/searchable Customer selection, one coherent date model (not yet committed)
+## Create/Edit Subscription workflow redesign — locked/searchable Customer selection, one coherent date model (pushed to `origin/main`)
 
 Two problems fixed: (1) "Add another subscription to this customer" from Customer Details still
 showed a full Customer dropdown instead of using the already-known customer; (2) Start Date, Renewal
@@ -641,6 +645,37 @@ across all three packages (`@cp/shared`/`@cp/api`/`@cp/web`), 264 tests / 54 sui
 skipped — live-DB-only), both production builds. **No browser-automation tool is available in this
 session, so the UI was not manually clicked through** — disclosed rather than claimed as tested. See
 `SESSION_HANDOFF_2026-08-29.md`'s "2026-09-09 (later same day)" entry for full detail.
+
+Owner review across several follow-up rounds hardened the date-model contract further: rejected an
+explicit `null` for `renewalIntervalMonths` on update (would have cleared a modern subscription's
+interval), closed a gap where a modern subscription could still be given an arbitrary `renewalDate`
+when neither Start Date nor Renewal Interval were in the same request, switched the legacy-mode gate
+from a falsy check to an explicit nullish check (`== null`, so a stored `0` is never mistaken for "no
+interval"), and replaced silently discarding a modern subscription's supplied `renewalDate` with an
+explicit `BadRequestException`. All squashed into the one pushed commit above; see
+`SESSION_HANDOFF_2026-08-29.md` for each round's detail.
+
+## Subscription deletion (not yet committed)
+
+The owner is testing with real customers, created a subscription by mistake, and had no way to
+remove it — there was no delete path anywhere in the app (confirmed by inspection: no `DELETE`
+route, no service method, no UI button; only whole-Customer deletion cascaded through subscriptions).
+
+Added `SubscriptionsService.remove()` — cascade order copied directly from the existing
+`CustomersService.deleteCustomer()` pattern, scoped to one subscription: blocks with a
+`BadRequestException` if any non-terminal Renewal Case exists for it, otherwise deletes its
+`CommunicationOutbox`/`RenewalEvaluationDecision`/`RenewalHold`/`RenewalCase`/
+`LegacyImportSubscriptionLink`/`SubscriptionIdentifier`/`SubscriptionConnection` rows and then the
+subscription itself, in one transaction, with an audit event. Does not touch
+`SubscriptionCodeSequence` (no FK exists), so a deleted subscription's number is never reused.
+`DELETE /subscriptions/:id` added, `@Roles('ADMIN', 'ACCOUNTANT')` — same as create/update on this
+resource. Frontend: a `Delete subscription` button in the edit view with a `window.confirm(...)`
+matching the existing Customer-delete confirm's wording style.
+
+Verified: typecheck and lint clean, 274 tests / 54 suites (252 passed, 22 skipped), both production
+builds. The active-Renewal-Case guard was confirmed to have real teeth (removed it in the mirror,
+watched the test fail, restored it). See `SESSION_HANDOFF_2026-08-29.md`'s "2026-09-09 (later same
+day, fourth follow-up)" entry.
 
 ## Staging CAPTCHA deployment patch
 

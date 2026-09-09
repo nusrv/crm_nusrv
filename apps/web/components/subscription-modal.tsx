@@ -110,11 +110,13 @@ export function SubscriptionModal({
   lockedCustomer,
   onClose,
   onSaved,
+  onDeleted,
 }: {
   subscriptionId: string | null;
   lockedCustomer?: CustomerComboboxOption;
   onClose: () => void;
   onSaved: () => void;
+  onDeleted: () => void;
 }) {
   const { can } = useControlPanel();
   const canManage = can('ADMIN', 'ACCOUNTANT');
@@ -295,6 +297,24 @@ export function SubscriptionModal({
       onSaved();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    }
+  }
+
+  async function deleteSubscription() {
+    if (!editing) return;
+    if (
+      !window.confirm(
+        `Permanently delete subscription ${editing.subscriptionCode} (${editing.name})? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await apiRequest(`/subscriptions/${editing.id}`, { method: 'DELETE' });
+      setError('');
+      onDeleted();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Delete failed.');
     }
   }
 
@@ -618,6 +638,15 @@ export function SubscriptionModal({
                 <button className="button-secondary" onClick={onClose} type="button">
                   Cancel
                 </button>
+                {editing && (
+                  <button
+                    className="button-small danger ml-auto"
+                    onClick={() => void deleteSubscription()}
+                    type="button"
+                  >
+                    Delete subscription
+                  </button>
+                )}
               </div>
             </form>
           )}

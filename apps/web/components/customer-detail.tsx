@@ -141,6 +141,12 @@ export function CustomerDetail() {
     await load();
   }
 
+  async function handleSubscriptionDeleted() {
+    closeSubscriptionModal();
+    setSuccess('Subscription deleted and audited.');
+    await load();
+  }
+
   if (!detail) {
     return (
       <>
@@ -310,6 +316,7 @@ export function CustomerDetail() {
             nameAr: detail.nameAr,
           }}
           onClose={closeSubscriptionModal}
+          onDeleted={() => void handleSubscriptionDeleted()}
           onSaved={() => void handleSubscriptionSaved()}
           subscriptionId={subscriptionModalId}
         />
