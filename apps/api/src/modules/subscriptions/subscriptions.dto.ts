@@ -85,11 +85,6 @@ export class CreateSubscriptionDto {
   @IsUUID()
   servicePackageId?: string;
 
-  @Transform(({ value }) => String(value).trim().toUpperCase())
-  @IsString()
-  @Length(2, 80)
-  subscriptionCode!: string;
-
   @IsString()
   @Length(2, 250)
   name!: string;
@@ -173,10 +168,10 @@ export class UpdateSubscriptionDto {
   @IsUUID()
   servicePackageId?: string;
 
-  @IsOptional()
-  @IsUUID()
-  customerId?: string;
-
+  // Customer is intentionally NOT editable here: the Subscription Code encodes the owning
+  // Customer's code (`<CUSTOMER_CODE>-S01`), so reassigning a subscription to a different customer
+  // through a normal edit would silently make its own code lie about who it belongs to. A future
+  // "Transfer Subscription" workflow (recoding included) would need to be a dedicated operation.
   @IsOptional()
   @IsUUID()
   serviceTypeId?: string;

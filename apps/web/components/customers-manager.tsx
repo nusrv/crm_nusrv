@@ -303,7 +303,7 @@ export function CustomersManager() {
         >
           <Notice message={error} />
           <Notice message={success} tone="success" />
-          {editing && <p className="muted mb-4 text-xs">Code: {editing.customerCode}</p>}
+          {editing && <p className="muted mb-4 text-xs">Customer Code: {editing.customerCode}</p>}
           {!editing && (
             <p className="muted mb-4 text-xs">
               Customer code is generated automatically from the Billing Entity once created.

@@ -163,8 +163,10 @@ export function SubscriptionModal({
     const form = new FormData(event.currentTarget);
     const value = (name: string) => String(form.get(name) ?? '').trim();
     const body = {
-      ...(editing ? {} : { subscriptionCode: value('subscriptionCode') }),
-      customerId: value('customerId'),
+      // Subscription Code is always server-generated (never client-supplied) and Customer is
+      // immutable once a subscription exists (its code encodes the owning Customer's code), so
+      // customerId is only ever sent on create.
+      ...(editing ? {} : { customerId: value('customerId') }),
       serviceTypeId: value('serviceTypeId'),
       servicePackageId: value('servicePackageId') || undefined,
       name: value('name'),
@@ -249,7 +251,17 @@ export function SubscriptionModal({
     >
       <Notice message={error} />
       <Notice message={message} tone="success" />
-      {editing && <p className="muted mb-4 text-xs">Code: {editing.subscriptionCode}</p>}
+      {editing && (
+        <p className="muted mb-4 text-xs">
+          Customer Code: {editing.customer.customerCode} · Subscription Code:{' '}
+          {editing.subscriptionCode}
+        </p>
+      )}
+      {!editing && (
+        <p className="muted mb-4 text-xs">
+          Subscription code will be generated automatically from the selected Customer.
+        </p>
+      )}
       {loading ? (
         <p className="muted text-sm">Loading subscription…</p>
       ) : (
@@ -260,22 +272,30 @@ export function SubscriptionModal({
               key={editing?.id ?? 'new'}
               onSubmit={(event) => void save(event)}
             >
-              {!editing && <Field label="Subscription code" name="subscriptionCode" required />}
-              <label className="field">
-                <span>Customer</span>
-                <select
-                  defaultValue={editing?.customerId ?? defaultCustomerId ?? ''}
-                  name="customerId"
-                  required
-                >
-                  <option value="">Select…</option>
-                  {customers.map((customer) => (
-                    <option key={customer.id} value={customer.id}>
-                      {customer.customerCode} · {customerCombinedLabel(customer)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {editing ? (
+                <div className="field">
+                  <span>Customer</span>
+                  <strong>
+                    {editing.customer.customerCode} · {customerCombinedLabel(editing.customer)}
+                  </strong>
+                  <small className="muted">
+                    Customer is fixed once a subscription is created — its Subscription Code
+                    encodes this Customer. Use a Transfer workflow (not available yet) to move it.
+                  </small>
+                </div>
+              ) : (
+                <label className="field">
+                  <span>Customer</span>
+                  <select defaultValue={defaultCustomerId ?? ''} name="customerId" required>
+                    <option value="">Select…</option>
+                    {customers.map((customer) => (
+                      <option key={customer.id} value={customer.id}>
+                        {customer.customerCode} · {customerCombinedLabel(customer)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label className="field">
                 <span>Service Type</span>
                 <select defaultValue={editing?.serviceTypeId ?? ''} name="serviceTypeId" required>

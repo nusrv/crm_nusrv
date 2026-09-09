@@ -21,6 +21,9 @@
   on every text search in the app" below. Commit `86c4ef7`, not yet deployed.
 - Deployment model: the owner deploys to `crm.nusrv.com` manually after reviewing each GitHub
   change; Claude Code has no direct Plesk/SSH/database access and does not deploy
+- **Subscription Code redesign** (`<CUSTOMER_CODE>-S<NN>`, replacing `LEG-S-*`, existing data
+  backfilled in place, no re-import): code complete, verified including an end-to-end migration test
+  against a real local MariaDB, **not yet committed** — see "Subscription Code redesign" below
 - Phase 3: LOCKED
 - Phase 4+: LOCKED
 
@@ -547,6 +550,40 @@ hidden or deleted — it correctly shows as "N days overdue," exactly as specifi
 
 Verified: strict typecheck, lint, 202 tests / 46 suites, both production builds. **Not yet tested
 by the owner.**
+
+## Subscription Code redesign — `<CUSTOMER_CODE>-S<NN>`, replacing `LEG-S-*` (not yet committed)
+
+Same treatment the Customer Code work gave `customerCode`, now applied to `subscriptionCode`: a new
+`SubscriptionCodeSequence` model + `SubscriptionCodeService` (one row per Customer, concurrency-safe
+via a locked `upsert` inside the caller's transaction — direct structural mirror of
+`CustomerCodeSequence`/`CustomerCodeService`) is now the single generator for both manual creation
+(`SubscriptionsService.create()`) and Legacy Import (`LegacyImportService.approveRow()`, both
+`CREATE_NEW` and `ATTACH_EXISTING`), producing `FF0001-S01`, `FF0001-S02`, ... — the sequence is
+per-Customer, not global or per-Billing-Entity. `subscriptionCode` was removed from
+`CreateSubscriptionDto` entirely (the API rejects a caller-supplied one, via the existing
+`whitelist: true` validation pipe — not just a hidden frontend field) and `customerId` was removed
+from `UpdateSubscriptionDto` (a subscription's Customer is now immutable after creation, since the
+code encodes it). **Unlike the Customer Code work, this one migrates existing data in place** — the
+owner explicitly required no re-import: migration
+`20260909000000_subscription_code_sequences_and_backfill` deterministically backfills every existing
+subscription's code (ordered per-Customer by `created_at` then `id`), preserving every Subscription
+id and every foreign-key relationship (`RenewalCase`, `CommunicationOutbox`,
+`LegacyImportSubscriptionLink`, etc. all key off the id, never the code). Verified end-to-end against
+a real local MariaDB 12.1 database in-session (seeded mixed old-format codes, applied the migration,
+confirmed exact expected ordering/ids/sequence-seeding), not just reasoned about. The old
+`LEG-S-<hash>` generator (`generatedCode()` in `legacy-import.service.ts`) is deleted; `LEG-S` no
+longer appears anywhere except historical `sourceLegacyReference`/`AuditEvent` data (untouched, on
+purpose) and comments/test names documenting the removal. UI: every ambiguous "Code:" label (the
+direct cause of the owner's "why does the customer have Code: LEG-S-..." report — the Renewal Case
+detail modal showed a bare "Code:" under both its Customer and Subscription sections) now says
+"Customer Code:" or "Subscription Code:" explicitly.
+
+Verified: `prisma validate`/`generate`, strict typecheck, lint (both packages, zero warnings), 222
+tests / 50 suites (210 passed, 12 skipped — live-DB suites only), both production builds, and the
+migration itself against a real MariaDB as described above. **Not yet committed, not yet tested by
+the owner in the browser.** See `SESSION_HANDOFF_2026-08-29.md`'s 2026-09-09 entry for full detail
+and exact deployment steps (this one needs a real `db:migrate:deploy` — it rewrites data, not just
+schema).
 
 ## Staging CAPTCHA deployment patch
 

@@ -271,8 +271,9 @@ export function CustomerDetail() {
                 onClick={() => openSubscription(subscription.id)}
                 type="button"
               >
-                <strong>{subscription.name}</strong> · {subscription.serviceType.name} ·{' '}
-                {subscription.status} · renews {subscription.renewalDate.slice(0, 10)}
+                <strong>{subscription.subscriptionCode}</strong> · {subscription.name} ·{' '}
+                {subscription.serviceType.name} · {subscription.status} · renews{' '}
+                {subscription.renewalDate.slice(0, 10)}
               </button>
             ))
           ) : (

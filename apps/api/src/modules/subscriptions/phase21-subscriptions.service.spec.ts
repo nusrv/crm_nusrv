@@ -52,14 +52,18 @@ describe('Phase 2.1 subscription package snapshots', () => {
       ),
     };
     const audit = { record: jest.fn(() => Promise.resolve(undefined)) };
-    const service = new SubscriptionsService(prisma as never, audit as never);
+    const subscriptionCode = { next: jest.fn(() => Promise.resolve('SUB-P21')) };
+    const service = new SubscriptionsService(
+      prisma as never,
+      audit as never,
+      subscriptionCode,
+    );
 
     await service.create(
       {
         customerId: 'customer-id',
         serviceTypeId: 'type-id',
         servicePackageId: 'package-id',
-        subscriptionCode: 'SUB-P21',
         name: 'Negotiated Premium',
         startDate: '2026-01-01',
         renewalDate: '2029-01-01',

@@ -295,6 +295,7 @@ export function SubscriptionsManager() {
           <table>
             <thead>
               <tr>
+                <th>Subscription Code</th>
                 <th>Name</th>
                 <th>Customer</th>
                 <th>Type</th>
@@ -308,6 +309,7 @@ export function SubscriptionsManager() {
             <tbody>
               {result?.data.map((subscription) => (
                 <tr key={subscription.id}>
+                  <td>{subscription.subscriptionCode}</td>
                   <td>{subscription.name}</td>
                   <td>{customerDisplayName(subscription.customer)}</td>
                   <td>

@@ -5,6 +5,7 @@ import { pageMetadata } from '../../common/page-query.dto';
 import { throwMappedPrismaError } from '../../common/prisma-errors';
 import { PrismaService } from '../../database/prisma.service';
 import { ActorType } from '../../generated/prisma/enums';
+import { SubscriptionCodeService } from './subscription-code.service';
 import type {
   CreateSubscriptionDto,
   SubscriptionListQueryDto,
@@ -34,6 +35,7 @@ export class SubscriptionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly subscriptionCode: SubscriptionCodeService,
   ) {}
 
   async list(query: SubscriptionListQueryDto) {
@@ -102,9 +104,11 @@ export class SubscriptionsService {
     const { identifiers, ...subscriptionInput } = input;
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const subscriptionCode = await this.subscriptionCode.next(tx, input.customerId);
         const subscription = await tx.subscription.create({
           data: {
             ...subscriptionInput,
+            subscriptionCode,
             exchangeRateToJod: currencyDefinition.rateToJod,
             sellingPriceJod: currencyDefinition
               .rateToJod!.mul(input.sellingPrice)
@@ -155,10 +159,10 @@ export class SubscriptionsService {
     const startDate = input.startDate ?? oldState.startDate.toISOString();
     const renewalDate = input.renewalDate ?? oldState.renewalDate.toISOString();
     this.validateDates(startDate, renewalDate);
-    const parentChanged = input.customerId || input.serviceTypeId || input.servicePackageId;
+    const parentChanged = input.serviceTypeId || input.servicePackageId;
     const servicePackage = parentChanged
       ? await this.requireParents(
-          input.customerId ?? oldState.customerId,
+          oldState.customerId,
           input.serviceTypeId ?? oldState.serviceTypeId,
           input.servicePackageId ?? oldState.servicePackageId ?? undefined,
         )

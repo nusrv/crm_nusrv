@@ -20,6 +20,7 @@ import {
 } from '../../generated/prisma/enums';
 import { SecretEncryptionService } from '../../security/secret-encryption.service';
 import { CustomerCodeService } from '../customers/customer-code.service';
+import { SubscriptionCodeService } from '../subscriptions/subscription-code.service';
 import type {
   ImportBatchListQueryDto,
   ImportRowListQueryDto,
@@ -75,6 +76,7 @@ export class LegacyImportService {
     private readonly encryption: SecretEncryptionService,
     private readonly audit: AuditService,
     private readonly customerCode: CustomerCodeService,
+    private readonly subscriptionCode: SubscriptionCodeService,
   ) {}
 
   async createBatch(file: UploadedLegacyFile | undefined, context: MutationContext) {
@@ -1079,7 +1081,7 @@ export class LegacyImportService {
       }
 
       const subscriptions = [];
-      for (const [index, subscriptionInput] of mapping.subscriptions.entries()) {
+      for (const subscriptionInput of mapping.subscriptions) {
         const { identifiers, ...liveSubscriptionInput } = subscriptionInput;
         const currencyDefinition = await tx.currency.findUnique({
           where: { code: subscriptionInput.currency },
@@ -1093,6 +1095,9 @@ export class LegacyImportService {
             `Currency ${subscriptionInput.currency} needs an active JOD exchange rate before approval.`,
           );
         }
+        // Same central generator manual creation uses — Legacy Import must never mint codes with
+        // its own scheme (the retired `LEG-S-<hash>` format).
+        const subscriptionCodeValue = await this.subscriptionCode.next(tx, customerId);
         const subscription = await tx.subscription.create({
           data: {
             ...liveSubscriptionInput,
@@ -1108,10 +1113,7 @@ export class LegacyImportService {
               ? asJson(liveSubscriptionInput.classificationEvidence)
               : undefined,
             customerId,
-            subscriptionCode: this.generatedCode(
-              'LEG-S',
-              `${row.sourceReference}:${String(index + 1)}`,
-            ),
+            subscriptionCode: subscriptionCodeValue,
             startDate: new Date(subscriptionInput.startDate),
             renewalDate: new Date(subscriptionInput.renewalDate),
             currentTermEndDate: subscriptionInput.currentTermEndDate
@@ -1403,9 +1405,6 @@ export class LegacyImportService {
     });
   }
 
-  private generatedCode(prefix: string, source: string): string {
-    return `${prefix}-${createHash('sha256').update(source).digest('hex').slice(0, 16).toUpperCase()}`;
-  }
 }
 
 function mergeSuggestedDates(

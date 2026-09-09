@@ -58,13 +58,17 @@ describe('Phase 1 audited services', () => {
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
-    const service = new SubscriptionsService(prisma as never, audit as never);
+    const subscriptionCode = { next: jest.fn(() => Promise.resolve('SUB-001')) };
+    const service = new SubscriptionsService(
+      prisma as never,
+      audit as never,
+      subscriptionCode,
+    );
 
     await service.create(
       {
         customerId: 'customer-id',
         serviceTypeId: 'type-id',
-        subscriptionCode: 'SUB-001',
         name: 'Hosting',
         startDate: '2026-01-01',
         renewalDate: '2027-01-01',

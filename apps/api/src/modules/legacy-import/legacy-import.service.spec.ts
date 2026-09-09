@@ -349,6 +349,7 @@ describe('LegacyImportService', () => {
       {} as never,
       audit as never,
       {} as never,
+      {} as never,
     );
 
     const first = await service.createBatch(
@@ -412,6 +413,7 @@ describe('LegacyImportService', () => {
       {} as never,
       audit as never,
       {} as never,
+      {} as never,
     );
 
     await expect(service.deleteBatch('batch-id', actor)).resolves.toEqual({
@@ -459,6 +461,7 @@ describe('LegacyImportService', () => {
       prisma as never,
       {} as never,
       audit as never,
+      {} as never,
       {} as never,
     );
 
@@ -549,11 +552,13 @@ describe('LegacyImportService', () => {
       ),
     };
     const customerCode = { next: jest.fn(() => Promise.resolve('CUS-001')) };
+    const subscriptionCode = { next: jest.fn(() => Promise.resolve('CUS-001-S01')) };
     const service = new LegacyImportService(
       prisma as never,
       {} as never,
       audit as never,
       customerCode,
+      subscriptionCode,
     );
 
     const first = await service.approveRow('row-id', actor);
@@ -654,11 +659,13 @@ describe('LegacyImportService', () => {
     };
     const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
     const customerCode = { next: jest.fn(() => Promise.resolve('CUS-002')) };
+    const subscriptionCode = { next: jest.fn(() => Promise.resolve('CUS-002-S01')) };
     const service = new LegacyImportService(
       prisma as never,
       {} as never,
       audit as never,
       customerCode,
+      subscriptionCode,
     );
 
     const first = await service.approveRow('row-a', actor);
@@ -774,11 +781,18 @@ describe('LegacyImportService', () => {
         .mockResolvedValueOnce('FF0001')
         .mockResolvedValueOnce('NS0001'),
     };
+    const subscriptionCode = {
+      next: jest
+        .fn<() => Promise<string>>()
+        .mockResolvedValueOnce('FF0001-S01')
+        .mockResolvedValueOnce('NS0001-S01'),
+    };
     const service = new LegacyImportService(
       prisma as never,
       {} as never,
       audit as never,
       customerCode,
+      subscriptionCode,
     );
 
     const ff = await service.approveRow('row-ff', actor);
@@ -861,11 +875,13 @@ describe('LegacyImportService', () => {
     };
     const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
     const customerCode = { next: jest.fn<() => Promise<string>>() };
+    const subscriptionCode = { next: jest.fn(() => Promise.resolve('FF0007-S02')) };
     const service = new LegacyImportService(
       prisma as never,
       {} as never,
       audit as never,
       customerCode,
+      subscriptionCode,
     );
 
     const result = await service.approveRow('row-id', actor);
@@ -916,6 +932,7 @@ describe('LegacyImportService', () => {
       prisma as never,
       encryption as never,
       audit as never,
+      {} as never,
       {} as never,
     );
 
@@ -1010,6 +1027,7 @@ describe('LegacyImportService', () => {
       encryption as never,
       audit as never,
       {} as never,
+      {} as never,
     );
 
     const buffer = multiEntityCanonicalWorkbookFixture();
@@ -1034,7 +1052,13 @@ describe('LegacyImportService', () => {
     const prisma = {
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
-    const service = new LegacyImportService(prisma as never, {} as never, {} as never, {} as never);
+    const service = new LegacyImportService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
     await expect(service.approveRow('row-id', actor)).rejects.toThrow(
       'must be validated before approval',
     );
@@ -1085,6 +1109,7 @@ describe('LegacyImportService', () => {
       prisma as never,
       encryption as never,
       audit as never,
+      {} as never,
       {} as never,
     );
 
@@ -1137,5 +1162,157 @@ describe('LegacyImportService', () => {
       const subscriptions = row.data.mappedSubscriptions as Array<{ billingFrequency?: string }>;
       expect(subscriptions[0]?.billingFrequency).toBe(BillingFrequency.ANNUAL);
     }
+  });
+});
+
+describe('LegacyImportService.approveRow Subscription Code generation', () => {
+  const rateToJod = { mul: jest.fn(() => ({ toDecimalPlaces: () => '100.000' })) };
+  const mappedSubscription = {
+    serviceTypeId: 'service-type-id',
+    name: 'Hosting',
+    startDate: '2026-01-01',
+    renewalDate: '2027-01-01',
+    billingFrequency: BillingFrequency.ANNUAL,
+    sellingPrice: '100.000',
+    currency: 'JOD',
+    providerAutoRenews: true,
+    graceHours: 24,
+    status: 'ACTIVE',
+  };
+
+  it('CREATE_NEW: never mints its own code — it asks the shared SubscriptionCodeService, keyed on the newly created customer, and never produces a LEG-S-* code', async () => {
+    const row = {
+      id: 'row-id',
+      batchId: 'batch-id',
+      status: LegacyImportRowStatus.READY_FOR_APPROVAL,
+      sourceReference: 'canonical.xlsx#Subscriptions!SUB-0050',
+      customerResolution: LegacyCustomerResolution.CREATE_NEW,
+      candidateCustomerId: null,
+      mappedCustomer: {
+        nameEn: 'New Customer',
+        primaryEmail: 'new@example.test',
+        billingEntityId: 'entity-id',
+        preferredLanguage: 'en',
+      },
+      mappedSubscriptions: [mappedSubscription],
+      subscriptionLinks: [],
+    };
+    const customer = { id: 'customer-id', contacts: [] };
+    const tx = {
+      legacyImportRow: {
+        findUnique: jest.fn(() => Promise.resolve(row)),
+        updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
+        update: jest.fn(() => Promise.resolve({})),
+      },
+      customer: {
+        create: jest.fn(() => Promise.resolve(customer)),
+        findFirst: jest.fn(() => Promise.resolve(null)),
+      },
+      customerEmailAddress: { createMany: jest.fn(() => Promise.resolve({ count: 1 })) },
+      customerPhoneNumber: { createMany: jest.fn(() => Promise.resolve({ count: 0 })) },
+      subscription: {
+        create: jest.fn((input: { data: Record<string, unknown> }) =>
+          Promise.resolve({ id: 'subscription-id', ...input.data }),
+        ),
+      },
+      currency: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({
+            code: 'JOD',
+            active: true,
+            rateToJod,
+            effectiveDate: new Date('2026-01-01'),
+          }),
+        ),
+      },
+      legacyImportSubscriptionLink: { create: jest.fn(() => Promise.resolve({ id: 'link-id' })) },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      legacyImportRow: { count: jest.fn(() => Promise.resolve(0)) },
+      legacyImportBatch: { update: jest.fn(() => Promise.resolve({ id: 'batch-id' })) },
+    };
+    const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
+    const customerCode = { next: jest.fn(() => Promise.resolve('FF0038')) };
+    const subscriptionCode = { next: jest.fn(() => Promise.resolve('FF0038-S03')) };
+    const service = new LegacyImportService(
+      prisma as never,
+      {} as never,
+      audit as never,
+      customerCode,
+      subscriptionCode,
+    );
+
+    await service.approveRow('row-id', actor);
+
+    expect(subscriptionCode.next).toHaveBeenCalledWith(tx, 'customer-id');
+    const created = (
+      tx.subscription.create.mock.calls[0]?.[0] as { data: { subscriptionCode: string } }
+    ).data;
+    expect(created.subscriptionCode).toBe('FF0038-S03');
+    expect(created.subscriptionCode).not.toMatch(/^LEG-S-/);
+  });
+
+  it('ATTACH_EXISTING: continues the selected existing customer\'s own sequence instead of the retired LEG-S generator', async () => {
+    const row = {
+      id: 'row-id',
+      batchId: 'batch-id',
+      status: LegacyImportRowStatus.READY_FOR_APPROVAL,
+      sourceReference: 'canonical.xlsx#Subscriptions!SUB-0051',
+      customerResolution: LegacyCustomerResolution.ATTACH_EXISTING,
+      candidateCustomerId: 'existing-customer-id',
+      mappedCustomer: null,
+      mappedSubscriptions: [mappedSubscription],
+      subscriptionLinks: [],
+    };
+    const existingCustomer = { id: 'existing-customer-id', customerCode: 'FF0050' };
+    const tx = {
+      legacyImportRow: {
+        findUnique: jest.fn(() => Promise.resolve(row)),
+        updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
+        update: jest.fn(() => Promise.resolve({})),
+      },
+      customer: { findUnique: jest.fn(() => Promise.resolve(existingCustomer)) },
+      subscription: {
+        create: jest.fn((input: { data: Record<string, unknown> }) =>
+          Promise.resolve({ id: 'subscription-id', ...input.data }),
+        ),
+      },
+      currency: {
+        findUnique: jest.fn(() =>
+          Promise.resolve({
+            code: 'JOD',
+            active: true,
+            rateToJod,
+            effectiveDate: new Date('2026-01-01'),
+          }),
+        ),
+      },
+      legacyImportSubscriptionLink: { create: jest.fn(() => Promise.resolve({ id: 'link-id' })) },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      legacyImportRow: { count: jest.fn(() => Promise.resolve(0)) },
+      legacyImportBatch: { update: jest.fn(() => Promise.resolve({ id: 'batch-id' })) },
+    };
+    const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
+    const customerCode = { next: jest.fn<() => Promise<string>>() };
+    const subscriptionCode = { next: jest.fn(() => Promise.resolve('FF0050-S03')) };
+    const service = new LegacyImportService(
+      prisma as never,
+      {} as never,
+      audit as never,
+      customerCode,
+      subscriptionCode,
+    );
+
+    await service.approveRow('row-id', actor);
+
+    expect(customerCode.next).not.toHaveBeenCalled();
+    expect(subscriptionCode.next).toHaveBeenCalledWith(tx, 'existing-customer-id');
+    const created = (
+      tx.subscription.create.mock.calls[0]?.[0] as { data: { subscriptionCode: string } }
+    ).data;
+    expect(created.subscriptionCode).toBe('FF0050-S03');
   });
 });

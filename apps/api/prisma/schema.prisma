@@ -249,6 +249,7 @@ model Customer {
   communicationOutbox   CommunicationOutbox[]
   legacyCandidateRows   LegacyImportRow[]      @relation("LegacyCandidateCustomer")
   legacyApprovedRows    LegacyImportRow[]      @relation("LegacyApprovedCustomer")
+  subscriptionCodeSequence SubscriptionCodeSequence?
 
   @@index([billingEntityId])
   @@index([nameEn])
@@ -401,6 +402,18 @@ model Currency {
 
   @@index([active, code])
   @@map("currencies")
+}
+
+// One row per Customer. `lastValue` only ever increments (never decremented, never reused on
+// delete) — it is the sole source of truth for the next `subscriptionCode` suffix under that
+// customer. See SubscriptionCodeService for the concurrency-safe increment.
+model SubscriptionCodeSequence {
+  customerId String   @id @map("customer_id") @db.VarChar(36)
+  lastValue  Int      @default(0) @map("last_value")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@map("subscription_code_sequences")
 }
 
 model Subscription {

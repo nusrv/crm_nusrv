@@ -283,7 +283,7 @@ function RenewalCaseBody({
         </div>
         <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
           <p>
-            <span className="muted">Code:</span> {customer.customerCode}
+            <span className="muted">Customer Code:</span> {customer.customerCode}
           </p>
           <p>
             <span className="muted">Billing Entity:</span> {customer.billingEntity.name}
@@ -315,7 +315,7 @@ function RenewalCaseBody({
         </div>
         <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
           <p>
-            <span className="muted">Code:</span> {detail.subscription.subscriptionCode}
+            <span className="muted">Subscription Code:</span> {detail.subscription.subscriptionCode}
           </p>
           <p>
             <span className="muted">Name:</span> {detail.subscription.name}
