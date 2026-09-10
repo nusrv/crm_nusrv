@@ -339,6 +339,44 @@ describe('SubscriptionsService.update Renewal Date handling', () => {
     expect(data?.renewalDate).toBeUndefined();
   });
 
+  it('echoing back the same existing Start Date does not recalculate a preserved non-canonical historical Renewal Date', async () => {
+    // The stored renewalDate here (2020-01-22) is deliberately ONE DAY OFF from what
+    // addCalendarMonths(2019-01-23, 12) would compute (2020-01-23) — exactly the shape of a
+    // preserved historical correction. Presence-based "changed" detection would recalculate and
+    // silently overwrite it just because the form re-submitted the same startDate value.
+    const { service, update } = harness({
+      startDate: new Date('2019-01-23T00:00:00.000Z'),
+      renewalDate: new Date('2020-01-22T00:00:00.000Z'),
+      renewalIntervalMonths: 12,
+    });
+
+    await service.update(
+      'subscription-id',
+      { startDate: '2019-01-23', sellingPrice: '150.000' },
+      { actorId: 'actor-id' },
+    );
+
+    const data = update.mock.calls[0]?.[0].data;
+    expect(data?.renewalDate).toBeUndefined();
+  });
+
+  it('echoing back the same existing Renewal Interval does not recalculate a preserved non-canonical historical Renewal Date', async () => {
+    const { service, update } = harness({
+      startDate: new Date('2019-01-23T00:00:00.000Z'),
+      renewalDate: new Date('2020-01-22T00:00:00.000Z'),
+      renewalIntervalMonths: 12,
+    });
+
+    await service.update(
+      'subscription-id',
+      { renewalIntervalMonths: 12, sellingPrice: '150.000' },
+      { actorId: 'actor-id' },
+    );
+
+    const data = update.mock.calls[0]?.[0].data;
+    expect(data?.renewalDate).toBeUndefined();
+  });
+
   it('editing Start Date intentionally recalculates the Renewal Date from the (unchanged) Renewal Interval', async () => {
     const { service, update } = harness({
       startDate: new Date('2026-01-01T00:00:00.000Z'),

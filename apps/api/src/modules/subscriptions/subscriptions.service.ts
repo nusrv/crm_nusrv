@@ -182,8 +182,17 @@ export class SubscriptionsService {
     // `effectiveIntervalMonths == null` (nullish, not falsy) is deliberate: a stored/effective
     // interval of `0` is not a valid interval, but it is also not "no interval" — it must not be
     // treated as legacy just because it is falsy.
-    const startDateChanged = input.startDate !== undefined;
-    const intervalChanged = input.renewalIntervalMonths !== undefined;
+    // "Changed" means semantically different from the stored value, not merely "the field was
+    // present in the request body". A form that echoes back the subscription's existing
+    // startDate/renewalIntervalMonths unchanged (because the caller only meant to edit an
+    // unrelated field) must not recalculate/normalize a historically-preserved renewalDate that
+    // happens not to match calendar-canonical arithmetic exactly.
+    const startDateChanged =
+      input.startDate !== undefined &&
+      new Date(input.startDate).getTime() !== oldState.startDate.getTime();
+    const intervalChanged =
+      input.renewalIntervalMonths !== undefined &&
+      input.renewalIntervalMonths !== oldState.renewalIntervalMonths;
     const effectiveIntervalMonths = intervalChanged
       ? input.renewalIntervalMonths
       : oldState.renewalIntervalMonths;

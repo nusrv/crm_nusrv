@@ -223,10 +223,13 @@ export class UpdateCustomerDto {
   @MaxLength(250)
   contactName?: string;
 
-  @IsOptional()
-  @Transform(({ value }) => String(value).trim().toLowerCase())
-  @IsEmail()
-  primaryEmail?: string;
+  // primaryEmail is intentionally absent from this DTO, same reasoning as status above: the
+  // normalized, active/primary CustomerEmailAddress channel is the authoritative source for the
+  // new email domain, and generic PATCH writing Customer.primaryEmail directly (without touching
+  // any channel) would silently diverge the two. Staff change the primary email through the
+  // Contact Channels endpoints (customer-channels.controller.ts), which promote a channel and sync
+  // this scalar from it — the one place that write happens. The global ValidationPipe's
+  // forbidNonWhitelisted:true rejects a request body containing primaryEmail here outright.
 
   @IsOptional()
   @Transform(({ value }) => (value ? String(value).trim().toLowerCase() : undefined))
@@ -267,9 +270,11 @@ export class UpdateCustomerDto {
   @IsUUID()
   billingEntityId?: string;
 
-  @IsOptional()
-  @IsEnum(CustomerStatus)
-  status?: CustomerStatus;
+  // Customer.status is intentionally absent from this DTO: lifecycle status changes (deactivate/
+  // reactivate) must go through their dedicated, more strictly role-gated endpoints, never through
+  // this generic edit form — see CustomersService.deactivate()/reactivate(). The global
+  // ValidationPipe runs with forbidNonWhitelisted: true, so a request body that includes `status`
+  // here is rejected outright rather than silently ignored.
 
   @IsOptional()
   @IsString()

@@ -13,6 +13,7 @@ import {
   SubscriptionStatus,
 } from '../../generated/prisma/enums';
 import { customerDisplayName } from '../customers/customer-name.util';
+import { CustomerEmailResolutionService } from '../customers/customer-email-resolution.service';
 import { BusinessTimeService } from '../../time/business-time.service';
 import { ClockService } from '../../time/clock.service';
 import { aggregateEffectiveHolds, cycleStartDate, isReminderEligible } from './renewal-policy';
@@ -41,6 +42,7 @@ export interface RenewalEvaluationSummary {
   heldDecisions: number;
   ineligibleDecisions: number;
   internalRulesWithoutRecipients: number;
+  customerRemindersSkippedNoRecipient: number;
   asOf: string;
   businessDate: string;
 }
@@ -53,6 +55,7 @@ export class RenewalEngineService {
     private readonly businessTime: BusinessTimeService,
     private readonly clock: ClockService,
     private readonly renderer: RenewalTemplateRenderer,
+    private readonly emailResolution: CustomerEmailResolutionService,
   ) {}
 
   async evaluateAll(options: RenewalEvaluationOptions = {}): Promise<RenewalEvaluationSummary> {
@@ -90,6 +93,7 @@ export class RenewalEngineService {
       heldDecisions: 0,
       ineligibleDecisions: 0,
       internalRulesWithoutRecipients: 0,
+      customerRemindersSkippedNoRecipient: 0,
       asOf: asOf.toISOString(),
       businessDate: this.businessTime.businessDateKey(asOf),
     };
@@ -147,21 +151,51 @@ export class RenewalEngineService {
             summary.heldDecisions += 1;
           }
         } else {
-          const queued = await this.queueOutbox({
-            subscription,
-            renewalCaseId: renewalCase.id,
-            audience: ReminderAudience.CUSTOMER,
-            recipient: subscription.customer.primaryEmail,
-            subject: this.renderer.render(customerRule.template.subjectTemplate, values),
-            body: this.renderer.render(customerRule.template.bodyTemplate, values),
-            daysBeforeDue,
-            reminderRuleId: customerRule.id,
-            idempotencyParts: ['customer', renewalCase.id, customerRule.id, String(daysBeforeDue)],
-            asOf,
-            options,
-          });
-          if (queued) summary.customerRemindersQueued += 1;
-          else summary.duplicatesPrevented += 1;
+          // Authoritative recipient resolution (see CustomerEmailResolutionService): never read
+          // subscription.customer.primaryEmail directly — that scalar can be stale relative to the
+          // normalized email channels, and must never be trusted once normalized data exists and
+          // says there is no currently active primary.
+          const resolvedRecipient = await this.emailResolution.resolvePrimaryRecipient(
+            subscription.customerId,
+          );
+          if (!resolvedRecipient) {
+            await this.audit.record({
+              actorType: options.actorId ? ActorType.USER : ActorType.SYSTEM,
+              actorId: options.actorId,
+              eventKey: 'renewal.reminder.skipped.no_recipient',
+              subjectType: 'RenewalCase',
+              subjectId: renewalCase.id,
+              metadata: {
+                subscriptionId: subscription.id,
+                customerId: subscription.customerId,
+                daysBeforeDue,
+                reminderRuleId: customerRule.id,
+              },
+              ipAddress: options.ipAddress,
+            });
+            summary.customerRemindersSkippedNoRecipient += 1;
+          } else {
+            const queued = await this.queueOutbox({
+              subscription,
+              renewalCaseId: renewalCase.id,
+              audience: ReminderAudience.CUSTOMER,
+              recipient: resolvedRecipient.email,
+              subject: this.renderer.render(customerRule.template.subjectTemplate, values),
+              body: this.renderer.render(customerRule.template.bodyTemplate, values),
+              daysBeforeDue,
+              reminderRuleId: customerRule.id,
+              idempotencyParts: [
+                'customer',
+                renewalCase.id,
+                customerRule.id,
+                String(daysBeforeDue),
+              ],
+              asOf,
+              options,
+            });
+            if (queued) summary.customerRemindersQueued += 1;
+            else summary.duplicatesPrevented += 1;
+          }
         }
       }
 

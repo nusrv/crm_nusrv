@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
+import { CustomersModule } from '../customers/customers.module';
 import { CommunicationOutboxController } from './communication-outbox.controller';
 import { CommunicationOutboxService } from './communication-outbox.service';
 import { RenewalCasesController } from './renewal-cases.controller';
@@ -13,7 +14,7 @@ import { RenewalQueueService } from './renewal-queue.service';
 import { RenewalTemplateRenderer } from './renewal-template.renderer';
 
 @Module({
-  imports: [BullModule.registerQueue({ name: RENEWAL_QUEUE })],
+  imports: [BullModule.registerQueue({ name: RENEWAL_QUEUE }), CustomersModule],
   controllers: [
     RenewalCasesController,
     RenewalConfigurationController,

@@ -149,7 +149,12 @@ export function CustomersManager() {
       nameEn: value('nameEn') || undefined,
       nameAr: value('nameAr') || undefined,
       contactName: value('contactName') || undefined,
-      primaryEmail: value('primaryEmail'),
+      // primaryEmail is never sent through this generic edit/create form once a customer already
+      // exists — the API rejects it there (see UpdateCustomerDto). Only the create path may set the
+      // initial primary email; changing an existing customer's primary email goes through Contact
+      // Channels on the customer's own detail page, which keeps the normalized channel and this
+      // scalar in sync.
+      ...(editing ? {} : { primaryEmail: value('primaryEmail') }),
       secondaryEmail: value('secondaryEmail') || undefined,
       phone: composePhone(value('phone'), callingCode),
       phoneCountryCallingCode: callingCode || undefined,
@@ -158,7 +163,11 @@ export function CustomersManager() {
       taxNumber: value('taxNumber') || undefined,
       preferredLanguage: value('preferredLanguage'),
       billingEntityId: value('billingEntityId'),
-      status: value('status'),
+      // Lifecycle status is never sent through this generic edit/create form once a customer
+      // already exists — the API rejects it there (see UpdateCustomerDto). Only the create path
+      // may set an initial status; existing customers are deactivated/reactivated through their
+      // own dedicated actions below.
+      ...(editing ? {} : { status: value('status') }),
       notes: value('notes') || undefined,
     };
     try {
@@ -188,6 +197,22 @@ export function CustomersManager() {
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Deactivation failed.');
+    }
+  }
+
+  async function reactivate(customer: Customer) {
+    if (
+      !window.confirm(
+        `Reactivate ${customerDisplayName(customer)}? Their subscriptions stay suspended — reactivate each one individually if it should resume.`,
+      )
+    )
+      return;
+    try {
+      await apiRequest(`/customers/${customer.id}/reactivate`, { method: 'POST' });
+      setSuccess('Customer reactivated.');
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Reactivation failed.');
     }
   }
 
@@ -320,13 +345,21 @@ export function CustomersManager() {
               At least one of English or Arabic name is required.
             </p>
             <Field label="Contact name" name="contactName" value={String(defaults.contactName)} />
-            <Field
-              label="Primary email"
-              name="primaryEmail"
-              required
-              type="email"
-              value={String(defaults.primaryEmail)}
-            />
+            {editing ? (
+              <p className="field field-wide muted text-xs">
+                <span>Primary email</span>
+                {String(defaults.primaryEmail)} — change it from Contact Channels on this
+                customer&apos;s detail page.
+              </p>
+            ) : (
+              <Field
+                label="Primary email"
+                name="primaryEmail"
+                required
+                type="email"
+                value={String(defaults.primaryEmail)}
+              />
+            )}
             <Field
               label="Secondary email"
               name="secondaryEmail"
@@ -371,13 +404,15 @@ export function CustomersManager() {
                   ))}
               </select>
             </label>
-            <label className="field">
-              <span>Status</span>
-              <select defaultValue={String(defaults.status)} name="status">
-                <option value="ACTIVE">Active</option>
-                <option value="INACTIVE">Inactive</option>
-              </select>
-            </label>
+            {!editing && (
+              <label className="field">
+                <span>Status</span>
+                <select defaultValue={String(defaults.status)} name="status">
+                  <option value="ACTIVE">Active</option>
+                  <option value="INACTIVE">Inactive</option>
+                </select>
+              </label>
+            )}
             <label className="field field-wide">
               <span>Address</span>
               <textarea defaultValue={String(defaults.address)} name="address" rows={2} />
@@ -569,6 +604,15 @@ export function CustomersManager() {
                         type="button"
                       >
                         Deactivate
+                      </button>
+                    )}
+                    {can('ADMIN') && customer.status === 'INACTIVE' && (
+                      <button
+                        className="button-small"
+                        onClick={() => void reactivate(customer)}
+                        type="button"
+                      >
+                        Reactivate
                       </button>
                     )}
                     {can('ADMIN') && (

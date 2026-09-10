@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import mariadb, { type Connection } from 'mariadb';
 import { AuditService } from '../src/audit/audit.service';
@@ -16,22 +14,19 @@ import {
   SubscriptionStatus,
   TechnicalConnectionType,
 } from '../src/generated/prisma/enums';
+import { CustomerEmailResolutionService } from '../src/modules/customers/customer-email-resolution.service';
 import { RenewalEngineService } from '../src/modules/renewal-cases/renewal-engine.service';
 import { RenewalTemplateRenderer } from '../src/modules/renewal-cases/renewal-template.renderer';
 import { BusinessTimeService } from '../src/time/business-time.service';
 import { ClockService } from '../src/time/clock.service';
+import { readAllMigrationsSql } from './read-all-migrations';
 
 const databaseUrl = process.env.MARIADB_TEST_DATABASE_URL;
 const liveDescribe = databaseUrl ? describe : describe.skip;
-const migrations = [
-  '20260823000000_mariadb_phase_0_1_foundation',
-  '20260824000000_phase_2_renewal_engine',
-  '20260827000000_phase_2_1_operational_data',
-]
-  .map((directory) =>
-    readFileSync(join(process.cwd(), 'prisma', 'migrations', directory, 'migration.sql'), 'utf8'),
-  )
-  .join('\n');
+// This suite exercises the CURRENT RenewalEngineService against a disposable database — it must
+// apply every migration up to HEAD, not a frozen historical subset, or it silently stops proving
+// anything about current behavior (see read-all-migrations.ts).
+const migrations = readAllMigrationsSql();
 
 function connectionOptions(url: string): mariadb.ConnectionConfig {
   const parsed = new URL(url);
@@ -92,6 +87,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
       businessTime,
       new ClockService(),
       new RenewalTemplateRenderer(),
+      new CustomerEmailResolutionService(prisma as never),
     );
 
     const adminRole = await prisma.role.create({ data: { code: 'ADMIN', name: 'Admin' } });

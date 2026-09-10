@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import { BadRequestException } from '@nestjs/common';
 import { CustomerStatus, SubscriptionStatus } from '../../generated/prisma/enums';
 import { CustomersService } from './customers.service';
 
@@ -27,7 +28,7 @@ describe('CustomersService', () => {
     };
     const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
     const customerCode = { next: jest.fn(() => Promise.resolve('TL0005')) };
-    const service = new CustomersService(prisma as never, audit as never, customerCode);
+    const service = new CustomersService(prisma as never, audit as never, customerCode, {} as never);
 
     const result = await service.create(
       {
@@ -62,6 +63,7 @@ describe('CustomersService', () => {
       prisma as never,
       {} as never,
       { next: jest.fn() } as never,
+      {} as never,
     );
 
     await expect(
@@ -92,7 +94,7 @@ describe('CustomersService', () => {
     };
     const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
     const customerCode = { next: jest.fn(() => Promise.resolve('TL0001')) };
-    const service = new CustomersService(prisma as never, audit as never, customerCode);
+    const service = new CustomersService(prisma as never, audit as never, customerCode, {} as never);
 
     await expect(
       service.create(
@@ -113,7 +115,7 @@ describe('CustomersService', () => {
     const prisma = {
       customer: { findMany, count: jest.fn(() => Promise.resolve(0)) },
     };
-    const service = new CustomersService(prisma as never, {} as never, {} as never);
+    const service = new CustomersService(prisma as never, {} as never, {} as never, {} as never);
 
     await service.list({ page: 1, pageSize: 20 });
 
@@ -131,7 +133,7 @@ describe('CustomersService', () => {
     const prisma = {
       customer: { findMany, count: jest.fn(() => Promise.resolve(0)) },
     };
-    const service = new CustomersService(prisma as never, {} as never, {} as never);
+    const service = new CustomersService(prisma as never, {} as never, {} as never, {} as never);
 
     await service.list({
       page: 1,
@@ -149,17 +151,17 @@ describe('CustomersService', () => {
     });
   });
 
-  describe('update — deactivation cascade', () => {
-    function buildDeactivationHarness(oldStatus: CustomerStatus) {
+  describe('update — no lifecycle-status side effects', () => {
+    it('never touches subscriptions, since UpdateCustomerDto carries no status field', async () => {
       const oldState = {
         id: 'customer-id',
-        status: oldStatus,
+        status: CustomerStatus.ACTIVE,
         nameEn: 'Customer',
         nameAr: null,
         phone: null,
       };
-      const updatedCustomer = { ...oldState, status: CustomerStatus.INACTIVE };
-      const updateMany = jest.fn(() => Promise.resolve({ count: 2 }));
+      const updatedCustomer = { ...oldState, nameEn: 'Renamed' };
+      const updateMany = jest.fn();
       const tx = {
         customer: { update: jest.fn(() => Promise.resolve(updatedCustomer)) },
         subscription: { updateMany },
@@ -169,51 +171,130 @@ describe('CustomersService', () => {
         $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
       };
       const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
-      const service = new CustomersService(prisma as never, audit as never, {} as never);
+      const service = new CustomersService(prisma as never, audit as never, {} as never, {} as never);
+
+      await service.update('customer-id', { nameEn: 'Renamed' }, { actorId: 'actor-id' });
+
+      expect(updateMany).not.toHaveBeenCalled();
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ eventKey: 'customer.updated' }),
+        expect.anything(),
+      );
+    });
+  });
+
+  describe('deactivate / reactivate', () => {
+    function buildStatusHarness(oldStatus: CustomerStatus) {
+      const oldState = {
+        id: 'customer-id',
+        status: oldStatus,
+        nameEn: 'Customer',
+        nameAr: null,
+        phone: null,
+      };
+      const updateMany = jest.fn(() => Promise.resolve({ count: 2 }));
+      const tx = {
+        customer: {
+          update: jest.fn(({ data }: { data: { status: CustomerStatus } }) =>
+            Promise.resolve({ ...oldState, status: data.status }),
+          ),
+        },
+        subscription: { updateMany },
+      };
+      const prisma = {
+        customer: { findUnique: jest.fn(() => Promise.resolve(oldState)) },
+        $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+      };
+      const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
+      const service = new CustomersService(prisma as never, audit as never, {} as never, {} as never);
       return { service, updateMany, audit };
     }
 
-    it('suspends every ACTIVE subscription when a customer transitions to INACTIVE', async () => {
-      const { service, updateMany, audit } = buildDeactivationHarness(CustomerStatus.ACTIVE);
+    it('deactivate() suspends every ACTIVE subscription and audits the count', async () => {
+      const { service, updateMany, audit } = buildStatusHarness(CustomerStatus.ACTIVE);
 
-      await service.update(
-        'customer-id',
-        { status: CustomerStatus.INACTIVE },
-        { actorId: 'actor-id' },
-      );
+      await service.deactivate('customer-id', { actorId: 'actor-id' });
 
       expect(updateMany).toHaveBeenCalledWith({
         where: { customerId: 'customer-id', status: SubscriptionStatus.ACTIVE },
         data: { status: SubscriptionStatus.SUSPENDED },
       });
       expect(audit.record).toHaveBeenCalledWith(
-        expect.objectContaining({ metadata: { subscriptionsSuspended: 2 } }),
+        expect.objectContaining({
+          eventKey: 'customer.status_changed',
+          metadata: { subscriptionsSuspended: 2 },
+        }),
         expect.anything(),
       );
     });
 
-    it('does not touch subscriptions when a customer is reactivated', async () => {
-      const { service, updateMany } = buildDeactivationHarness(CustomerStatus.INACTIVE);
+    it('reactivate() does not touch subscriptions', async () => {
+      const { service, updateMany } = buildStatusHarness(CustomerStatus.INACTIVE);
 
-      await service.update(
-        'customer-id',
-        { status: CustomerStatus.ACTIVE },
-        { actorId: 'actor-id' },
-      );
+      await service.reactivate('customer-id', { actorId: 'actor-id' });
 
       expect(updateMany).not.toHaveBeenCalled();
     });
 
-    it('does not re-suspend subscriptions when an already-inactive customer is otherwise edited', async () => {
-      const { service, updateMany } = buildDeactivationHarness(CustomerStatus.INACTIVE);
+    it('deactivate() rejects an already-inactive customer as a no-op', async () => {
+      const { service, updateMany } = buildStatusHarness(CustomerStatus.INACTIVE);
 
-      await service.update(
-        'customer-id',
-        { status: CustomerStatus.INACTIVE, nameEn: 'Renamed' },
-        { actorId: 'actor-id' },
-      );
-
+      await expect(
+        service.deactivate('customer-id', { actorId: 'actor-id' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
       expect(updateMany).not.toHaveBeenCalled();
+    });
+
+    it('reactivate() rejects an already-active customer as a no-op', async () => {
+      const { service, updateMany } = buildStatusHarness(CustomerStatus.ACTIVE);
+
+      await expect(
+        service.reactivate('customer-id', { actorId: 'actor-id' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findOne — effective primary email display correctness', () => {
+    function harness(resolved: { email: string; source: string } | null) {
+      const customer = { id: 'customer-id', primaryEmail: 'stale@example.test' };
+      const prisma = { customer: { findUnique: jest.fn(() => Promise.resolve(customer)) } };
+      const emailResolution = {
+        resolvePrimaryRecipient: jest.fn<() => Promise<typeof resolved>>(() =>
+          Promise.resolve(resolved),
+        ),
+      };
+      const service = new CustomersService(
+        prisma as never,
+        {} as never,
+        {} as never,
+        emailResolution as never,
+      );
+      return { service, emailResolution };
+    }
+
+    it('includes the authoritative effectivePrimaryEmail alongside the legacy scalar when an active primary channel exists', async () => {
+      const { service } = harness({ email: 'active@example.test', source: 'NORMALIZED_PRIMARY' });
+
+      const result = await service.findOne('customer-id');
+
+      expect(result.primaryEmail).toBe('stale@example.test');
+      expect(result.effectivePrimaryEmail).toEqual({
+        email: 'active@example.test',
+        source: 'NORMALIZED_PRIMARY',
+      });
+    });
+
+    it('never presents the stale scalar as the current usable primary recipient when no valid one exists', async () => {
+      const { service } = harness(null);
+
+      const result = await service.findOne('customer-id');
+
+      // The scalar is still present for backward compatibility, but effectivePrimaryEmail — the
+      // field callers/UI must use to know "is there a valid recipient right now" — is explicitly
+      // null, not a fallback to the stale 'stale@example.test' value.
+      expect(result.primaryEmail).toBe('stale@example.test');
+      expect(result.effectivePrimaryEmail).toBeNull();
     });
   });
 });

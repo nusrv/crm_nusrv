@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import mariadb, { type Connection } from 'mariadb';
 import { toMariaDbDriverUrl } from '../src/database/mariadb-url';
@@ -13,19 +11,14 @@ import {
   PaymentScope,
   SubscriptionIdentifierType,
 } from '../src/generated/prisma/enums';
+import { readAllMigrationsSql } from './read-all-migrations';
 
 const databaseUrl = process.env.MARIADB_TEST_DATABASE_URL;
 const liveDescribe = databaseUrl ? describe : describe.skip;
-const migrationNames = [
-  '20260823000000_mariadb_phase_0_1_foundation',
-  '20260824000000_phase_2_renewal_engine',
-  '20260827000000_phase_2_1_operational_data',
-];
-const migrations = migrationNames
-  .map((name) =>
-    readFileSync(join(process.cwd(), 'prisma', 'migrations', name, 'migration.sql'), 'utf8'),
-  )
-  .join('\n');
+// Package/identifier/historical-snapshot persistence exercised against CURRENT generated Prisma
+// Client — must apply every migration up to HEAD (see read-all-migrations.ts), not the 3-migration
+// snapshot this suite was frozen at, which predates several columns current code now relies on.
+const migrations = readAllMigrationsSql();
 
 function options(url: string): mariadb.ConnectionConfig {
   const parsed = new URL(url);

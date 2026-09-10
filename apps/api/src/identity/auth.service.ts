@@ -56,21 +56,33 @@ export class AuthService {
     }
 
     if (!(await verify(user.passwordHash, input.password))) {
-      const failedAttempts = user.failedAttempts + 1;
-      await this.prisma.user.update({
+      // Atomic increment at the database level: two concurrent failed attempts must both be
+      // counted, not overwrite each other via a stale read -> +1 -> absolute-write race. The
+      // lockout decision is then made from the value Prisma returns from that same atomic
+      // increment, never from a separately re-read (and potentially stale) value.
+      const updated = await this.prisma.user.update({
         where: { id: user.id },
-        data: {
-          failedAttempts,
-          lockedUntil: failedAttempts >= 5 ? new Date(Date.now() + 15 * 60 * 1_000) : null,
-        },
+        data: { failedAttempts: { increment: 1 } },
       });
+      if (updated.failedAttempts >= 5) {
+        // Conditional on CURRENT state, not a plain update(): a concurrent successful login could
+        // have reset failedAttempts to 0 between our increment above and this write. Requiring
+        // failedAttempts still be >= 5 at write time means that reset wins — this stale threshold
+        // observation cannot re-lock an account a newer successful login just cleared. If the
+        // condition no longer holds, this simply affects 0 rows; there is nothing to roll back or
+        // report, since not locking is exactly the correct outcome in that case.
+        await this.prisma.user.updateMany({
+          where: { id: user.id, failedAttempts: { gte: 5 } },
+          data: { lockedUntil: new Date(Date.now() + 15 * 60 * 1_000) },
+        });
+      }
       await this.audit.record({
         actorType: ActorType.USER,
         actorId: user.id,
         eventKey: 'identity.login_failed',
         subjectType: 'User',
         subjectId: user.id,
-        metadata: { remoteAddress, failedAttempts },
+        metadata: { remoteAddress, failedAttempts: updated.failedAttempts },
       });
       throw new UnauthorizedException('Authentication failed.');
     }
@@ -121,6 +133,20 @@ export class AuthService {
       throw new UnauthorizedException('Invalid session.');
     }
 
+    if (!session.user.active) {
+      // A disabled user must not be able to mint a new access token, and their refresh session
+      // must not remain usable if the account is re-enabled later without a fresh login — revoke
+      // it now, the same way logout() revokes a session explicitly.
+      await this.prisma.authSession.updateMany({
+        where: { id: session.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      throw new UnauthorizedException('Invalid session.');
+    }
+
+    // Always reload current roles from the join table (already fetched above via `include`) rather
+    // than trusting anything embedded in the refresh token itself — a role change since login must
+    // be reflected in the next access token.
     const user = this.toAuthenticatedUser(session.user);
     return { accessToken: await this.signAccessToken(user), user };
   }

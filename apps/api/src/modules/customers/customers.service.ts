@@ -7,6 +7,7 @@ import { PrismaService } from '../../database/prisma.service';
 import type { Prisma } from '../../generated/prisma/client';
 import { ActorType, CustomerStatus, SubscriptionStatus } from '../../generated/prisma/enums';
 import { CustomerCodeService } from './customer-code.service';
+import { CustomerEmailResolutionService } from './customer-email-resolution.service';
 import type {
   CreateCustomerContactDto,
   CreateCustomerDto,
@@ -27,6 +28,7 @@ export class CustomersService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly customerCode: CustomerCodeService,
+    private readonly emailResolution: CustomerEmailResolutionService,
   ) {}
 
   async list(query: CustomerListQueryDto) {
@@ -81,7 +83,13 @@ export class CustomersService {
       },
     });
     if (!customer) throw new NotFoundException('Customer not found.');
-    return customer;
+    // primaryEmail (the scalar) is kept for backward compatibility but can be stale — see
+    // CustomerEmailResolutionService. effectivePrimaryEmail is the authoritative answer to "what
+    // would actually be used as this customer's primary recipient right now", so the UI can tell a
+    // valid active primary apart from a customer with no valid primary recipient, rather than
+    // presenting the possibly-stale scalar as if it were still current.
+    const effectivePrimaryEmail = await this.emailResolution.resolvePrimaryRecipient(id);
+    return { ...customer, effectivePrimaryEmail };
   }
 
   async create(input: CreateCustomerDto, context: MutationContext) {
@@ -195,16 +203,9 @@ export class CustomersService {
         'Provide a Customer Name in English, Arabic, or both — it cannot be empty in both languages.',
       );
     }
-    // A customer becoming INACTIVE — through this generic edit form or the dedicated /deactivate
-    // endpoint, which just calls this method — must suspend every one of its currently ACTIVE
-    // subscriptions so they immediately stop generating renewal reminders (enforced independently
-    // and defensively by the renewal engine's own query, not only by this cascade). Reactivating a
-    // customer intentionally does NOT reverse this: a subscription may have been suspended for an
-    // unrelated reason before the customer was deactivated, so blindly restoring everything to
-    // ACTIVE on reactivation could wrongly reactivate a subscription that should stay suspended.
-    // Subscription reactivation remains a deliberate, individual, manual action.
-    const suspendingSubscriptions =
-      input.status === CustomerStatus.INACTIVE && oldState.status !== CustomerStatus.INACTIVE;
+    // UpdateCustomerDto never carries `status` (see customers.dto.ts) — this generic edit path can
+    // never change lifecycle status or trigger the subscription-suspend cascade. That is exclusively
+    // the job of deactivate()/reactivate() below, via the shared setStatus() helper.
     try {
       return await this.prisma.$transaction(async (tx) => {
         const customer = await tx.customer.update({
@@ -212,26 +213,15 @@ export class CustomersService {
           data: customerData,
           include: customerInclude,
         });
-        const suspended = suspendingSubscriptions
-          ? await tx.subscription.updateMany({
-              where: { customerId: id, status: SubscriptionStatus.ACTIVE },
-              data: { status: SubscriptionStatus.SUSPENDED },
-            })
-          : null;
-        const eventKey =
-          input.status && input.status !== oldState.status
-            ? 'customer.status_changed'
-            : 'customer.updated';
         await this.audit.record(
           {
             actorType: ActorType.USER,
             actorId: context.actorId,
-            eventKey,
+            eventKey: 'customer.updated',
             subjectType: 'Customer',
             subjectId: customer.id,
             oldState,
             newState: customer,
-            metadata: suspended ? { subscriptionsSuspended: suspended.count } : undefined,
             ipAddress: context.ipAddress,
           },
           tx,
@@ -303,7 +293,63 @@ export class CustomersService {
   }
 
   async deactivate(id: string, context: MutationContext) {
-    return this.update(id, { status: CustomerStatus.INACTIVE }, context);
+    return this.setStatus(id, CustomerStatus.INACTIVE, context);
+  }
+
+  async reactivate(id: string, context: MutationContext) {
+    return this.setStatus(id, CustomerStatus.ACTIVE, context);
+  }
+
+  // The one, dedicated place Customer.status is ever changed — deliberately not reachable through
+  // the generic update() edit form (see UpdateCustomerDto). Both directions go through here so the
+  // suspend-cascade rule below has exactly one implementation.
+  private async setStatus(id: string, status: CustomerStatus, context: MutationContext) {
+    const oldState = await this.prisma.customer.findUnique({ where: { id }, include: customerInclude });
+    if (!oldState) throw new NotFoundException('Customer not found.');
+    if (oldState.status === status) {
+      throw new BadRequestException(`Customer is already ${status}.`);
+    }
+    // Deactivating a customer must suspend every one of its currently ACTIVE subscriptions so they
+    // immediately stop generating renewal reminders (enforced independently and defensively by the
+    // renewal engine's own query, not only by this cascade). Reactivating a customer intentionally
+    // does NOT reverse this: a subscription may have been suspended for an unrelated reason before
+    // the customer was deactivated, so blindly restoring everything to ACTIVE on reactivation could
+    // wrongly reactivate a subscription that should stay suspended. Subscription reactivation
+    // remains a deliberate, individual, manual action. This is an internal CRM-level lifecycle rule
+    // only — it never calls Plesk/SmarterMail and never requires IT/Technical-Action approval.
+    const suspendingSubscriptions = status === CustomerStatus.INACTIVE;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const customer = await tx.customer.update({
+          where: { id },
+          data: { status },
+          include: customerInclude,
+        });
+        const suspended = suspendingSubscriptions
+          ? await tx.subscription.updateMany({
+              where: { customerId: id, status: SubscriptionStatus.ACTIVE },
+              data: { status: SubscriptionStatus.SUSPENDED },
+            })
+          : null;
+        await this.audit.record(
+          {
+            actorType: ActorType.USER,
+            actorId: context.actorId,
+            eventKey: 'customer.status_changed',
+            subjectType: 'Customer',
+            subjectId: customer.id,
+            oldState,
+            newState: customer,
+            metadata: suspended ? { subscriptionsSuspended: suspended.count } : undefined,
+            ipAddress: context.ipAddress,
+          },
+          tx,
+        );
+        return customer;
+      });
+    } catch (error) {
+      throwMappedPrismaError(error);
+    }
   }
 
   async deleteCustomer(id: string, context: MutationContext) {

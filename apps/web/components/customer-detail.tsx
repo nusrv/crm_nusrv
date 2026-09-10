@@ -25,6 +25,7 @@ interface Customer {
   nameAr: string | null;
   contactName: string | null;
   primaryEmail: string;
+  effectivePrimaryEmail: { email: string; source: 'NORMALIZED_PRIMARY' | 'LEGACY_SCALAR_FALLBACK' } | null;
   secondaryEmail: string | null;
   phone: string | null;
   address: string | null;
@@ -175,7 +176,10 @@ export function CustomerDetail() {
         <h4 className="font-medium">Company details</h4>
         <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
           <p>
-            <span className="muted">Primary email:</span> {detail.primaryEmail}
+            <span className="muted">Primary email:</span>{' '}
+            {detail.effectivePrimaryEmail
+              ? detail.effectivePrimaryEmail.email
+              : 'No active primary email on file — set one in Contact channels below.'}
           </p>
           <p>
             <span className="muted">Secondary email:</span> {detail.secondaryEmail ?? '—'}

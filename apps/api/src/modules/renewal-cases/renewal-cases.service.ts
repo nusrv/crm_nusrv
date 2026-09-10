@@ -16,6 +16,7 @@ import {
   RenewalCaseListQueryDto,
   RenewalHoldFilter,
 } from './renewal-cases.dto';
+import { assertLegalRenewalCaseTransition } from './renewal-transition-policy';
 
 // Resolved/dead-end states: a case here is no longer "in flight", so manual workflow actions
 // (mark awaiting customer / accepted / do-not-renew / fulfilled) refuse to fire from any of them,
@@ -297,18 +298,40 @@ export class RenewalCasesService {
     eventKey: string,
     context: MutationContext,
   ) {
-    const oldState = await this.prisma.renewalCase.findUnique({ where: { id } });
-    if (!oldState) throw new NotFoundException('Renewal Case not found.');
-    if (TERMINAL_STATUSES.includes(oldState.status)) {
+    // Fast pre-check against a plain read: gives a precise, immediate rejection for a genuinely
+    // illegal transition (wrong role of caller aside — e.g. ACCEPTED -> AWAITING_CUSTOMER) without
+    // even opening a transaction. This is NOT what makes concurrent transitions safe — that is the
+    // compare-and-swap write below, which re-checks the status atomically at the database level
+    // using whatever the row's status actually is at write time, not this pre-check's snapshot.
+    const current = await this.prisma.renewalCase.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException('Renewal Case not found.');
+    if (TERMINAL_STATUSES.includes(current.status)) {
       throw new ConflictException(
-        `Renewal Case is already ${oldState.status} and cannot be moved to ${status}.`,
+        `Renewal Case is already ${current.status} and cannot be moved to ${status}.`,
       );
     }
+    assertLegalRenewalCaseTransition(current.status, status);
+
     return this.prisma.$transaction(async (tx) => {
-      const renewalCase = await tx.renewalCase.update({
-        where: { id },
+      // Compare-and-swap: the WHERE clause re-checks status at the moment of the write, not at the
+      // moment of the read above. If another request already moved this case away from
+      // `current.status` since we read it, this affects 0 rows and we report a clear conflict
+      // instead of silently overwriting whatever the other request just wrote (last-write-wins).
+      const result = await tx.renewalCase.updateMany({
+        where: { id, status: current.status },
         data: { status, ...extraData },
       });
+      if (result.count === 0) {
+        const latest = await tx.renewalCase.findUnique({ where: { id } });
+        throw new ConflictException(
+          `Renewal Case status changed concurrently (now ${latest?.status ?? 'unknown'}); the requested transition to ${status} was not applied. Reload and try again.`,
+        );
+      }
+      // Re-fetch to get the row as it now stands for the response/audit `newState` — updateMany
+      // does not return the updated row itself. Since the CAS above only succeeds when the row's
+      // status still matched `current.status` at write time, `current` is guaranteed accurate as
+      // the audited `oldState` for this specific successful transition, not a stale pre-race value.
+      const renewalCase = await tx.renewalCase.findUniqueOrThrow({ where: { id } });
       await this.audit.record(
         {
           actorType: ActorType.USER,
@@ -316,7 +339,7 @@ export class RenewalCasesService {
           eventKey,
           subjectType: 'RenewalCase',
           subjectId: id,
-          oldState,
+          oldState: current,
           newState: renewalCase,
           ipAddress: context.ipAddress,
         },

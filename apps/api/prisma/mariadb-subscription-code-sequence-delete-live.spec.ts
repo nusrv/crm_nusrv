@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import mariadb, { type Connection } from 'mariadb';
 import { AuditService } from '../src/audit/audit.service';
@@ -7,8 +5,10 @@ import { toMariaDbDriverUrl } from '../src/database/mariadb-url';
 import { BillingFrequency, SubscriptionStatus } from '../src/generated/prisma/enums';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { CustomerCodeService } from '../src/modules/customers/customer-code.service';
+import { CustomerEmailResolutionService } from '../src/modules/customers/customer-email-resolution.service';
 import { CustomersService } from '../src/modules/customers/customers.service';
 import { SubscriptionCodeService } from '../src/modules/subscriptions/subscription-code.service';
+import { readAllMigrationsSql } from './read-all-migrations';
 
 // Proves the `subscription_code_sequences.customer_id` FK's referential action against a real
 // MariaDB server, which is not something a mocked unit test can exercise:
@@ -22,20 +22,10 @@ import { SubscriptionCodeService } from '../src/modules/subscriptions/subscripti
 const databaseUrl = process.env.MARIADB_TEST_DATABASE_URL;
 const liveDescribe = databaseUrl ? describe : describe.skip;
 
-const migrations = [
-  '20260823000000_mariadb_phase_0_1_foundation',
-  '20260824000000_phase_2_renewal_engine',
-  '20260827000000_phase_2_1_operational_data',
-  '20260827010000_scope_legacy_import_active_sheet',
-  '20260831000000_currency_and_contact_channels',
-  '20260906000000_canonical_phone_contact_and_source_order',
-  '20260908000000_customer_code_sequences_and_bilingual_names',
-  '20260909000000_subscription_code_sequences_and_backfill',
-]
-  .map((directory) =>
-    readFileSync(join(process.cwd(), 'prisma', 'migrations', directory, 'migration.sql'), 'utf8'),
-  )
-  .join('\n');
+// Was a manually duplicated 8-item list (drift risk identical to the one fixed in
+// mariadb-phase2-live.spec.ts) — now the single centralized helper, which is also correct since
+// this suite already needed every migration up to HEAD anyway.
+const migrations = readAllMigrationsSql();
 
 function connectionOptions(url: string): mariadb.ConnectionConfig {
   const parsed = new URL(url);
@@ -165,7 +155,12 @@ liveDescribe('SubscriptionCodeSequence FK referential action against real pre-ex
 
     const audit = new AuditService(prisma as never);
     const customerCode = new CustomerCodeService();
-    const customersService = new CustomersService(prisma as never, audit, customerCode);
+    const customersService = new CustomersService(
+      prisma as never,
+      audit,
+      customerCode,
+      new CustomerEmailResolutionService(prisma as never),
+    );
 
     // This is the real, unmodified deleteCustomer() flow — it never mentions
     // SubscriptionCodeSequence at all. With the FK still ON DELETE RESTRICT this would throw; the

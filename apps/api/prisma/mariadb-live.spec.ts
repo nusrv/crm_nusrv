@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import mariadb, { type Connection } from 'mariadb';
 import { PrismaClient } from '../src/generated/prisma/client';
@@ -17,19 +15,15 @@ import {
   TechnicalConnectionType,
 } from '../src/generated/prisma/enums';
 import { toMariaDbDriverUrl } from '../src/database/mariadb-url';
+import { readAllMigrationsSql } from './read-all-migrations';
 
 const databaseUrl = process.env.MARIADB_TEST_DATABASE_URL;
 const liveDescribe = databaseUrl ? describe : describe.skip;
-const migration = readFileSync(
-  join(
-    process.cwd(),
-    'prisma',
-    'migrations',
-    '20260823000000_mariadb_phase_0_1_foundation',
-    'migration.sql',
-  ),
-  'utf8',
-);
+// General Prisma/MariaDB mechanics (UUID/JSON/Decimal/CRUD, FK/uniqueness, audit immutability,
+// legacy-import transactional approval) exercised against CURRENT generated Prisma Client — this
+// must apply every migration up to HEAD, not just the original foundation migration, or it risks
+// silently testing a schema shape current code no longer matches (see read-all-migrations.ts).
+const migration = readAllMigrationsSql();
 
 function connectionOptions(url: string): mariadb.ConnectionConfig {
   const parsed = new URL(url);

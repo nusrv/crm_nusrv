@@ -108,6 +108,20 @@ const MARK_ACTIONS = [
   { key: 'mark-fulfilled', label: 'Mark fulfilled' },
 ] as const;
 
+// Mirrors apps/api/src/modules/renewal-cases/renewal-transition-policy.ts so the UI does not offer
+// an action the backend will now correctly reject — this is a display convenience only, never the
+// source of authorization truth: the backend's own compare-and-swap check is authoritative
+// regardless of what this map says.
+const MARK_ACTION_LEGAL_FROM: Record<(typeof MARK_ACTIONS)[number]['key'], string[]> = {
+  'mark-awaiting-customer': ['UPCOMING', 'REMINDER_CYCLE', 'HUMAN_REVIEW'],
+  'mark-accepted': ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER', 'HUMAN_REVIEW'],
+  'mark-do-not-renew': ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER', 'HUMAN_REVIEW'],
+  // Only PAYMENT_CONFIRMED — not ACCEPTED — per 03_WORKFLOWS_AND_STATE_MACHINE.md §4. Nothing in
+  // the current Phase 0-2 application sets PAYMENT_CONFIRMED yet, so this button is correctly
+  // absent for every case today; it starts appearing on its own once Phase 3+ ships that state.
+  'mark-fulfilled': ['PAYMENT_CONFIRMED'],
+};
+
 const TERMINAL_STATUSES = new Set(['CLOSED', 'FULFILLED', 'REJECTED', 'DO_NOT_RENEW']);
 
 export function RenewalCaseDetail({
@@ -417,7 +431,9 @@ function RenewalCaseBody({
               </button>
             )}
             {!isTerminal &&
-              MARK_ACTIONS.map((action) => (
+              MARK_ACTIONS.filter((action) =>
+                MARK_ACTION_LEGAL_FROM[action.key].includes(detail.status),
+              ).map((action) => (
                 <button
                   className="button-small"
                   key={action.key}

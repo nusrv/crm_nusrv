@@ -2,7 +2,9 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { AuditService } from '../../audit/audit.service';
 import type { MutationContext } from '../../common/mutation-context';
 import { PrismaService } from '../../database/prisma.service';
+import type { Prisma } from '../../generated/prisma/client';
 import { ActorType } from '../../generated/prisma/enums';
+import { CustomerEmailResolutionService } from './customer-email-resolution.service';
 import type {
   CreateCustomerEmailAddressDto,
   CreateCustomerPhoneNumberDto,
@@ -15,6 +17,7 @@ export class CustomerChannelsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly emailResolution: CustomerEmailResolutionService,
   ) {}
 
   async list(customerId: string) {
@@ -49,12 +52,8 @@ export class CustomerChannelsService {
       const emailAddress = await tx.customerEmailAddress.create({
         data: { ...input, customerId },
       });
-      if (input.primary) {
-        await tx.customer.update({
-          where: { id: customerId },
-          data: { primaryEmail: input.email },
-        });
-      } else if (!customer.secondaryEmail) {
+      await this.syncPrimaryEmailScalar(tx, customerId);
+      if (!input.primary && !customer.secondaryEmail) {
         await tx.customer.update({
           where: { id: customerId },
           data: { secondaryEmail: input.email },
@@ -98,12 +97,10 @@ export class CustomerChannelsService {
         where: { id: emailId },
         data: input,
       });
-      if (emailAddress.primary && emailAddress.active) {
-        await tx.customer.update({
-          where: { id: customerId },
-          data: { primaryEmail: emailAddress.email },
-        });
-      }
+      // Covers every case uniformly — promotion, demotion, activation, and deactivation — by
+      // re-resolving the authoritative primary after the write, rather than only handling the
+      // "this row is now the active primary" direction and leaving the scalar stale otherwise.
+      await this.syncPrimaryEmailScalar(tx, customerId);
       await this.audit.record(
         {
           actorType: ActorType.USER,
@@ -207,6 +204,22 @@ export class CustomerChannelsService {
       );
       return phoneNumber;
     });
+  }
+
+  // Keeps Customer.primaryEmail (the backward-compatible scalar) synchronized with the
+  // authoritative normalized-channel resolution after any email-channel write. Only ever writes
+  // the scalar when the resolver finds a real active normalized primary (NORMALIZED_PRIMARY) — if
+  // none exists right now, the scalar is deliberately left untouched rather than invented or
+  // cleared: nothing reading through CustomerEmailResolutionService will trust it once normalized
+  // channel data exists anyway (see that service's doc comment).
+  private async syncPrimaryEmailScalar(
+    tx: Prisma.TransactionClient,
+    customerId: string,
+  ): Promise<void> {
+    const resolved = await this.emailResolution.resolvePrimaryRecipient(customerId, tx);
+    if (resolved?.source === 'NORMALIZED_PRIMARY') {
+      await tx.customer.update({ where: { id: customerId }, data: { primaryEmail: resolved.email } });
+    }
   }
 
   private async requireCustomer(customerId: string) {

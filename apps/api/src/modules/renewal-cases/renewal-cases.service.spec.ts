@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import { ConflictException } from '@nestjs/common';
 import { CustomerDecision, RenewalCaseStatus } from '../../generated/prisma/enums';
 import { BusinessTimeService } from '../../time/business-time.service';
 import { RenewalCasesService } from './renewal-cases.service';
@@ -179,15 +180,35 @@ describe('RenewalCasesService.summary', () => {
 describe('RenewalCasesService workflow actions', () => {
   const now = new Date('2026-08-24T08:00:00.000Z');
 
-  function harness(oldStatus: RenewalCaseStatus) {
+  function harness(oldStatus: RenewalCaseStatus, options: { updateManyCount?: number } = {}) {
     const oldState = { id: 'case-id', status: oldStatus };
-    const updated = { ...oldState };
-    const tx = { renewalCase: { update: jest.fn(() => Promise.resolve(updated)) } };
+    let latestStatus = oldStatus;
+    const updateMany = jest.fn(({ data }: { data: { status: RenewalCaseStatus } }) => {
+      if ((options.updateManyCount ?? 1) === 0) return Promise.resolve({ count: 0 });
+      latestStatus = data.status;
+      return Promise.resolve({ count: 1 });
+    });
+    const tx = {
+      renewalCase: {
+        updateMany,
+        findUnique: jest.fn(() => Promise.resolve({ id: 'case-id', status: latestStatus })),
+        findUniqueOrThrow: jest.fn(() =>
+          Promise.resolve({ id: 'case-id', status: latestStatus }),
+        ),
+      },
+    };
     const prisma = {
       renewalCase: { findUnique: jest.fn(() => Promise.resolve(oldState)) },
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
-    const audit = { record: jest.fn(() => Promise.resolve({ id: 'audit-id' })) };
+    const audit = {
+      record: jest.fn<
+        (input: {
+          oldState: { status: RenewalCaseStatus };
+          newState: { status: RenewalCaseStatus };
+        }) => Promise<{ id: string }>
+      >(() => Promise.resolve({ id: 'audit-id' })),
+    };
     const service = new RenewalCasesService(
       prisma as never,
       audit as never,
@@ -200,12 +221,15 @@ describe('RenewalCasesService workflow actions', () => {
   it('marks a case Awaiting Customer from an in-flight status', async () => {
     const { service, tx, audit } = harness(RenewalCaseStatus.REMINDER_CYCLE);
     await service.markAwaitingCustomer('case-id', { actorId: 'actor-id' });
-    expect(tx.renewalCase.update).toHaveBeenCalledWith({
-      where: { id: 'case-id' },
+    expect(tx.renewalCase.updateMany).toHaveBeenCalledWith({
+      where: { id: 'case-id', status: RenewalCaseStatus.REMINDER_CYCLE },
       data: { status: RenewalCaseStatus.AWAITING_CUSTOMER },
     });
     expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ eventKey: 'renewal.case.marked_awaiting_customer' }),
+      expect.objectContaining({
+        eventKey: 'renewal.case.marked_awaiting_customer',
+        oldState: { id: 'case-id', status: RenewalCaseStatus.REMINDER_CYCLE },
+      }),
       tx,
     );
   });
@@ -213,8 +237,8 @@ describe('RenewalCasesService workflow actions', () => {
   it('marks a case Accepted and sets acceptedAt/customerDecision', async () => {
     const { service, tx } = harness(RenewalCaseStatus.AWAITING_CUSTOMER);
     await service.markAccepted('case-id', { actorId: 'actor-id' });
-    expect(tx.renewalCase.update).toHaveBeenCalledWith({
-      where: { id: 'case-id' },
+    expect(tx.renewalCase.updateMany).toHaveBeenCalledWith({
+      where: { id: 'case-id', status: RenewalCaseStatus.AWAITING_CUSTOMER },
       data: {
         status: RenewalCaseStatus.ACCEPTED,
         customerDecision: CustomerDecision.ACCEPTED,
@@ -226,8 +250,8 @@ describe('RenewalCasesService workflow actions', () => {
   it('marks a case Do Not Renew and sets doNotRenewAt/customerDecision', async () => {
     const { service, tx } = harness(RenewalCaseStatus.HUMAN_REVIEW);
     await service.markDoNotRenew('case-id', { actorId: 'actor-id' });
-    expect(tx.renewalCase.update).toHaveBeenCalledWith({
-      where: { id: 'case-id' },
+    expect(tx.renewalCase.updateMany).toHaveBeenCalledWith({
+      where: { id: 'case-id', status: RenewalCaseStatus.HUMAN_REVIEW },
       data: {
         status: RenewalCaseStatus.DO_NOT_RENEW,
         customerDecision: CustomerDecision.REJECTED,
@@ -236,11 +260,14 @@ describe('RenewalCasesService workflow actions', () => {
     });
   });
 
-  it('marks a case Fulfilled and sets fulfilledAt', async () => {
-    const { service, tx } = harness(RenewalCaseStatus.ACCEPTED);
+  it('marks a case Fulfilled from PAYMENT_CONFIRMED and sets fulfilledAt', async () => {
+    // Per 03_WORKFLOWS_AND_STATE_MACHINE.md §4: "Accountant verifies funds: PAYMENT_CONFIRMED,
+    // FULFILLED, schedule next renewal cycle..." — PAYMENT_CONFIRMED is the documented immediate
+    // predecessor, not ACCEPTED.
+    const { service, tx } = harness(RenewalCaseStatus.PAYMENT_CONFIRMED);
     await service.markFulfilled('case-id', { actorId: 'actor-id' });
-    expect(tx.renewalCase.update).toHaveBeenCalledWith({
-      where: { id: 'case-id' },
+    expect(tx.renewalCase.updateMany).toHaveBeenCalledWith({
+      where: { id: 'case-id', status: RenewalCaseStatus.PAYMENT_CONFIRMED },
       data: { status: RenewalCaseStatus.FULFILLED, fulfilledAt: now },
     });
   });
@@ -255,5 +282,60 @@ describe('RenewalCasesService workflow actions', () => {
     await expect(service.markAccepted('case-id', { actorId: 'actor-id' })).rejects.toThrow(
       /already .* cannot be moved/,
     );
+  });
+
+  it('rejects ACCEPTED regressing to AWAITING_CUSTOMER as an invalid predecessor', async () => {
+    const { service, tx } = harness(RenewalCaseStatus.ACCEPTED);
+    await expect(
+      service.markAwaitingCustomer('case-id', { actorId: 'actor-id' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.renewalCase.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects UPCOMING jumping straight to FULFILLED as a premature transition', async () => {
+    const { service, tx } = harness(RenewalCaseStatus.UPCOMING);
+    await expect(
+      service.markFulfilled('case-id', { actorId: 'actor-id' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.renewalCase.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects REMINDER_CYCLE jumping straight to FULFILLED (only PAYMENT_CONFIRMED is a legal predecessor)', async () => {
+    const { service, tx } = harness(RenewalCaseStatus.REMINDER_CYCLE);
+    await expect(
+      service.markFulfilled('case-id', { actorId: 'actor-id' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.renewalCase.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects ACCEPTED jumping straight to FULFILLED — it is not a shortcut around the unbuilt payment chain', async () => {
+    const { service, tx } = harness(RenewalCaseStatus.ACCEPTED);
+    await expect(
+      service.markFulfilled('case-id', { actorId: 'actor-id' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.renewalCase.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('reports a conflict, not a silent overwrite, when the compare-and-swap affects 0 rows', async () => {
+    // Simulates request B losing a race: its pre-check read still saw AWAITING_CUSTOMER, but by
+    // the time its CAS write executes, request A has already moved the row to ACCEPTED — the
+    // updateMany's WHERE clause (status = AWAITING_CUSTOMER) matches 0 rows, and the service must
+    // report a conflict instead of blindly applying B's stale-assumption transition.
+    const { service, tx } = harness(RenewalCaseStatus.AWAITING_CUSTOMER, { updateManyCount: 0 });
+    tx.renewalCase.findUnique = jest.fn(() =>
+      Promise.resolve({ id: 'case-id', status: RenewalCaseStatus.ACCEPTED }),
+    );
+    await expect(
+      service.markDoNotRenew('case-id', { actorId: 'actor-id' }),
+    ).rejects.toThrow(/changed concurrently/);
+  });
+
+  it('audits the oldState that was actually still in effect at the moment of a successful transition', async () => {
+    const { service, audit } = harness(RenewalCaseStatus.REMINDER_CYCLE);
+    await service.markAccepted('case-id', { actorId: 'actor-id' });
+    const call = audit.record.mock.calls[0]?.[0];
+    if (!call) throw new Error('Expected the audit call');
+    expect(call.oldState).toEqual({ id: 'case-id', status: RenewalCaseStatus.REMINDER_CYCLE });
+    expect(call.newState.status).toBe(RenewalCaseStatus.ACCEPTED);
   });
 });

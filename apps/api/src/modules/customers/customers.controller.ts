@@ -74,6 +74,12 @@ export class CustomersController {
   }
 
   @Roles('ADMIN')
+  @Post(':id/reactivate')
+  reactivate(@Param('id') id: string, @Req() request: AuthenticatedRequest, @Ip() ip: string) {
+    return this.customers.reactivate(id, { actorId: request.user.id, ipAddress: ip });
+  }
+
+  @Roles('ADMIN')
   @Delete(':id')
   deleteCustomer(@Param('id') id: string, @Req() request: AuthenticatedRequest, @Ip() ip: string) {
     return this.customers.deleteCustomer(id, { actorId: request.user.id, ipAddress: ip });
