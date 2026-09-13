@@ -16,6 +16,7 @@ const result = spawnSync(
     'prisma/mariadb-phase21-live.spec.ts',
     'prisma/mariadb-subscription-code-backfill-live.spec.ts',
     'prisma/mariadb-subscription-code-sequence-delete-live.spec.ts',
+    'prisma/mariadb-phase3-slice-a-live.spec.ts',
     '--runInBand',
   ],
   { stdio: 'inherit', env: process.env },

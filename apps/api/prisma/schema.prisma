@@ -187,6 +187,55 @@ enum ChannelVerificationStatus {
   INVALID
 }
 
+// Phase 3 Slice A — Mail & AI communication domain enums. Schema only; no SMTP/IMAP/LLM/worker
+// code exists yet (see PHASES/PHASE_03_MAIL_AI.md). Exact approved values only — nothing invented.
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageChannel {
+  EMAIL
+}
+
+enum ThreadStatus {
+  OPEN
+  HUMAN_REVIEW
+  RESOLVED
+}
+
+enum ClassificationStatus {
+  PENDING
+  CLASSIFIED
+  HUMAN_REVIEW
+  RESOLVED
+  FAILED
+}
+
+// Exact allowed intents from 05_AI_LLM_MCP_STRATEGY.md's structured-output contract. Do not add or
+// rename values without re-approving against that document.
+enum AiIntent {
+  ACCEPT_RENEWAL
+  REJECT_RENEWAL
+  REQUEST_INVOICE
+  PAYMENT_REPORTED
+  REQUEST_UPGRADE
+  REQUEST_DOWNGRADE
+  REQUEST_CLARIFICATION
+  PRICE_DISPUTE
+  COMPLAINT
+  OTHER
+  UNCLEAR
+}
+
+// Phase-3-scoped only (SMTP/IMAP/AI) — deliberately narrower than a future Phase 6/7 integration
+// list (Plesk/SmarterMail/Fawtara), which belongs to those phases' own work, not this one.
+enum IntegrationKind {
+  SMTP
+  IMAP
+  AI
+}
+
 model BillingEntity {
   id                     String                @id @default(uuid()) @db.VarChar(36)
   name                   String
@@ -205,6 +254,7 @@ model BillingEntity {
   customers              Customer[]
   legacyImportRows       LegacyImportRow[]
   customerCodeSequence   CustomerCodeSequence?
+  mailConfigurations     MailConfiguration[]
 
   @@map("billing_entities")
 }
@@ -222,34 +272,36 @@ model CustomerCodeSequence {
 }
 
 model Customer {
-  id                    String                 @id @default(uuid()) @db.VarChar(36)
-  billingEntityId       String                 @map("billing_entity_id") @db.VarChar(36)
-  customerCode          String                 @unique @map("customer_code")
-  nameEn                String?                @map("name_en")
-  nameAr                String?                @map("name_ar")
-  contactName           String?                @map("contact_name")
-  primaryEmail          String                 @map("primary_email")
-  secondaryEmail        String?                @map("secondary_email")
-  phone                 String?
-  address               String?
-  country               String?
-  taxNumber             String?                @map("tax_number")
-  preferredLanguage     String                 @default("en") @map("preferred_language")
-  status                CustomerStatus         @default(ACTIVE)
-  sourceLegacyReference String?                @map("source_legacy_reference")
-  sourceSequence        Int?                   @map("source_sequence")
-  notes                 String?                @db.Text
-  createdAt             DateTime               @default(now()) @map("created_at")
-  updatedAt             DateTime               @updatedAt @map("updated_at")
-  billingEntity         BillingEntity          @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
-  subscriptions         Subscription[]
-  contacts              CustomerContact[]
-  emailAddresses        CustomerEmailAddress[]
-  phoneNumbers          CustomerPhoneNumber[]
-  communicationOutbox   CommunicationOutbox[]
-  legacyCandidateRows   LegacyImportRow[]      @relation("LegacyCandidateCustomer")
-  legacyApprovedRows    LegacyImportRow[]      @relation("LegacyApprovedCustomer")
+  id                       String                    @id @default(uuid()) @db.VarChar(36)
+  billingEntityId          String                    @map("billing_entity_id") @db.VarChar(36)
+  customerCode             String                    @unique @map("customer_code")
+  nameEn                   String?                   @map("name_en")
+  nameAr                   String?                   @map("name_ar")
+  contactName              String?                   @map("contact_name")
+  primaryEmail             String                    @map("primary_email")
+  secondaryEmail           String?                   @map("secondary_email")
+  phone                    String?
+  address                  String?
+  country                  String?
+  taxNumber                String?                   @map("tax_number")
+  preferredLanguage        String                    @default("en") @map("preferred_language")
+  status                   CustomerStatus            @default(ACTIVE)
+  sourceLegacyReference    String?                   @map("source_legacy_reference")
+  sourceSequence           Int?                      @map("source_sequence")
+  notes                    String?                   @db.Text
+  createdAt                DateTime                  @default(now()) @map("created_at")
+  updatedAt                DateTime                  @updatedAt @map("updated_at")
+  billingEntity            BillingEntity             @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
+  subscriptions            Subscription[]
+  contacts                 CustomerContact[]
+  emailAddresses           CustomerEmailAddress[]
+  phoneNumbers             CustomerPhoneNumber[]
+  communicationOutbox      CommunicationOutbox[]
+  legacyCandidateRows      LegacyImportRow[]         @relation("LegacyCandidateCustomer")
+  legacyApprovedRows       LegacyImportRow[]         @relation("LegacyApprovedCustomer")
   subscriptionCodeSequence SubscriptionCodeSequence?
+  communicationThreads     CommunicationThread[]
+  emailMessages            EmailMessage[]
 
   @@index([billingEntityId])
   @@index([nameEn])
@@ -553,6 +605,8 @@ model RenewalCase {
   holds                 RenewalHold[]
   communicationOutbox   CommunicationOutbox[]
   evaluationDecisions   RenewalEvaluationDecision[]
+  communicationThread   CommunicationThread?
+  emailMessages         EmailMessage[]
 
   @@unique([subscriptionId, dueDate])
   @@index([status, dueDate])
@@ -574,24 +628,25 @@ model Role {
 }
 
 model User {
-  id                   String              @id @default(uuid()) @db.VarChar(36)
-  email                String              @unique
-  displayName          String              @map("display_name")
-  passwordHash         String              @map("password_hash")
-  active               Boolean             @default(true)
-  failedAttempts       Int                 @default(0) @map("failed_attempts")
-  lockedUntil          DateTime?           @map("locked_until")
-  mfaEnabled           Boolean             @default(false) @map("mfa_enabled")
-  createdAt            DateTime            @default(now()) @map("created_at")
-  updatedAt            DateTime            @updatedAt @map("updated_at")
-  roles                UserRole[]
-  sessions             AuthSession[]
-  mfaMethods           UserMfaMethod[]
-  renewalCases         RenewalCase[]
-  importBatches        LegacyImportBatch[] @relation("LegacyImportBatchCreator")
-  approvedImportRows   LegacyImportRow[]   @relation("LegacyImportRowApprover")
-  createdRenewalHolds  RenewalHold[]       @relation("RenewalHoldCreator")
-  releasedRenewalHolds RenewalHold[]       @relation("RenewalHoldReleaser")
+  id                    String                 @id @default(uuid()) @db.VarChar(36)
+  email                 String                 @unique
+  displayName           String                 @map("display_name")
+  passwordHash          String                 @map("password_hash")
+  active                Boolean                @default(true)
+  failedAttempts        Int                    @default(0) @map("failed_attempts")
+  lockedUntil           DateTime?              @map("locked_until")
+  mfaEnabled            Boolean                @default(false) @map("mfa_enabled")
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
+  roles                 UserRole[]
+  sessions              AuthSession[]
+  mfaMethods            UserMfaMethod[]
+  renewalCases          RenewalCase[]
+  importBatches         LegacyImportBatch[]    @relation("LegacyImportBatchCreator")
+  approvedImportRows    LegacyImportRow[]      @relation("LegacyImportRowApprover")
+  createdRenewalHolds   RenewalHold[]          @relation("RenewalHoldCreator")
+  releasedRenewalHolds  RenewalHold[]          @relation("RenewalHoldReleaser")
+  classificationReviews ClassificationReview[]
 
   @@map("users")
 }
@@ -816,6 +871,13 @@ model CommunicationOutbox {
   lastAttemptAt      DateTime?                 @map("last_attempt_at")
   lastError          String?                   @map("last_error") @db.Text
   idempotencyKey     String                    @unique @map("idempotency_key") @db.VarChar(191)
+  // Phase 3 Slice A additions — nullable, backward compatible. Every existing/historical row keeps
+  // both NULL: emailMessageId is only ever set by the future Slice B send path (materializing the
+  // outbound EmailMessage lazily at first-send-attempt), and messageIdHeader is only ever set at
+  // that same moment, reused across retries. No backfill of existing rows — see
+  // apps/api/prisma/migrations/<this migration>/migration.sql.
+  emailMessageId     String?                   @unique @map("email_message_id") @db.VarChar(36)
+  messageIdHeader    String?                   @map("message_id_header") @db.VarChar(500)
   createdAt          DateTime                  @default(now()) @map("created_at")
   updatedAt          DateTime                  @updatedAt @map("updated_at")
   customer           Customer                  @relation(fields: [customerId], references: [id], onDelete: Restrict)
@@ -824,6 +886,7 @@ model CommunicationOutbox {
   reminderRule       ReminderRule?             @relation(fields: [reminderRuleId], references: [id], onDelete: Restrict)
   notificationRule   NotificationRule?         @relation(fields: [notificationRuleId], references: [id], onDelete: Restrict)
   auditEvent         AuditEvent                @relation(fields: [auditEventId], references: [id], onDelete: Restrict)
+  emailMessage       EmailMessage?             @relation(fields: [emailMessageId], references: [id], onDelete: Restrict)
 
   @@index([renewalCaseId, status])
   @@index([status, scheduledAt])
@@ -846,4 +909,321 @@ model RenewalEvaluationDecision {
 
   @@index([renewalCaseId, createdAt])
   @@map("renewal_evaluation_decisions")
+}
+
+// ================================================================================================
+// Phase 3 Slice A — Mail & AI communication domain (schema only).
+//
+// Scope: persistence only. No SMTP/IMAP/LLM adapter, worker, controller, or frontend code exists
+// yet — see PHASES/PHASE_03_MAIL_AI.md and the approved Slice A architecture review for the full
+// design and the reasoning behind every choice below. This comment block records only the
+// invariants that are not otherwise obvious from the field/relation declarations themselves.
+//
+// CommunicationThread is the real, first-class thread identity (its own `id`) — not a derived key
+// computed from headers. EmailMessage is the single, unified, canonical history record for BOTH
+// inbound and outbound mail; CommunicationOutbox (above) remains the delivery/job/retry/status
+// mechanism only, never a second source of message content.
+// ================================================================================================
+
+model CommunicationThread {
+  id                  String            @id @default(uuid()) @db.VarChar(36)
+  customerId          String?           @map("customer_id") @db.VarChar(36)
+  // Nullable + unique: MariaDB/MySQL permits multiple NULL values under a UNIQUE index, so any
+  // number of unattributed/general threads may exist, while a given non-null RenewalCase can never
+  // have more than one canonical thread — enforced by the database itself, not by application code,
+  // which is what makes this safe under concurrent thread creation.
+  renewalCaseId       String?           @unique @map("renewal_case_id") @db.VarChar(36)
+  // Required: a thread must never exist without known mailbox/sender context.
+  mailConfigurationId String            @map("mail_configuration_id") @db.VarChar(36)
+  subject             String            @db.VarChar(500)
+  status              ThreadStatus      @default(OPEN)
+  lastMessageAt       DateTime          @map("last_message_at")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  customer            Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  // SetNull, not Cascade: RenewalCase deletion is currently possible (see CustomersService
+  // .deleteCustomer() / SubscriptionsService.remove(), both of which only ever delete already-
+  // terminal-status cases) and retaining communication history is the established value in this
+  // application — losing a RenewalCase row must never delete the evidence of what was actually said
+  // to a customer. Requires `renewalCaseId` to remain nullable, which it already is.
+  renewalCase         RenewalCase?      @relation(fields: [renewalCaseId], references: [id], onDelete: SetNull)
+  // Restrict: a MailConfiguration must never be deleted out from under a thread that references it.
+  mailConfiguration   MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
+  messages            EmailMessage[]
+
+  @@index([customerId])
+  @@index([mailConfigurationId])
+  @@index([status])
+  @@index([lastMessageAt])
+  @@map("communication_threads")
+}
+
+model EmailMessage {
+  id                   String                @id @default(uuid()) @db.VarChar(36)
+  threadId             String                @map("thread_id") @db.VarChar(36)
+  customerId           String?               @map("customer_id") @db.VarChar(36)
+  renewalCaseId        String?               @map("renewal_case_id") @db.VarChar(36)
+  direction            MessageDirection
+  channel              MessageChannel        @default(EMAIL)
+  // Non-unique and indexed only — Message-ID is used for reply/thread correlation, never as the
+  // authoritative inbound dedup key. Broken senders can omit it, duplicate it, or send malformed
+  // values; the database must allow two distinct inbound messages with the same externalMessageId.
+  // See imapIdentityKey below for the actual dedup invariant.
+  externalMessageId    String?               @map("external_message_id") @db.VarChar(500)
+  inReplyTo            String?               @map("in_reply_to") @db.VarChar(500)
+  // Text, not VarChar: the References header can accumulate many Message-IDs over a long thread.
+  references           String?               @db.Text
+  subject              String                @db.VarChar(500)
+  fromAddress          String                @map("from_address") @db.VarChar(320)
+  toAddressesJson      Json                  @map("to_addresses_json")
+  // Required: the canonical plain-text content, and the only body form Slice E renders in V1.
+  bodyText             String                @map("body_text") @db.Text
+  // Nullable: stored for completeness/future use, never rendered as live HTML in Slice E. Slice C
+  // must normalize HTML-only inbound messages into bodyText — not implemented in this slice.
+  bodyHtml             String?               @map("body_html") @db.Text
+  occurredAt           DateTime              @map("occurred_at")
+  // Only meaningful for INBOUND rows; left null for OUTBOUND.
+  classificationStatus ClassificationStatus? @map("classification_status")
+  // Required: which mailbox this was fetched from (INBOUND) or sent through (OUTBOUND).
+  mailConfigurationId  String                @map("mail_configuration_id") @db.VarChar(36)
+  imapFolder           String?               @map("imap_folder") @db.VarChar(255)
+  // BigInt: IMAP UID/UIDVALIDITY are 32-bit unsigned per RFC 3501, which can exceed a JS safe
+  // integer only in edge cases, but BigInt is the correct, non-lossy Prisma/MySQL mapping (BIGINT)
+  // regardless. See the BigInt/API note below — this is a database-layer decision only.
+  imapUid              BigInt?               @map("imap_uid")
+  imapUidValidity      BigInt?               @map("imap_uid_validity")
+  // FROZEN IDENTITY CONTRACT (persistence contract only — no hashing service exists in Slice A).
+  // The authoritative inbound dedup invariant. NULL for every OUTBOUND row (MariaDB permits
+  // multiple NULLs under a UNIQUE index, so outbound rows are entirely unaffected by this
+  // constraint).
+  //
+  // For INBOUND rows, Slice C computes this — never from client input — from the logical source
+  // tuple [mailConfigurationId, canonicalFolder, uidValidity, uid] as:
+  //
+  //   imapIdentityKey = "v1:" + SHA256_hex(canonicalEncoding(tuple))
+  //
+  // canonicalEncoding MUST be an unambiguous, length-prefixed (netstring-style) serialization —
+  // NOT naive delimiter concatenation, which is unsafe: a folder name could itself legally contain
+  // any delimiter character (`|`, `:`, newline, etc.), letting two distinct tuples collide on the
+  // same concatenated string. The frozen encoding is, per component, `<utf8ByteLength>:<value>`
+  // joined with no separator (the length prefix IS the separator, so no delimiter ambiguity is
+  // possible regardless of a component's content):
+  //
+  //   canonicalEncoding([mailConfigurationId, canonicalFolder, uidValidity, uid]) =
+  //     len(mailConfigurationId) + ":" + mailConfigurationId +
+  //     len(canonicalFolder)     + ":" + canonicalFolder +
+  //     len(String(uidValidity)) + ":" + String(uidValidity) +
+  //     len(String(uid))         + ":" + String(uid)
+  //
+  // Example: mailConfigurationId="abc" (len 3), folder="INBOX" (len 5), uidValidity="7" (len 1),
+  // uid="42" (len 2) => "3:abc5:INBOX1:72:42" => imapIdentityKey = "v1:" + sha256hex(that string).
+  //
+  // Final format is always exactly `v1:` (3 chars) + 64 lowercase hex chars = 67 characters total
+  // — comfortably within VARCHAR(191), which also leaves headroom for a future `v2:` (or longer)
+  // prefix without a column-width migration. The leading version tag exists so the algorithm can
+  // change later (e.g. a different hash or encoding) without semantic ambiguity between old and
+  // new rows.
+  //
+  // FROZEN V1 canonicalFolder RULE (folder-name treatment, not the encoding above — this is the
+  // one remaining piece "normalizedFolder" left undefined, now closed):
+  //   - Use the exact persisted IMAP mailbox/folder name as the identity component.
+  //   - Do NOT lowercase arbitrary mailbox names.
+  //   - Do NOT trim or otherwise alter whitespace.
+  //   - Do NOT apply Unicode normalization, unless a future version bump (e.g. "v2:") explicitly
+  //     changes this contract.
+  //   - Special case ONLY the standard IMAP INBOX mailbox: if the mailbox name case-insensitively
+  //     equals "INBOX" (matching RFC 3501's own guarantee that INBOX is case-insensitive), the
+  //     canonicalFolder value is the literal string "INBOX".
+  //   - Every other mailbox name is preserved exactly as persisted (IMAP does not guarantee other
+  //     mailbox/folder names are case-insensitive, so none may be assumed to be). This means
+  //     "Sales" and "sales" are, correctly, two distinct canonicalFolder values and therefore two
+  //     distinct imapIdentityKey values if otherwise identical.
+  // No IMAP implementation exists in Slice A — this rule is frozen now so Slice C does not
+  // re-decide folder-name semantics. See phase3-slice-a-migration-contract.spec.ts for a
+  // documentation-consistency check of both this rule and the encoding format's column-length fit.
+  imapIdentityKey      String?               @unique @map("imap_identity_key") @db.VarChar(191)
+  createdAt            DateTime              @default(now()) @map("created_at")
+  updatedAt            DateTime              @updatedAt @map("updated_at")
+  thread               CommunicationThread   @relation(fields: [threadId], references: [id], onDelete: Restrict)
+  customer             Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  // SetNull, matching CommunicationThread.renewalCase above — never Cascade-delete communication
+  // evidence when a (terminal-status) RenewalCase is removed via an existing deletion flow.
+  renewalCase          RenewalCase?          @relation(fields: [renewalCaseId], references: [id], onDelete: SetNull)
+  mailConfiguration    MailConfiguration     @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
+  aiClassifications    AiClassification[]
+  outboxEntry          CommunicationOutbox?
+
+  @@index([threadId])
+  @@index([customerId])
+  @@index([renewalCaseId])
+  @@index([occurredAt])
+  @@index([classificationStatus])
+  @@index([externalMessageId])
+  // Helps Slice C's incremental-sync query ("highest UID already seen for this mailbox/folder").
+  @@index([mailConfigurationId, imapFolder, imapUid])
+  @@map("email_messages")
+}
+
+// Immutable AI evidence. Never updated after creation — a reviewer's correction is always a new,
+// separate ClassificationReview row (below), never a mutation of this one. No reviewedBy/reviewedAt
+// fields here by design.
+model AiClassification {
+  id                   String                 @id @default(uuid()) @db.VarChar(36)
+  emailMessageId       String                 @map("email_message_id") @db.VarChar(36)
+  provider             String                 @db.VarChar(100)
+  model                String                 @db.VarChar(150)
+  promptVersion        String                 @map("prompt_version") @db.VarChar(50)
+  intent               AiIntent
+  // Decimal(4,3): comfortably covers 0.000-1.000 with 3 decimal places of precision. No DB CHECK
+  // constraint is added to further bound the range — application-level validation (Slice D) is
+  // sufficient and a CHECK was judged not truly necessary for this column.
+  confidence           Decimal                @db.Decimal(4, 3)
+  structuredResultJson Json                   @map("structured_result_json")
+  requiresHumanReview  Boolean                @default(false) @map("requires_human_review")
+  createdAt            DateTime               @default(now()) @map("created_at")
+  emailMessage         EmailMessage           @relation(fields: [emailMessageId], references: [id], onDelete: Restrict)
+  reviews              ClassificationReview[]
+
+  @@index([emailMessageId])
+  @@index([requiresHumanReview])
+  @@index([intent])
+  @@map("ai_classifications")
+}
+
+// Separate, human-authored, append-only review evidence — never a mutation of AiClassification.
+// Multiple rows per classification are expected and allowed; the effective/current human
+// determination for a given classification is always its latest row (ORDER BY created_at DESC, id
+// DESC), never a mutable isCurrent/currentReviewId flag.
+//
+// Deliberately has NO independent emailMessageId column. The authoritative chain is
+// ClassificationReview -> AiClassification -> EmailMessage only — a review can never point at a
+// different message than the one its own classification belongs to, because there is no column
+// through which it could. (An earlier draft carried both aiClassificationId and emailMessageId
+// independently, which permitted a logically-inconsistent row — both FKs individually valid, but
+// pointing at different messages. Removing the redundant column removes the possibility
+// structurally, not just by convention.)
+//
+// FROZEN EFFECTIVE-REVIEW CONTRACT — two distinct queries, never conflated:
+//
+//   A. Latest review for ONE AiClassification (a single classification attempt may itself be
+//      reviewed more than once):
+//        WHERE aiClassificationId = :classificationId
+//        ORDER BY createdAt DESC, id DESC
+//        LIMIT 1
+//      `aiClassificationId` here is a WHERE-equality filter, never a sort key.
+//
+//   B. Latest review for ONE EmailMessage (a message may have multiple AiClassification rows —
+//      e.g. a retry with a newer prompt version — each with its own reviews):
+//        JOIN ClassificationReview -> AiClassification
+//        WHERE AiClassification.emailMessageId = :messageId
+//        ORDER BY ClassificationReview.createdAt DESC, ClassificationReview.id DESC
+//        LIMIT 1
+//      aiClassificationId/ai_classification_id must NEVER appear in this ORDER BY — it is an
+//      identity/grouping key, not a chronological one, and sorting by it would not select the
+//      actually-latest review across a message's possibly-several classifications.
+//
+// Rule A is what the index below serves. Rule B is a cross-classification query Slice C
+// implements via the join above; no additional index is added for it in Slice A (see the index
+// comment below for why the existing one does not, and should not try to, serve rule B too).
+model ClassificationReview {
+  id                  String           @id @default(uuid()) @db.VarChar(36)
+  aiClassificationId  String           @map("ai_classification_id") @db.VarChar(36)
+  reviewerId          String           @map("reviewer_id") @db.VarChar(36)
+  correctedIntent     AiIntent         @map("corrected_intent")
+  // Required, and always the FULL corrected structured result — never a partial patch — so it is
+  // always directly comparable against AiClassification.structuredResultJson for evaluation.
+  correctedResultJson Json             @map("corrected_result_json")
+  notes               String?          @db.Text
+  resultingAction     String?          @map("resulting_action") @db.VarChar(191)
+  createdAt           DateTime         @default(now()) @map("created_at")
+  aiClassification    AiClassification @relation(fields: [aiClassificationId], references: [id], onDelete: Restrict)
+  reviewer            User             @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  @@index([reviewerId])
+  // Serves rule A only (see the model comment above): WHERE aiClassificationId = ? (an equality
+  // filter, satisfied by this index's leftmost column) followed by ORDER BY createdAt DESC, id
+  // DESC (satisfied by the remaining columns, in the same order, avoiding a filesort). This index's
+  // leading column is an equality-filter key here, never a sort key ahead of createdAt/id — sorting
+  // by it across different classifications would be meaningless, since aiClassificationId is an
+  // identity/grouping key, not a chronological one. This index does not, and is not meant to, serve
+  // rule B's cross-classification "latest review for a message" query — that reads through
+  // AiClassification's own emailMessageId index instead. Also serves plain
+  // "WHERE aiClassificationId = ?" lookups via the leftmost-prefix rule, so no
+  // separate single-column index on aiClassificationId is kept (it would be redundant). No new
+  // index is added for rule B in Slice A — not clearly justified for a query Slice C hasn't
+  // implemented yet.
+  @@index([aiClassificationId, createdAt, id])
+  @@map("classification_reviews")
+}
+
+// Supports one global/default configuration (billingEntityId = NULL) plus optional BillingEntity-
+// specific overrides — additive, no redesign needed when a second BillingEntity's mailbox is
+// eventually configured.
+model MailConfiguration {
+  id                        String                   @id @default(uuid()) @db.VarChar(36)
+  billingEntityId           String?                  @map("billing_entity_id") @db.VarChar(36)
+  // Internal invariant, never client-supplied. Canonical values: "GLOBAL", or
+  // "BILLING_ENTITY:<billingEntityId>". Uniqueness here is what actually prevents both (a) two
+  // GLOBAL configurations and (b) two configurations for the same BillingEntity — see the schema
+  // comment on MailConfiguration's onDelete/CHECK note in the Slice A implementation report for
+  // why no DB CHECK constraint was added to also verify scopeKey/billingEntityId consistency.
+  scopeKey                  String                   @unique @map("scope_key") @db.VarChar(191)
+  label                     String                   @db.VarChar(191)
+  smtpHost                  String                   @map("smtp_host") @db.VarChar(255)
+  smtpPort                  Int                      @map("smtp_port")
+  smtpUsername              String                   @map("smtp_username") @db.VarChar(255)
+  smtpCredentialsCiphertext String?                  @map("smtp_credentials_ciphertext") @db.Text
+  smtpSecure                Boolean                  @default(true) @map("smtp_secure")
+  imapHost                  String                   @map("imap_host") @db.VarChar(255)
+  imapPort                  Int                      @map("imap_port")
+  imapUsername              String                   @map("imap_username") @db.VarChar(255)
+  imapCredentialsCiphertext String?                  @map("imap_credentials_ciphertext") @db.Text
+  imapSecure                Boolean                  @default(true) @map("imap_secure")
+  imapFolder                String                   @default("INBOX") @map("imap_folder") @db.VarChar(255)
+  fromAddress               String                   @map("from_address") @db.VarChar(320)
+  fromName                  String                   @map("from_name") @db.VarChar(191)
+  environment               IntegrationEnvironment   @default(SANDBOX)
+  enabled                   Boolean                  @default(true)
+  lastSyncedAt              DateTime?                @map("last_synced_at")
+  lastSyncUidValidity       BigInt?                  @map("last_sync_uid_validity")
+  lastSyncUid               BigInt?                  @map("last_sync_uid")
+  lastHealthStatus          HealthStatus             @default(UNKNOWN) @map("last_health_status")
+  lastHealthCheckedAt       DateTime?                @map("last_health_checked_at")
+  createdAt                 DateTime                 @default(now()) @map("created_at")
+  updatedAt                 DateTime                 @updatedAt @map("updated_at")
+  // Restrict, never SetNull: a BillingEntity-specific MailConfiguration must never silently become
+  // a de facto global configuration just because its BillingEntity was deleted.
+  billingEntity             BillingEntity?           @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
+  threads                   CommunicationThread[]
+  emailMessages             EmailMessage[]
+  healthEvents              IntegrationHealthEvent[]
+
+  @@index([billingEntityId])
+  @@index([environment])
+  @@index([enabled])
+  @@map("mail_configurations")
+}
+
+// Immutable event/signal log — NOT the future Phase 6/7 incident/action queue. Recovery is
+// represented by a new row (e.g. status HEALTHY after a prior UNAVAILABLE), never by updating an
+// old one — hence no resolvedAt/assignedTo/owner/resolution-workflow fields and no updatedAt.
+model IntegrationHealthEvent {
+  id                  String             @id @default(uuid()) @db.VarChar(36)
+  integration         IntegrationKind
+  status              HealthStatus
+  message             String             @db.Text
+  context             Json?
+  // Nullable: AI events legitimately have no associated mailbox.
+  mailConfigurationId String?            @map("mail_configuration_id") @db.VarChar(36)
+  createdAt           DateTime           @default(now()) @map("created_at")
+  mailConfiguration   MailConfiguration? @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt])
+  // Explicit short name: the Prisma-generated default for this composite would land exactly at (and
+  // in earlier attempts, silently truncate right at) MariaDB's 64-character identifier limit —
+  // matches the existing precedent elsewhere in this schema (e.g. CustomerEmailAddress's and
+  // ServicePackageTerm's explicit `map:` names) of naming long compound indexes explicitly rather
+  // than relying on an auto-generated name that happens to just barely fit.
+  @@index([integration, mailConfigurationId, createdAt], map: "integration_health_events_integration_mailbox_created_idx")
+  @@map("integration_health_events")
 }
