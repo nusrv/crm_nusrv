@@ -25,6 +25,12 @@ const subscriptionInclude = {
 } as const;
 
 type EvaluatedSubscription = Prisma.SubscriptionGetPayload<{ include: typeof subscriptionInclude }>;
+type SubscriptionForCaseEnsure = Pick<
+  EvaluatedSubscription,
+  'id' | 'startDate' | 'renewalDate' | 'billingFrequency' | 'renewalIntervalMonths'
+>;
+
+const OVERDUE_ENROLLMENT_BATCH_SIZE = 500;
 
 export interface RenewalEvaluationOptions {
   asOf?: Date;
@@ -43,8 +49,37 @@ export interface RenewalEvaluationSummary {
   ineligibleDecisions: number;
   internalRulesWithoutRecipients: number;
   customerRemindersSkippedNoRecipient: number;
+  overdueSubscriptionsScanned: number;
+  overdueRenewalCasesCreated: number;
   asOf: string;
   businessDate: string;
+}
+
+/**
+ * Slice B §2 — "latest suitable missed reminder only." Given today's actual daysBeforeDue and the
+ * configured customer reminder milestones, returns the single applicable milestone: the smallest
+ * configured milestone that is still >= daysBeforeDue (i.e. the most recent threshold the
+ * countdown has crossed but not yet fired for). When the engine runs exactly on schedule this is
+ * simply the exact-match milestone, unchanged from before. When a run was missed, this is what
+ * makes the selection "catch up" to the nearest missed milestone without ever falling back
+ * further than that — an older, still-older milestone is never selected once a newer one is
+ * applicable, and the existing idempotency key (built from this milestone's own daysBeforeDue,
+ * not the actual elapsed days) is what prevents ever re-queueing it once satisfied. Returns null
+ * for an overdue subscription (daysBeforeDue < 0): once overdue, no stale automatic customer
+ * reminder is ever queued — overdue visibility is the RenewalCase/overdue workflow's job, not a
+ * new outbound email invented here.
+ */
+export function resolveApplicableCustomerMilestone<T extends { daysBeforeDue: number }>(
+  rules: T[],
+  daysBeforeDue: number,
+): T | null {
+  if (daysBeforeDue < 0) return null;
+  return rules
+    .filter((rule) => rule.daysBeforeDue >= daysBeforeDue)
+    .reduce<T | null>(
+      (closest, rule) => (!closest || rule.daysBeforeDue < closest.daysBeforeDue ? rule : closest),
+      null,
+    );
 }
 
 @Injectable()
@@ -94,9 +129,15 @@ export class RenewalEngineService {
       ineligibleDecisions: 0,
       internalRulesWithoutRecipients: 0,
       customerRemindersSkippedNoRecipient: 0,
+      overdueSubscriptionsScanned: 0,
+      overdueRenewalCasesCreated: 0,
       asOf: asOf.toISOString(),
       businessDate: this.businessTime.businessDateKey(asOf),
     };
+
+    const overdueEnrollment = await this.enrollOverdueSubscriptions(options, asOf);
+    summary.overdueSubscriptionsScanned = overdueEnrollment.scanned;
+    summary.overdueRenewalCasesCreated = overdueEnrollment.casesCreated;
 
     for (const subscription of subscriptions) {
       const ensured = await this.ensureCase(subscription, options, asOf);
@@ -106,7 +147,7 @@ export class RenewalEngineService {
         include: { holds: { where: { active: true }, orderBy: { createdAt: 'desc' } } },
       });
       const daysBeforeDue = this.businessTime.daysUntil(subscription.renewalDate, asOf);
-      const customerRule = reminderRules.find((rule) => rule.daysBeforeDue === daysBeforeDue);
+      const customerRule = resolveApplicableCustomerMilestone(reminderRules, daysBeforeDue);
       const internalRules = notificationRules.filter(
         (rule) => rule.daysBeforeDue === daysBeforeDue,
       );
@@ -182,13 +223,17 @@ export class RenewalEngineService {
               recipient: resolvedRecipient.email,
               subject: this.renderer.render(customerRule.template.subjectTemplate, values),
               body: this.renderer.render(customerRule.template.bodyTemplate, values),
-              daysBeforeDue,
+              // Stored/idempotency-keyed on the milestone's own daysBeforeDue, not the actual
+              // elapsed days computed above — this is what makes a missed-and-caught-up milestone
+              // dedupe correctly across the different actual day counts it might be evaluated on
+              // (see resolveApplicableCustomerMilestone).
+              daysBeforeDue: customerRule.daysBeforeDue,
               reminderRuleId: customerRule.id,
               idempotencyParts: [
                 'customer',
                 renewalCase.id,
                 customerRule.id,
-                String(daysBeforeDue),
+                String(customerRule.daysBeforeDue),
               ],
               asOf,
               options,
@@ -266,8 +311,60 @@ export class RenewalEngineService {
     return summary;
   }
 
+  /**
+   * Slice B §3 — ACTIVE-customer, ACTIVE-subscription overdue enrollment: ensures a RenewalCase
+   * exists for every overdue subscription, without ever evaluating or queueing a customer
+   * reminder for it (that stays this method's caller's job, and only ever runs for the
+   * upcoming/on-schedule window above). Paginated by cursor rather than one unbounded query — the
+   * production overdue backlog size is unknown and unbounded a priori, so this must not assume a
+   * single findMany() is safe. ensureCase() itself is already idempotent (unique-violation ->
+   * lookup-existing), so no additional "does a case already exist" filter is needed in the query
+   * itself; an already-cased subscription is simply a cheap no-op through the same call.
+   */
+  private async enrollOverdueSubscriptions(
+    options: RenewalEvaluationOptions,
+    asOf: Date,
+  ): Promise<{ scanned: number; casesCreated: number }> {
+    const cutoff = this.businessTime.businessDate(asOf);
+    let scanned = 0;
+    let casesCreated = 0;
+    let cursor: string | undefined;
+
+    for (;;) {
+      const batch = await this.prisma.subscription.findMany({
+        where: {
+          status: SubscriptionStatus.ACTIVE,
+          customer: { status: CustomerStatus.ACTIVE },
+          renewalDate: { lt: cutoff },
+        },
+        select: {
+          id: true,
+          startDate: true,
+          renewalDate: true,
+          billingFrequency: true,
+          renewalIntervalMonths: true,
+        },
+        orderBy: { id: 'asc' },
+        take: OVERDUE_ENROLLMENT_BATCH_SIZE,
+        ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+      });
+      if (!batch.length) break;
+
+      for (const subscription of batch) {
+        scanned += 1;
+        const ensured = await this.ensureCase(subscription, options, asOf);
+        if (ensured.created) casesCreated += 1;
+      }
+
+      cursor = batch[batch.length - 1]!.id;
+      if (batch.length < OVERDUE_ENROLLMENT_BATCH_SIZE) break;
+    }
+
+    return { scanned, casesCreated };
+  }
+
   private async ensureCase(
-    subscription: EvaluatedSubscription,
+    subscription: SubscriptionForCaseEnsure,
     options: RenewalEvaluationOptions,
     asOf: Date,
   ): Promise<{ id: string; created: boolean }> {

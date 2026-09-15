@@ -117,4 +117,71 @@ describe('environment validation', () => {
       }),
     ).toThrow('Invalid environment configuration');
   });
+
+  it('defaults MAIL_SEND_ENABLED to false and leaves MAIL_SEND_CUTOVER_AT optional', () => {
+    const result = validateEnvironment(valid);
+    expect(result.MAIL_SEND_ENABLED).toBe('false');
+    expect(result.MAIL_SEND_CUTOVER_AT).toBeUndefined();
+  });
+
+  it('fails closed: rejects MAIL_SEND_ENABLED=true with no cutover configured', () => {
+    expect(() => validateEnvironment({ ...valid, MAIL_SEND_ENABLED: 'true' })).toThrow(
+      'Invalid environment configuration',
+    );
+  });
+
+  it('fails closed: rejects MAIL_SEND_ENABLED=true with an unparseable cutover', () => {
+    expect(() =>
+      validateEnvironment({ ...valid, MAIL_SEND_ENABLED: 'true', MAIL_SEND_CUTOVER_AT: 'not-a-date' }),
+    ).toThrow('Invalid environment configuration');
+  });
+
+  it('accepts MAIL_SEND_ENABLED=true with a valid ISO-8601 cutover', () => {
+    expect(
+      validateEnvironment({
+        ...valid,
+        MAIL_SEND_ENABLED: 'true',
+        MAIL_SEND_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
+      }),
+    ).toMatchObject({ MAIL_SEND_ENABLED: 'true', MAIL_SEND_CUTOVER_AT: '2026-01-01T00:00:00.000Z' });
+  });
+
+  it('fails closed: rejects production with mail sending enabled through SMTP_MODE=mock', () => {
+    expect(() =>
+      validateEnvironment({
+        ...valid,
+        NODE_ENV: 'production',
+        CAPTCHA_PROVIDER: 'none',
+        CAPTCHA_TEST_TOKEN: undefined,
+        MAIL_SEND_ENABLED: 'true',
+        MAIL_SEND_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
+        SMTP_MODE: 'mock',
+      }),
+    ).toThrow('Invalid environment configuration');
+  });
+
+  it('accepts production with mail sending enabled through a real SMTP_MODE', () => {
+    expect(
+      validateEnvironment({
+        ...valid,
+        NODE_ENV: 'production',
+        CAPTCHA_PROVIDER: 'none',
+        CAPTCHA_TEST_TOKEN: undefined,
+        MAIL_SEND_ENABLED: 'true',
+        MAIL_SEND_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
+        SMTP_MODE: 'production',
+      }),
+    ).toMatchObject({ NODE_ENV: 'production', SMTP_MODE: 'production' });
+  });
+
+  it('allows SMTP_MODE=mock outside production even with mail sending enabled', () => {
+    expect(
+      validateEnvironment({
+        ...valid,
+        MAIL_SEND_ENABLED: 'true',
+        MAIL_SEND_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
+        SMTP_MODE: 'mock',
+      }),
+    ).toMatchObject({ SMTP_MODE: 'mock' });
+  });
 });

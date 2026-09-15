@@ -55,6 +55,11 @@ const environmentSchema = z
     SMTP_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
     PLESK_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
     SMARTERMAIL_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
+    // Phase 3 Slice B — outbound mail master switch. Real SMTP transmission must remain off by
+    // default; see MailOutboundService. MAIL_SEND_CUTOVER_AT is required whenever sending is
+    // enabled, and is validated below (fail closed rather than inferring approval for old rows).
+    MAIL_SEND_ENABLED: z.enum(['true', 'false']).default('false'),
+    MAIL_SEND_CUTOVER_AT: z.string().optional(),
   })
   .superRefine((value, context) => {
     if (!value.REDIS_URL && !value.REDIS_HOST) {
@@ -86,6 +91,25 @@ const environmentSchema = z
         code: 'custom',
         path: ['CAPTCHA_SECRET'],
         message: 'CAPTCHA site key and secret are required for a production provider',
+      });
+    }
+    if (value.MAIL_SEND_ENABLED === 'true') {
+      const parsed = value.MAIL_SEND_CUTOVER_AT ? Date.parse(value.MAIL_SEND_CUTOVER_AT) : NaN;
+      if (!value.MAIL_SEND_CUTOVER_AT || Number.isNaN(parsed)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['MAIL_SEND_CUTOVER_AT'],
+          message:
+            'a valid ISO-8601 MAIL_SEND_CUTOVER_AT is required whenever MAIL_SEND_ENABLED=true (fail closed: sending must never be enabled without an explicit cutover)',
+        });
+      }
+    }
+    if (value.NODE_ENV === 'production' && value.MAIL_SEND_ENABLED === 'true' && value.SMTP_MODE === 'mock') {
+      context.addIssue({
+        code: 'custom',
+        path: ['SMTP_MODE'],
+        message:
+          'SMTP_MODE=mock is forbidden in production while MAIL_SEND_ENABLED=true — a production runtime must never mark customer messages DELIVERED through a mock transport',
       });
     }
   });
