@@ -4,6 +4,14 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuditModule } from './audit/audit.module';
 import { validateEnvironment } from './config/environment';
 import { DatabaseModule } from './database/database.module';
+import { AiClassificationEnqueueService } from './modules/ai/ai-classification-enqueue.service';
+import { AiClassificationService } from './modules/ai/ai-classification.service';
+import { AiHealthService } from './modules/ai/ai-health.service';
+import { AI_QUEUE } from './modules/ai/ai-queue.constants';
+import { AiClassificationWorker } from './modules/ai/ai.worker';
+import { LLM_GATEWAY, type LlmGateway } from './modules/ai/llm-gateway';
+import { MockLlmGateway } from './modules/ai/mock-llm-gateway';
+import { OpenAiLlmGateway } from './modules/ai/openai-llm-gateway';
 import { CustomersModule } from './modules/customers/customers.module';
 import { ImapMailboxReaderFactory } from './modules/mail/imap-mailbox-reader-factory';
 import { MailConfigurationResolverService } from './modules/mail/mail-configuration-resolver.service';
@@ -54,6 +62,7 @@ import { TimeModule } from './time/time.module';
     BullModule.registerQueue({ name: RENEWAL_QUEUE }),
     BullModule.registerQueue({ name: MAIL_QUEUE }),
     BullModule.registerQueue({ name: IMAP_QUEUE }),
+    BullModule.registerQueue({ name: AI_QUEUE }),
   ],
   providers: [
     RenewalTemplateRenderer,
@@ -97,6 +106,19 @@ import { TimeModule } from './time/time.module';
       },
     },
     MailImapWorker,
+    AiClassificationEnqueueService,
+    AiHealthService,
+    AiClassificationService,
+    MockLlmGateway,
+    OpenAiLlmGateway,
+    {
+      provide: LLM_GATEWAY,
+      inject: [ConfigService, MockLlmGateway, OpenAiLlmGateway],
+      useFactory: (config: ConfigService, mock: MockLlmGateway, real: OpenAiLlmGateway): LlmGateway => {
+        return config.get<string>('AI_PROVIDER') === 'openai' ? real : mock;
+      },
+    },
+    AiClassificationWorker,
   ],
 })
 export class WorkerAppModule {}

@@ -99,6 +99,12 @@ function harness(options: {
     },
   };
 
+  const enqueueIfEnabled = jest.fn((emailMessageId: string) => {
+    void emailMessageId;
+    return Promise.resolve();
+  });
+  const aiEnqueue = { enqueueIfEnabled };
+
   const service = new MailInboundIngestService(
     prisma as never,
     config as never,
@@ -107,9 +113,10 @@ function harness(options: {
     health as never,
     correlation as never,
     readerFactory,
+    aiEnqueue as never,
   );
 
-  return { service, findMany, healthRecord, auditRecord, updateMany, findUniqueOrThrow };
+  return { service, findMany, healthRecord, auditRecord, updateMany, findUniqueOrThrow, enqueueIfEnabled };
 }
 
 const uninitialized: FakeConfigRow = {
@@ -390,6 +397,7 @@ describe('MailInboundIngestService', () => {
         { record: healthRecord } as never,
         { correlate } as never,
         { createReader: () => reader },
+        { enqueueIfEnabled: () => Promise.resolve() } as never,
       );
 
       const summary = await service.syncAll();

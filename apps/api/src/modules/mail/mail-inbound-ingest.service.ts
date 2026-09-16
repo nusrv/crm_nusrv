@@ -12,6 +12,7 @@ import {
 } from '../../generated/prisma/enums';
 import { ClockService } from '../../time/clock.service';
 import { AuditService } from '../../audit/audit.service';
+import { AiClassificationEnqueueService } from '../ai/ai-classification-enqueue.service';
 import { isMailConfigEnvironmentAllowed } from './mail-environment-guard';
 import { MailImapHealthService } from './mail-imap-health.service';
 import { MailInboundCorrelationService } from './mail-inbound-correlation.service';
@@ -99,6 +100,10 @@ export class MailInboundIngestService {
     private readonly health: MailImapHealthService,
     private readonly correlation: MailInboundCorrelationService,
     @Inject(MAILBOX_READER_FACTORY) private readonly readerFactory: MailboxReaderFactory,
+    // Slice D §11 — opportunistic post-commit enqueue only; never part of the ingestion
+    // transaction itself, and its own failures are swallowed internally (see that service's doc
+    // comment) so a Redis outage can never affect inbound ingestion.
+    private readonly aiEnqueue: AiClassificationEnqueueService,
   ) {}
 
   async syncAll(): Promise<ImapSyncSummary> {
@@ -386,7 +391,7 @@ export class MailInboundIngestService {
     const references = buildReferencesStorageValue(referenceTokens, MAX_BODY_TEXT_BYTES);
 
     try {
-      const { humanReview } = await this.prisma.$transaction(async (tx) => {
+      const transactionResult = await this.prisma.$transaction(async (tx) => {
         const correlation = await this.correlation.correlate(tx, {
           mailConfigurationId: mailConfiguration.id,
           fromAddress: message.fromAddress,
@@ -447,9 +452,21 @@ export class MailInboundIngestService {
           tx,
         );
 
-        return { humanReview: classificationStatus === ClassificationStatus.HUMAN_REVIEW };
+        return {
+          emailMessageId: emailMessage.id,
+          humanReview: classificationStatus === ClassificationStatus.HUMAN_REVIEW,
+          classificationStatus,
+        };
       });
-      return { status: 'inserted', humanReview };
+
+      // Slice D §11 — opportunistic enqueue AFTER the transaction has committed, never inside it.
+      // Only eligible (PENDING) messages are ever worth enqueuing; a HUMAN_REVIEW message from
+      // Slice C correlation ambiguity is never queued for automatic classification at all.
+      if (transactionResult.classificationStatus === ClassificationStatus.PENDING) {
+        await this.aiEnqueue.enqueueIfEnabled(transactionResult.emailMessageId);
+      }
+
+      return { status: 'inserted', humanReview: transactionResult.humanReview };
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         // §8/§24 — imapIdentityKey is the only unique constraint this insert can violate; a losing

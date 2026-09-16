@@ -10,6 +10,7 @@ import { IdentityModule } from './identity/identity.module';
 import { JwtAuthGuard } from './identity/jwt-auth.guard';
 import { OriginGuard } from './identity/origin.guard';
 import { RolesGuard } from './identity/roles.guard';
+import { AiModule } from './modules/ai/ai.module';
 import { BillingEntitiesModule } from './modules/billing-entities/billing-entities.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { CurrenciesModule } from './modules/currencies/currencies.module';
@@ -48,6 +49,7 @@ import { TimeModule } from './time/time.module';
     LegacyImportModule,
     RenewalCasesModule,
     MailModule,
+    AiModule,
   ],
   controllers: [AppController],
   providers: [

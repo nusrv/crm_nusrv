@@ -228,4 +228,75 @@ describe('environment validation', () => {
       'Invalid environment configuration',
     );
   });
+
+  it('§34 — defaults AI_ENABLED=false, AI_PROVIDER=mock, AI_CONFIDENCE_THRESHOLD=0.90, AI_AUTO_ROUTE_ACCEPT_REJECT=false', () => {
+    const result = validateEnvironment(valid);
+    expect(result.AI_ENABLED).toBe('false');
+    expect(result.AI_PROVIDER).toBe('mock');
+    expect(result.AI_CONFIDENCE_THRESHOLD).toBe(0.9);
+    expect(result.AI_AUTO_ROUTE_ACCEPT_REJECT).toBe('false');
+  });
+
+  it('§34 — production + AI_ENABLED=true + AI_PROVIDER=mock fails closed', () => {
+    expect(() =>
+      validateEnvironment({
+        ...valid,
+        NODE_ENV: 'production',
+        CAPTCHA_PROVIDER: 'none',
+        CAPTCHA_TEST_TOKEN: undefined,
+        AI_ENABLED: 'true',
+        AI_PROVIDER: 'mock',
+      }),
+    ).toThrow('Invalid environment configuration');
+  });
+
+  it('§34 — AI_ENABLED=true + AI_PROVIDER=openai without AI_MODEL/AI_API_KEY fails closed', () => {
+    expect(() =>
+      validateEnvironment({ ...valid, AI_ENABLED: 'true', AI_PROVIDER: 'openai' }),
+    ).toThrow('Invalid environment configuration');
+    expect(() =>
+      validateEnvironment({ ...valid, AI_ENABLED: 'true', AI_PROVIDER: 'openai', AI_MODEL: 'gpt-test' }),
+    ).toThrow('Invalid environment configuration');
+  });
+
+  it('§34 — AI_ENABLED=true + AI_PROVIDER=openai with both AI_MODEL and AI_API_KEY configured succeeds', () => {
+    expect(
+      validateEnvironment({
+        ...valid,
+        NODE_ENV: 'production',
+        CAPTCHA_PROVIDER: 'none',
+        CAPTCHA_TEST_TOKEN: undefined,
+        AI_ENABLED: 'true',
+        AI_PROVIDER: 'openai',
+        AI_MODEL: 'gpt-test',
+        AI_API_KEY: 'sk-test',
+      }),
+    ).toMatchObject({ AI_PROVIDER: 'openai', AI_MODEL: 'gpt-test' });
+  });
+
+  it('§34 — an invalid confidence threshold outside 0..1 fails validation', () => {
+    expect(() => validateEnvironment({ ...valid, AI_CONFIDENCE_THRESHOLD: '1.5' })).toThrow(
+      'Invalid environment configuration',
+    );
+    expect(() => validateEnvironment({ ...valid, AI_CONFIDENCE_THRESHOLD: '-0.1' })).toThrow(
+      'Invalid environment configuration',
+    );
+  });
+
+  it('§34 — accepts confidence threshold at the exact boundaries 0 and 1', () => {
+    expect(validateEnvironment({ ...valid, AI_CONFIDENCE_THRESHOLD: '0' }).AI_CONFIDENCE_THRESHOLD).toBe(0);
+    expect(validateEnvironment({ ...valid, AI_CONFIDENCE_THRESHOLD: '1' }).AI_CONFIDENCE_THRESHOLD).toBe(1);
+  });
+
+  it('§34 — AI_AUTO_ROUTE_ACCEPT_REJECT=true is accepted as plain config (Slice D never consumes it for actions)', () => {
+    expect(
+      validateEnvironment({ ...valid, AI_AUTO_ROUTE_ACCEPT_REJECT: 'true' }),
+    ).toMatchObject({ AI_AUTO_ROUTE_ACCEPT_REJECT: 'true' });
+  });
+
+  it('§34 — rejects an AI_PROVIDER outside the mock/openai enum', () => {
+    expect(() => validateEnvironment({ ...valid, AI_PROVIDER: 'anthropic' })).toThrow(
+      'Invalid environment configuration',
+    );
+  });
 });

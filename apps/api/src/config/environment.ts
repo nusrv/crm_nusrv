@@ -47,10 +47,18 @@ const environmentSchema = z
     CAPTCHA_TEST_TOKEN: z.string().min(8).optional(),
     CAPTCHA_SITE_KEY: z.string().optional(),
     CAPTCHA_SECRET: z.string().optional(),
+    // Phase 3 Slice D — AI classification master switch, off by default. AI_PROVIDER follows the
+    // same mock/real shape as SMTP_MODE/IMAP_MODE ('mock' never makes a network call; 'openai' is
+    // the one real provider identified in 05_AI_LLM_MCP_STRATEGY.md). The fail-closed rule below
+    // (production + enabled + mock) mirrors MAIL_SEND_ENABLED/SMTP_MODE's own rule.
     AI_ENABLED: z.enum(['true', 'false']).default('false'),
-    AI_PROVIDER: z.string().optional(),
+    AI_PROVIDER: z.enum(['mock', 'openai']).default('mock'),
     AI_MODEL: z.string().optional(),
     AI_API_KEY: z.string().optional(),
+    AI_CONFIDENCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.9),
+    // Preserved for a future slice — Slice D itself never reads this flag to perform a workflow
+    // action; see AiClassificationService's own doc comment.
+    AI_AUTO_ROUTE_ACCEPT_REJECT: z.enum(['true', 'false']).default('false'),
     FAWTARA_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
     SMTP_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
     PLESK_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
@@ -123,6 +131,21 @@ const environmentSchema = z
         path: ['IMAP_MODE'],
         message:
           'IMAP_MODE=mock is forbidden in production while IMAP_SYNC_ENABLED=true — a production runtime must never appear to sync mail through a fake mailbox reader',
+      });
+    }
+    if (value.NODE_ENV === 'production' && value.AI_ENABLED === 'true' && value.AI_PROVIDER === 'mock') {
+      context.addIssue({
+        code: 'custom',
+        path: ['AI_PROVIDER'],
+        message:
+          'AI_PROVIDER=mock is forbidden in production while AI_ENABLED=true — a production runtime must never appear to classify mail through a fake model',
+      });
+    }
+    if (value.AI_ENABLED === 'true' && value.AI_PROVIDER === 'openai' && (!value.AI_MODEL || !value.AI_API_KEY)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['AI_MODEL'],
+        message: 'AI_MODEL and AI_API_KEY are both required whenever AI_ENABLED=true and AI_PROVIDER=openai',
       });
     }
   });

@@ -226,6 +226,10 @@ liveDescribe('Phase 3 Slice C MariaDB inbound-mail integration', () => {
     const senderResolution = new MailInboundSenderResolutionService(prisma as never);
     const threadResolution = new MailThreadResolutionService(prisma as never);
     const correlation = new MailInboundCorrelationService(prisma as never, senderResolution, threadResolution);
+    // Slice D's real enqueue producer needs an injected BullMQ Queue this suite does not wire up
+    // (it exists to test Slice C's ingest/correlation/cursor behavior, not AI classification) — a
+    // no-op stub is sufficient here, matching AI_ENABLED's own default-off behavior.
+    const aiEnqueue = { enqueueIfEnabled: () => Promise.resolve() };
     return new MailInboundIngestService(
       prisma as never,
       fakeConfigService(configValues) as never,
@@ -234,6 +238,7 @@ liveDescribe('Phase 3 Slice C MariaDB inbound-mail integration', () => {
       new MailImapHealthService(prisma as never),
       correlation,
       readerFactory,
+      aiEnqueue as never,
     );
   }
 
