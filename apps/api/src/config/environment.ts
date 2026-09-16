@@ -60,6 +60,11 @@ const environmentSchema = z
     // enabled, and is validated below (fail closed rather than inferring approval for old rows).
     MAIL_SEND_ENABLED: z.enum(['true', 'false']).default('false'),
     MAIL_SEND_CUTOVER_AT: z.string().optional(),
+    // Phase 3 Slice C — inbound IMAP sync master switch, off by default. IMAP_MODE follows the
+    // same shape as SMTP_MODE; see MailInboundIngestService/mailbox-reader.ts. The fail-closed
+    // rule below (production + enabled + mock) mirrors MAIL_SEND_ENABLED/SMTP_MODE's own rule.
+    IMAP_SYNC_ENABLED: z.enum(['true', 'false']).default('false'),
+    IMAP_MODE: z.enum(['mock', 'real']).default('mock'),
   })
   .superRefine((value, context) => {
     if (!value.REDIS_URL && !value.REDIS_HOST) {
@@ -110,6 +115,14 @@ const environmentSchema = z
         path: ['SMTP_MODE'],
         message:
           'SMTP_MODE=mock is forbidden in production while MAIL_SEND_ENABLED=true — a production runtime must never mark customer messages DELIVERED through a mock transport',
+      });
+    }
+    if (value.NODE_ENV === 'production' && value.IMAP_SYNC_ENABLED === 'true' && value.IMAP_MODE === 'mock') {
+      context.addIssue({
+        code: 'custom',
+        path: ['IMAP_MODE'],
+        message:
+          'IMAP_MODE=mock is forbidden in production while IMAP_SYNC_ENABLED=true — a production runtime must never appear to sync mail through a fake mailbox reader',
       });
     }
   });

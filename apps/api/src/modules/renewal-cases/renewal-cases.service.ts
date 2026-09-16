@@ -21,7 +21,10 @@ import { assertLegalRenewalCaseTransition } from './renewal-transition-policy';
 // Resolved/dead-end states: a case here is no longer "in flight", so manual workflow actions
 // (mark awaiting customer / accepted / do-not-renew / fulfilled) refuse to fire from any of them,
 // and the Renewals overview's due/overdue counts exclude them regardless of their dueDate.
-const TERMINAL_STATUSES: RenewalCaseStatus[] = [
+// Exported for Slice C's mail-inbound-correlation.service.ts (§21 terminal-case reply handling) —
+// the single source of truth for "is this RenewalCase resolved/dead-end", reused rather than
+// re-declared to avoid the two lists silently drifting apart.
+export const TERMINAL_STATUSES: RenewalCaseStatus[] = [
   RenewalCaseStatus.CLOSED,
   RenewalCaseStatus.FULFILLED,
   RenewalCaseStatus.REJECTED,

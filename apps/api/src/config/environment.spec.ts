@@ -184,4 +184,48 @@ describe('environment validation', () => {
       }),
     ).toMatchObject({ SMTP_MODE: 'mock' });
   });
+
+  it('defaults IMAP_SYNC_ENABLED to false and IMAP_MODE to mock', () => {
+    const result = validateEnvironment(valid);
+    expect(result.IMAP_SYNC_ENABLED).toBe('false');
+    expect(result.IMAP_MODE).toBe('mock');
+  });
+
+  it('fails closed: rejects production with IMAP sync enabled through IMAP_MODE=mock', () => {
+    expect(() =>
+      validateEnvironment({
+        ...valid,
+        NODE_ENV: 'production',
+        CAPTCHA_PROVIDER: 'none',
+        CAPTCHA_TEST_TOKEN: undefined,
+        IMAP_SYNC_ENABLED: 'true',
+        IMAP_MODE: 'mock',
+      }),
+    ).toThrow('Invalid environment configuration');
+  });
+
+  it('accepts production with IMAP sync enabled through IMAP_MODE=real', () => {
+    expect(
+      validateEnvironment({
+        ...valid,
+        NODE_ENV: 'production',
+        CAPTCHA_PROVIDER: 'none',
+        CAPTCHA_TEST_TOKEN: undefined,
+        IMAP_SYNC_ENABLED: 'true',
+        IMAP_MODE: 'real',
+      }),
+    ).toMatchObject({ NODE_ENV: 'production', IMAP_MODE: 'real' });
+  });
+
+  it('allows IMAP_MODE=mock outside production even with IMAP sync enabled', () => {
+    expect(
+      validateEnvironment({ ...valid, IMAP_SYNC_ENABLED: 'true', IMAP_MODE: 'mock' }),
+    ).toMatchObject({ IMAP_MODE: 'mock' });
+  });
+
+  it('rejects an IMAP_MODE outside the mock/real enum', () => {
+    expect(() => validateEnvironment({ ...valid, IMAP_MODE: 'sandbox' })).toThrow(
+      'Invalid environment configuration',
+    );
+  });
 });
