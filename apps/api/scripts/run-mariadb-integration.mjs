@@ -20,6 +20,7 @@ const result = spawnSync(
     'prisma/mariadb-phase3-slice-b-live.spec.ts',
     'prisma/mariadb-phase3-slice-c-live.spec.ts',
     'prisma/mariadb-phase3-slice-d-live.spec.ts',
+    'prisma/mariadb-phase3-slice-e-live.spec.ts',
     '--runInBand',
   ],
   { stdio: 'inherit', env: process.env },

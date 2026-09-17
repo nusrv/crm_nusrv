@@ -12,6 +12,9 @@ import { AiClassificationWorker } from './modules/ai/ai.worker';
 import { LLM_GATEWAY, type LlmGateway } from './modules/ai/llm-gateway';
 import { MockLlmGateway } from './modules/ai/mock-llm-gateway';
 import { OpenAiLlmGateway } from './modules/ai/openai-llm-gateway';
+import { OperatorReplyOutboundService } from './modules/communications/operator-reply-outbound.service';
+import { OPERATOR_REPLY_QUEUE } from './modules/communications/operator-reply-queue.constants';
+import { OperatorReplyWorker } from './modules/communications/operator-reply.worker';
 import { CustomersModule } from './modules/customers/customers.module';
 import { ImapMailboxReaderFactory } from './modules/mail/imap-mailbox-reader-factory';
 import { MailConfigurationResolverService } from './modules/mail/mail-configuration-resolver.service';
@@ -63,6 +66,7 @@ import { TimeModule } from './time/time.module';
     BullModule.registerQueue({ name: MAIL_QUEUE }),
     BullModule.registerQueue({ name: IMAP_QUEUE }),
     BullModule.registerQueue({ name: AI_QUEUE }),
+    BullModule.registerQueue({ name: OPERATOR_REPLY_QUEUE }),
   ],
   providers: [
     RenewalTemplateRenderer,
@@ -119,6 +123,8 @@ import { TimeModule } from './time/time.module';
       },
     },
     AiClassificationWorker,
+    OperatorReplyOutboundService,
+    OperatorReplyWorker,
   ],
 })
 export class WorkerAppModule {}

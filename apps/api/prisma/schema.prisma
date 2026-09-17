@@ -647,6 +647,7 @@ model User {
   createdRenewalHolds   RenewalHold[]          @relation("RenewalHoldCreator")
   releasedRenewalHolds  RenewalHold[]          @relation("RenewalHoldReleaser")
   classificationReviews ClassificationReview[]
+  operatorReplies       OperatorReplyOutbox[]
 
   @@map("users")
 }
@@ -897,6 +898,74 @@ model CommunicationOutbox {
   @@map("communication_outbox")
 }
 
+// Phase 3 Slice E — a deliberately SEPARATE, minimal outbound-delivery queue for human operator
+// replies on a CommunicationThread. Never reuses CommunicationOutbox above: that model is the
+// Phase 2 Reminder/Notification outbox specifically (subscriptionId/renewalCaseId/audience/
+// daysBeforeDue are all NOT NULL, and MailOutboundService.evaluateEligibility() embeds
+// reminder-cycle business rules — customer/subscription ACTIVE checks, isReminderEligible(),
+// workflow-hold suppression — that must never gate a human operator's deliberate reply). A thread
+// need not have a RenewalCase at all for an operator to reply on it, which this model's own lack of
+// a required renewalCaseId reflects directly (the renewal case, if any, is read via
+// thread.renewalCaseId when needed, never denormalized here).
+//
+// The EmailMessage (OUTBOUND) is materialized synchronously, in the same HTTP request/transaction
+// that creates this row — unlike CommunicationOutbox's lazy first-attempt materialization — because
+// an operator has already composed the exact bodyText NOW; there is nothing to defer. This is why
+// emailMessageId is NOT NULL here (CommunicationOutbox's is nullable specifically to support lazy
+// materialization it does not need).
+//
+// Reuses CommunicationOutboxStatus (QUEUED/PROCESSING/DELIVERED/FAILED/CANCELLED) as a plain shared
+// enum TYPE — this is data-type reuse only, never a relation to or dependency on the
+// CommunicationOutbox table/worker/eligibility logic itself.
+model OperatorReplyOutbox {
+  id                  String                    @id @default(uuid()) @db.VarChar(36)
+  threadId            String                    @map("thread_id") @db.VarChar(36)
+  mailConfigurationId String                    @map("mail_configuration_id") @db.VarChar(36)
+  // NOT NULL (see class doc comment) — the OUTBOUND EmailMessage always exists before this row
+  // does, created in the same transaction.
+  emailMessageId      String                    @unique @map("email_message_id") @db.VarChar(36)
+  // The address actually being sent to right now — kept in sync with
+  // EmailMessage.toAddressesJson whenever rebound pre-attempt (attempts = 0); see
+  // OperatorReplyOutboundService's lease-ownership doc comment for the exact pinning discipline,
+  // which mirrors MailOutboundService's identity-pinning contract without sharing its code.
+  recipient           String                    @db.VarChar(320)
+  status              CommunicationOutboxStatus @default(QUEUED)
+  attempts            Int                       @default(0)
+  lastAttemptAt       DateTime?                 @map("last_attempt_at")
+  lastError           String?                   @map("last_error") @db.Text
+  // Contract audit §2 — DB-backed retry-backoff scheduling. NULL means "eligible immediately"
+  // (a freshly-queued human reply, never delayed). Set on every non-terminal QUEUED transition
+  // (both a real escalating SMTP-failure backoff and a modest fixed delay for a temporary
+  // non-SMTP defer) so the 15s periodic scheduler never reselects a row before its own retry time
+  // — this column, not an in-memory timer, is the durable source of truth. See
+  // operator-reply-timing.constants.ts for the exact intervals.
+  nextAttemptAt       DateTime?                 @map("next_attempt_at")
+  // §15 hardening (contract-audit correction) — a client-generated idempotency key is only ever
+  // meaningful WITHIN the actor who generated it: uniqueness is scoped to (actorId,
+  // idempotencyKey), never the bare key alone. A bare-key unique constraint would let two
+  // different operators who coincidentally generated the same client key collide with each
+  // other's replies (one silently getting back the other's result, or an unrelated 409) — the
+  // composite constraint below makes that structurally impossible: two different actorIds can
+  // never violate this index no matter what idempotencyKey value either one chose.
+  idempotencyKey      String                    @map("idempotency_key") @db.VarChar(191)
+  // The authenticated operator who sent this reply — never client-supplied, always
+  // request.user.id. Restrict: a User must never be deleted out from under an audit-relevant send.
+  actorId             String                    @map("actor_id") @db.VarChar(36)
+  queuedAt            DateTime                  @default(now()) @map("queued_at")
+  createdAt           DateTime                  @default(now()) @map("created_at")
+  updatedAt           DateTime                  @updatedAt @map("updated_at")
+  thread              CommunicationThread       @relation(fields: [threadId], references: [id], onDelete: Restrict)
+  mailConfiguration   MailConfiguration         @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
+  emailMessage        EmailMessage              @relation(fields: [emailMessageId], references: [id], onDelete: Restrict)
+  actor               User                      @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@unique([actorId, idempotencyKey])
+  @@index([status, queuedAt])
+  @@index([status, nextAttemptAt])
+  @@index([threadId])
+  @@map("operator_reply_outbox")
+}
+
 model RenewalEvaluationDecision {
   id            String                 @id @default(uuid()) @db.VarChar(36)
   renewalCaseId String                 @map("renewal_case_id") @db.VarChar(36)
@@ -950,6 +1019,7 @@ model CommunicationThread {
   // Restrict: a MailConfiguration must never be deleted out from under a thread that references it.
   mailConfiguration   MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
   messages            EmailMessage[]
+  operatorReplies     OperatorReplyOutbox[]
 
   @@index([customerId])
   @@index([mailConfigurationId])
@@ -1052,6 +1122,7 @@ model EmailMessage {
   mailConfiguration    MailConfiguration     @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
   aiClassifications    AiClassification[]
   outboxEntry          CommunicationOutbox?
+  operatorReplyOutboxEntry OperatorReplyOutbox?
 
   @@index([threadId])
   @@index([customerId])
@@ -1197,6 +1268,7 @@ model MailConfiguration {
   threads                   CommunicationThread[]
   emailMessages             EmailMessage[]
   healthEvents              IntegrationHealthEvent[]
+  operatorReplyOutbox       OperatorReplyOutbox[]
 
   @@index([billingEntityId])
   @@index([environment])

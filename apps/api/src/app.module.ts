@@ -12,6 +12,7 @@ import { OriginGuard } from './identity/origin.guard';
 import { RolesGuard } from './identity/roles.guard';
 import { AiModule } from './modules/ai/ai.module';
 import { BillingEntitiesModule } from './modules/billing-entities/billing-entities.module';
+import { CommunicationsModule } from './modules/communications/communications.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { CurrenciesModule } from './modules/currencies/currencies.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
@@ -50,6 +51,7 @@ import { TimeModule } from './time/time.module';
     RenewalCasesModule,
     MailModule,
     AiModule,
+    CommunicationsModule,
   ],
   controllers: [AppController],
   providers: [

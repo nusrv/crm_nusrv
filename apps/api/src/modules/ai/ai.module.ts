@@ -20,6 +20,9 @@ import { EffectiveClassificationService } from './effective-classification.servi
   imports: [BullModule.registerQueue({ name: AI_QUEUE })],
   controllers: [ClassificationController],
   providers: [AiQueueService, AiClassificationEnqueueService, EffectiveClassificationService, ClassificationReviewService],
-  exports: [AiClassificationEnqueueService],
+  // EffectiveClassificationService is also exported for Slice E's CommunicationThreadsService,
+  // which surfaces the same effective-classification read model in the thread detail view (§6) —
+  // reusing this exact service rather than duplicating its ordering logic (§22).
+  exports: [AiClassificationEnqueueService, EffectiveClassificationService],
 })
 export class AiModule {}

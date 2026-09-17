@@ -40,6 +40,11 @@ const navigation: Array<{ href: string; label: string; roles: RoleCode[] }> = [
     roles: ['ADMIN'],
   },
   {
+    href: '/dashboard/communications',
+    label: 'Communication Center',
+    roles: ['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT', 'MANAGEMENT'],
+  },
+  {
     href: '/dashboard/service-types',
     label: 'Service Types',
     roles: ['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT', 'MANAGEMENT'],
