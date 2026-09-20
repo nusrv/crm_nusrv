@@ -268,7 +268,10 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
     classifyIntentImpl: (input: unknown) => Promise<NormalizedClassificationResult>,
     configOverrides: Record<string, string | number> = {},
   ) {
-    const gateway: LlmGateway = { classifyIntent: classifyIntentImpl };
+    const gateway: LlmGateway = {
+      classifyIntent: classifyIntentImpl,
+      draftReply: () => Promise.reject(new Error('draftReply is not used by this live classification spec.')),
+    };
     return new AiClassificationService(
       prisma as never,
       fakeConfigService(configOverrides) as never,

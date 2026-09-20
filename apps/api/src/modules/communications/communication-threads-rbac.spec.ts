@@ -48,4 +48,14 @@ describe('Communication Center RBAC (§20)', () => {
       expect(allowed(roles, role)).toBe(false);
     }
   });
+
+  it('Slice F §9/§16 — restricts generating a suggested reply draft to ADMIN + SALES_DEVELOPMENT only', () => {
+    const roles = methodRoles(CommunicationThreadsController, 'draftReply') ?? [];
+    expect(roles).toEqual(['ADMIN', 'SALES_DEVELOPMENT']);
+    expect(allowed(roles, 'ADMIN')).toBe(true);
+    expect(allowed(roles, 'SALES_DEVELOPMENT')).toBe(true);
+    for (const role of ['ACCOUNTANT', 'IT', 'MANAGEMENT']) {
+      expect(allowed(roles, role)).toBe(false);
+    }
+  });
 });

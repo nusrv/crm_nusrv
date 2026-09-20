@@ -21,7 +21,10 @@ export const MAX_TOTAL_CONTEXT_CHARS = 20_000;
 export const MAX_AI_SUMMARY_LENGTH = 1_000;
 export const MAX_AI_LANGUAGE_LENGTH = 20;
 
-function truncateChars(value: string, maxLength: number): string {
+// Exported additively (Slice F) so ai-draft-context.util.ts can reuse the exact same codepoint-safe
+// truncation rule rather than reimplementing it — buildClassificationInput's own behavior/callers
+// are unaffected.
+export function truncateChars(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   // Codepoint-safe (never splits a surrogate pair) — this text only ever goes into an outbound
   // prompt, never a DB byte-limited column, so character-count truncation is sufficient here.

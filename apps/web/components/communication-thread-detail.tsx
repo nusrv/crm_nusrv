@@ -67,6 +67,28 @@ function newIdempotencyKey(): string {
   }
 }
 
+interface DraftReplyResult {
+  subject: string;
+  bodyText: string;
+  language: string;
+  schemaVersion: string;
+}
+
+// Maps the safe operator-facing error codes AiReplyDraftService/AiReplyDraftService's controller
+// throw into a friendlier sentence. Falls back to the raw server message for anything unrecognized
+// (never invents a misleading message for an error shape this component doesn't know about).
+const DRAFT_ERROR_MESSAGES: Record<string, string> = {
+  AI_ASSISTANCE_DISABLED: 'AI assistance is currently disabled for this environment.',
+  NO_INBOUND_MESSAGE_TO_REPLY_TO: 'There is no customer message in this thread to draft a reply to.',
+  AI_ASSISTANCE_TEMPORARILY_UNAVAILABLE: 'AI assistance is temporarily unavailable. Please try again shortly.',
+  AI_ASSISTANCE_UNAVAILABLE: 'AI assistance is currently unavailable.',
+  AI_DRAFT_GENERATION_FAILED: 'Unable to generate a suggested reply right now. You can still write one manually.',
+};
+
+function friendlyDraftError(message: string): string {
+  return DRAFT_ERROR_MESSAGES[message] ?? message;
+}
+
 export function CommunicationThreadDetail() {
   const params = useParams<{ threadId: string }>();
   const threadId = params.threadId;
@@ -80,6 +102,7 @@ export function CommunicationThreadDetail() {
   const [replySubject, setReplySubject] = useState('');
   const [sending, setSending] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [generatingDraft, setGeneratingDraft] = useState(false);
   const idempotencyKeyRef = useRef(newIdempotencyKey());
   const [reviewOpenFor, setReviewOpenFor] = useState<string | null>(null);
   const [reviewIntent, setReviewIntent] = useState('ACCEPT_RENEWAL');
@@ -132,6 +155,27 @@ export function CommunicationThreadDetail() {
       setError(cause instanceof Error ? cause.message : 'Unable to queue reply.');
     } finally {
       setSending(false);
+    }
+  }
+
+  // §19 — explicit button click only, never auto-triggered. Never silently overwrites text the
+  // operator has already typed; the generated result only ever populates the composer, and the
+  // operator retains full edit control and must still press the existing Send button.
+  async function generateDraft() {
+    if (replyBody.trim() && !window.confirm('Replace your current draft with an AI-suggested reply?')) {
+      return;
+    }
+    setGeneratingDraft(true);
+    setError('');
+    try {
+      const result = await apiRequest<DraftReplyResult>(`/communication-threads/${threadId}/draft-reply`, { method: 'POST' });
+      setReplySubject(result.subject);
+      setReplyBody(result.bodyText);
+      setNotice('Suggested reply generated. Review and edit before sending.');
+    } catch (cause) {
+      setError(cause instanceof Error ? friendlyDraftError(cause.message) : 'Unable to generate a suggested reply.');
+    } finally {
+      setGeneratingDraft(false);
     }
   }
 
@@ -251,6 +295,17 @@ export function CommunicationThreadDetail() {
       {canReview && (
         <section className="panel mt-6">
           <h4 className="font-medium">Reply</h4>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <button
+              className="button-secondary"
+              disabled={generatingDraft}
+              onClick={() => void generateDraft()}
+              type="button"
+            >
+              {generatingDraft ? 'Generating…' : 'Generate Suggested Reply'}
+            </button>
+            <span className="muted text-xs">AI drafts a suggestion only — you review, edit, and press Send.</span>
+          </div>
           <form className="form-grid mt-3" onSubmit={(event) => void sendReply(event)}>
             <label className="field field-wide">
               <span>Subject (optional — defaults to &quot;Re: {thread.subject}&quot;)</span>

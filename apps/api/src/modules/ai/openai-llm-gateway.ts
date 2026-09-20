@@ -12,11 +12,13 @@ import OpenAI, {
 } from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { rawClassificationOutputSchema } from './ai-classification-schema';
+import { rawDraftOutputSchema } from './ai-draft-schema';
 import { buildClassificationPrompt, CLASSIFIER_SYSTEM_INSTRUCTIONS } from './ai-prompt';
-import { AI_MAX_OUTPUT_TOKENS, AI_PROVIDER_TIMEOUT_MS } from './ai-timing.constants';
+import { buildDraftPrompt, DRAFTER_SYSTEM_INSTRUCTIONS } from './ai-draft-prompt';
+import { AI_DRAFT_MAX_OUTPUT_TOKENS, AI_MAX_OUTPUT_TOKENS, AI_PROVIDER_TIMEOUT_MS } from './ai-timing.constants';
 import { LlmMalformedOutputError, LlmPermanentError, LlmTransientError } from './llm-errors';
-import type { ClassificationInput, LlmGateway, NormalizedClassificationResult } from './llm-gateway';
-import { RESULT_SCHEMA_VERSION } from './llm-gateway';
+import type { ClassificationInput, DraftReplyInput, LlmGateway, NormalizedClassificationResult, NormalizedDraftResult } from './llm-gateway';
+import { DRAFT_RESULT_SCHEMA_VERSION, RESULT_SCHEMA_VERSION } from './llm-gateway';
 
 interface OpenAiClientOptions {
   apiKey: string;
@@ -109,6 +111,58 @@ export class OpenAiLlmGateway implements LlmGateway {
     }
 
     return { schemaVersion: RESULT_SCHEMA_VERSION, ...validated.data };
+  }
+
+  /**
+   * Slice F — an entirely independent second operation on the same gateway. Reuses `ensureClient()`
+   * (same lazy credential access, same AI_MODEL/AI_API_KEY config keys, same client instance) and
+   * the identical `toLlmError`/refusal/incomplete/re-validation discipline as classifyIntent above,
+   * but never shares its prompt, schema, or output with it. Adding this method does not modify
+   * classifyIntent's code or behavior at all.
+   */
+  async draftReply(input: DraftReplyInput): Promise<NormalizedDraftResult> {
+    const client = this.ensureClient();
+    const model = this.config.get<string>('AI_MODEL');
+    if (!model) {
+      throw new LlmPermanentError('AI_MODEL is not configured.');
+    }
+
+    let response: Awaited<ReturnType<OpenAI['responses']['parse']>>;
+    try {
+      response = await client.responses.parse({
+        model,
+        instructions: DRAFTER_SYSTEM_INSTRUCTIONS,
+        input: buildDraftPrompt(input),
+        text: { format: zodTextFormat(rawDraftOutputSchema, 'suggested_reply_draft') },
+        // §13 — no tools available to the drafter: no web/file search, no functions, no MCP.
+        tools: [],
+        // §13 — drafting is stateless; the provider must never retain this request server-side.
+        store: false,
+        // §12 — the normalized result is a short reply body; bound the generation explicitly.
+        max_output_tokens: AI_DRAFT_MAX_OUTPUT_TOKENS,
+      });
+    } catch (error) {
+      throw toLlmError(error);
+    }
+
+    if (response.status === 'incomplete') {
+      throw new LlmMalformedOutputError(
+        `Provider response was incomplete (${response.incomplete_details?.reason ?? 'unknown reason'}).`,
+      );
+    }
+    if (containsRefusal(response.output)) {
+      throw new LlmMalformedOutputError('Provider refused to produce a suggested reply.');
+    }
+    if (response.output_parsed == null) {
+      throw new LlmMalformedOutputError('Provider response did not include a parsed structured output.');
+    }
+
+    const validated = rawDraftOutputSchema.safeParse(response.output_parsed);
+    if (!validated.success) {
+      throw new LlmMalformedOutputError('Provider output failed strict schema validation.');
+    }
+
+    return { schemaVersion: DRAFT_RESULT_SCHEMA_VERSION, ...validated.data };
   }
 
   /** Credential access is lazy — no API key is ever read/used until the first real classification

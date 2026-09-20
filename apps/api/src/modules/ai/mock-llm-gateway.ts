@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { AiIntent } from '../../generated/prisma/enums';
-import type { ClassificationInput, LlmGateway, NormalizedClassificationResult } from './llm-gateway';
-import { RESULT_SCHEMA_VERSION } from './llm-gateway';
+import type { ClassificationInput, DraftReplyInput, LlmGateway, NormalizedClassificationResult, NormalizedDraftResult } from './llm-gateway';
+import { DRAFT_RESULT_SCHEMA_VERSION, RESULT_SCHEMA_VERSION } from './llm-gateway';
 
 /**
  * Slice D §26 — deterministic, network-free. Never decrypts/reads a real API credential (it has no
@@ -12,6 +12,9 @@ import { RESULT_SCHEMA_VERSION } from './llm-gateway';
  * — the established pattern for substituting behavior without module-level mocking) for exercising
  * every scenario Slice D's test matrix needs (high/low confidence, UNCLEAR, provider-requested
  * review, transient/permanent failure, malformed output, delayed/concurrent responses).
+ *
+ * Slice F — `draftReplyImpl` is the identical test seam pattern for suggested-reply drafting,
+ * entirely independent of classifyIntentImpl/classifyIntent above.
  */
 @Injectable()
 export class MockLlmGateway implements LlmGateway {
@@ -20,6 +23,81 @@ export class MockLlmGateway implements LlmGateway {
 
   classifyIntent(input: ClassificationInput): Promise<NormalizedClassificationResult> {
     return this.classifyIntentImpl(input);
+  }
+
+  draftReplyImpl: (input: DraftReplyInput) => Promise<NormalizedDraftResult> = (input) =>
+    Promise.resolve(defaultDraftReply(input));
+
+  draftReply(input: DraftReplyInput): Promise<NormalizedDraftResult> {
+    return this.draftReplyImpl(input);
+  }
+}
+
+/** Simple heuristic: any Arabic-script codepoint present means "write the draft in Arabic." Never
+ * used for anything beyond this mock's own deterministic fallback. */
+function looksArabic(text: string): boolean {
+  return /[؀-ۿ]/.test(text);
+}
+
+function resolveDraftLanguage(input: DraftReplyInput): string {
+  if (input.effectiveClassification?.language) return input.effectiveClassification.language;
+  if (looksArabic(input.current.bodyText)) return 'ar';
+  if (input.customer?.preferredLanguage) return input.customer.preferredLanguage;
+  return 'en';
+}
+
+/**
+ * Slice F §14/§20 — deterministic, network-free, and deliberately conservative about the exact
+ * same commercial/payment claims the real system prompt (ai-draft-prompt.ts) forbids: a reported
+ * payment is only ever acknowledged, never confirmed as received; an invoice request is only ever
+ * acknowledged as being processed, never claimed as already issued/sent; no price is ever invented;
+ * no renewal/cancellation/suspension is ever claimed as already completed.
+ */
+function defaultDraftReply(input: DraftReplyInput): NormalizedDraftResult {
+  const language = resolveDraftLanguage(input);
+  const intent = input.effectiveClassification?.intent ?? null;
+  const isArabic = language.toLowerCase().startsWith('ar');
+
+  const bodyText = isArabic ? arabicDraftFor(intent) : englishDraftFor(intent);
+
+  return { schemaVersion: DRAFT_RESULT_SCHEMA_VERSION, bodyText, language };
+}
+
+function englishDraftFor(intent: string | null): string {
+  switch (intent) {
+    case AiIntent.REQUEST_INVOICE:
+      return 'Thank you for your message. We have received your invoice request and it will be reviewed and processed by our team shortly.';
+    case AiIntent.PAYMENT_REPORTED:
+      return 'Thank you for informing us about your payment. Our team will verify this and follow up with you shortly.';
+    case AiIntent.PRICE_DISPUTE:
+      return 'Thank you for sharing your concern about pricing. A member of our team will review your account and get back to you.';
+    case AiIntent.COMPLAINT:
+      return "We are sorry to hear about your experience. We take this seriously and a member of our team will follow up with you shortly.";
+    case AiIntent.ACCEPT_RENEWAL:
+      return 'Thank you for confirming. Our team will follow up with the next steps for your renewal shortly.';
+    case AiIntent.REJECT_RENEWAL:
+      return 'Thank you for letting us know. A member of our team will follow up with you regarding your account shortly.';
+    default:
+      return 'Thank you for your message. A member of our team will review it and follow up with you shortly.';
+  }
+}
+
+function arabicDraftFor(intent: string | null): string {
+  switch (intent) {
+    case AiIntent.REQUEST_INVOICE:
+      return 'شكرًا لتواصلكم. لقد استلمنا طلبكم الخاص بالفاتورة وسيتم مراجعته ومعالجته من قبل فريقنا قريبًا.';
+    case AiIntent.PAYMENT_REPORTED:
+      return 'شكرًا لإبلاغنا بالدفعة. سيقوم فريقنا بالتحقق من ذلك والتواصل معكم قريبًا.';
+    case AiIntent.PRICE_DISPUTE:
+      return 'شكرًا لمشاركتنا استفساركم بخصوص السعر. سيقوم أحد أعضاء فريقنا بمراجعة حسابكم والرد عليكم.';
+    case AiIntent.COMPLAINT:
+      return 'يؤسفنا سماع ذلك. نأخذ الأمر على محمل الجد وسيتواصل معكم أحد أعضاء فريقنا قريبًا.';
+    case AiIntent.ACCEPT_RENEWAL:
+      return 'شكرًا لتأكيدكم. سيتواصل معكم فريقنا بخصوص الخطوات التالية للتجديد قريبًا.';
+    case AiIntent.REJECT_RENEWAL:
+      return 'شكرًا لإعلامنا. سيتواصل معكم أحد أعضاء فريقنا بخصوص حسابكم قريبًا.';
+    default:
+      return 'شكرًا لرسالتكم. سيقوم أحد أعضاء فريقنا بمراجعتها والتواصل معكم قريبًا.';
   }
 }
 

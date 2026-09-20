@@ -18,3 +18,8 @@ export const AI_RECOVERY_SCAN_BATCH_SIZE = 100;
 
 /** Recovery scan interval — mirrors Slice C's IMAP 5-minute cadence. */
 export const AI_RECOVERY_SCAN_INTERVAL_MS = 5 * 60 * 1000;
+
+/** Slice F — a suggested reply is a short multi-paragraph email, legitimately longer than
+ * classification's tiny structured result, but still explicitly bounded rather than left to an
+ * undocumented provider default. */
+export const AI_DRAFT_MAX_OUTPUT_TOKENS = 900;

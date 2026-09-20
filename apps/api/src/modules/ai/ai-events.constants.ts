@@ -5,4 +5,7 @@ export const AI_AUDIT_EVENT = {
   HUMAN_REVIEW_REQUIRED: 'ai.classification.human_review_required',
   CLASSIFICATION_FAILED: 'ai.classification.failed',
   REVIEW_CREATED: 'ai.classification.review.created',
+  // Slice F — generation-only event. Never contains generated bodyText, customer bodyText, the
+  // prompt, or the raw provider response (see AiReplyDraftService's own doc comment).
+  REPLY_DRAFT_GENERATED: 'ai.reply_draft.generated',
 } as const;
