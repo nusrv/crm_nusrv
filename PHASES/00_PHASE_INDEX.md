@@ -6,6 +6,7 @@ Run one phase at a time:
 2. `PHASE_01_CORE_CP.md`
 3. `PHASE_02_RENEWAL_ENGINE.md`
 4. `PHASE_03_MAIL_AI.md`
+4a. `PHASE_03_1_ADMIN_SETTINGS.md` — administration/operational control plane for Mail + AI (required before Phase 4)
 5. `PHASE_04_FAWTARA.md`
 6. `PHASE_05_COLLECTION.md`
 7. `PHASE_06_TECHNICAL_ACTIONS.md`

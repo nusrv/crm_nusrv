@@ -44,6 +44,12 @@ class FakeDeduplicatingQueue {
   }
 }
 
+/** Phase 3.1 §J — AiClassificationEnqueueService now resolves `enabled` from AiSettingsResolverService
+ * (a DB-backed, per-call resolution) rather than reading AI_ENABLED off ConfigService. */
+function fakeAiSettings(enabled: boolean) {
+  return { getSettings: () => Promise.resolve({ enabled }) };
+}
+
 function harness(configValues: Record<string, string>) {
   const add = jest.fn((name: string, data: unknown, opts: Record<string, unknown>) => {
     void name;
@@ -52,13 +58,13 @@ function harness(configValues: Record<string, string>) {
     return Promise.resolve({ id: 'job-1' });
   });
   const queue = { add };
-  const config = { get: (key: string) => configValues[key] };
-  const service = new AiClassificationEnqueueService(queue as never, config as never);
+  const aiSettings = fakeAiSettings(configValues.AI_ENABLED === 'true');
+  const service = new AiClassificationEnqueueService(queue as never, aiSettings as never);
   return { service, add };
 }
 
 describe('AiClassificationEnqueueService', () => {
-  it('§10 — never enqueues when AI_ENABLED=false', async () => {
+  it('§10 — never enqueues when AI is disabled', async () => {
     const { service, add } = harness({ AI_ENABLED: 'false' });
     await service.enqueueIfEnabled('msg-1');
     expect(add).not.toHaveBeenCalled();
@@ -89,16 +95,14 @@ describe('AiClassificationEnqueueService', () => {
 
   it('§11 — swallows an enqueue failure rather than propagating it', async () => {
     const add = jest.fn(() => Promise.reject(new Error('redis unavailable')));
-    const config = { get: () => 'true' };
-    const service = new AiClassificationEnqueueService({ add } as never, config as never);
+    const service = new AiClassificationEnqueueService({ add } as never, fakeAiSettings(true) as never);
 
     await expect(service.enqueueIfEnabled('msg-1')).resolves.toBeUndefined();
   });
 
   it('A — two enqueue attempts for the same EmailMessage while the first job is still alive collapse into one logical pending job', async () => {
     const fakeQueue = new FakeDeduplicatingQueue();
-    const config = { get: () => 'true' };
-    const service = new AiClassificationEnqueueService(fakeQueue as never, config as never);
+    const service = new AiClassificationEnqueueService(fakeQueue as never, fakeAiSettings(true) as never);
 
     await service.enqueueIfEnabled('msg-1');
     await service.enqueueIfEnabled('msg-1'); // still "alive" — never finalized in between.
@@ -110,8 +114,7 @@ describe('AiClassificationEnqueueService', () => {
 
   it('C — after the job is finalized (completed/failed), a still-PENDING message can be enqueued again by recovery', async () => {
     const fakeQueue = new FakeDeduplicatingQueue();
-    const config = { get: () => 'true' };
-    const service = new AiClassificationEnqueueService(fakeQueue as never, config as never);
+    const service = new AiClassificationEnqueueService(fakeQueue as never, fakeAiSettings(true) as never);
     const dedupId = classifyDeduplicationId('msg-1');
 
     await service.enqueueIfEnabled('msg-1'); // opportunistic enqueue at ingest time.

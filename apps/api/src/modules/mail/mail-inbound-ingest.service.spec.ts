@@ -129,6 +129,20 @@ const uninitialized: FakeConfigRow = {
 };
 
 describe('MailInboundIngestService', () => {
+  it('Phase 3.1 §D — filters candidate configs by the per-mailbox inboundSyncEnabled DB flag, in addition to enabled', async () => {
+    const { service, findMany } = harness({
+      configs: [uninitialized],
+      readers: {},
+      configValues: { IMAP_SYNC_ENABLED: 'true', NODE_ENV: 'test' },
+    });
+
+    await service.syncAll();
+
+    expect(findMany).toHaveBeenCalledTimes(1);
+    const [callArgs] = findMany.mock.calls[0] as unknown as [{ where: { enabled?: boolean; inboundSyncEnabled?: boolean } }];
+    expect(callArgs.where).toMatchObject({ enabled: true, inboundSyncEnabled: true });
+  });
+
   it('§35 — never queries or connects to any mailbox when IMAP_SYNC_ENABLED=false', async () => {
     const { service, findMany } = harness({
       configs: [uninitialized],

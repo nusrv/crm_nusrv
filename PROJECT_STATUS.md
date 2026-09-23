@@ -35,7 +35,23 @@
   deletion cascaded through it): added `DELETE /subscriptions/:id`, cascade-order copied from the
   existing Customer-delete pattern, blocked when active Renewal Cases exist, plus a UI delete button.
   Code complete, no database migration, **not yet committed** — see "Subscription deletion" below
-- Phase 3: LOCKED
+- **Phase 3 (SmarterMail/SMTP/IMAP + LLM classification)**: code complete — Slices A–G (communication
+  domain, outbound mail, inbound IMAP sync, AI classification, Communication Center/operator
+  replies, AI suggested replies, safe AI intent routing) plus Microsoft 365 OAuth2 mail
+  authentication and a provisioning CLI, all committed and pushed to `origin/main`. Production/
+  real-provider acceptance (real SMTP/IMAP/OpenAI smoke tests against a live Microsoft/OpenAI
+  tenant) has not been performed in any session — see "Phase 3.1" below for the operational control
+  plane that makes that smoke test possible without SSH/Plesk.
+- **Phase 3.1 (Administration & Integration Settings)**: code complete and pushed to `origin/main` —
+  see `PHASES/PHASE_03_1_ADMIN_SETTINGS.md` for full detail. An ADMIN can now configure Outlook
+  (BASIC or Microsoft 365 OAuth2) and OpenAI completely from `/dashboard/settings`, test both
+  connections, enable/disable inbound sync and outbound sending per mailbox, enable/disable AI and
+  automatic acceptance, and change every one of these settings without SSH/Plesk/restart — *once*
+  the one-time infrastructure gates (`MAIL_SEND_ENABLED`/`IMAP_SYNC_ENABLED`/`SMTP_MODE`/`IMAP_MODE`
+  in `.env`) are set during initial environment setup. Full API/Web verification green; the
+  disposable MariaDB live suite re-run against this exact code remains a **deferred pre-production
+  verification item** (no disposable MariaDB credentials were available in the verification
+  session).
 - Phase 4+: LOCKED
 
 ## Phase 2.1 operational data correction
@@ -722,16 +738,30 @@ claim as scoped to that.
 
 ## Integration status
 
-- MariaDB: Phase 0–2.2 schema/migrations and guarded tests prepared; live and in use on
-  `crm.nusrv.com`, not independently re-verified from inside a session
-- Redis/BullMQ: approved Phase 2 scheduler/worker preserved; live runtime not independently
-  re-verified from inside a session
-- Communication outbox: durable queue records only; no delivery transport
+- MariaDB: Phase 0–3.1 schema/migrations and guarded tests prepared; Phase 0–2.2 live and in use on
+  `crm.nusrv.com`; Phase 3/3.1 migrations not yet deployed to `crm.nusrv.com`; not independently
+  re-verified against a live disposable database from inside the Phase 3.1 session (deferred
+  pre-production item — see `PHASES/PHASE_03_1_ADMIN_SETTINGS.md`)
+- Redis/BullMQ: approved Phase 2 scheduler/worker preserved; Phase 3 mail/AI queues added; live
+  runtime not independently re-verified from inside a session
+- Mail (SMTP/IMAP): real transport/reader implemented (Slices B/C) with Microsoft 365 OAuth2
+  support; no real Outlook tenant has been configured/smoke-tested in any session
+- AI classification/routing: real OpenAI gateway implemented (Slices D/F/G); no real OpenAI
+  credentials have been configured/smoke-tested in any session
+- Administration settings (Phase 3.1): DB-backed, admin-managed Mail/AI operational control plane
+  live in code; `/dashboard/settings` UI complete
 - Technical Connections: secure configuration/mapping only; no external provider calls
-- Phase 3 integrations: LOCKED and not started
+- Phase 4+ integrations (Fawtara, collection, technical suspension, MCP): LOCKED and not started
 
 ## Next allowed work
 
-Only Phase 2.1/2.2 human data resolution and their staging/production deployment are allowed.
-Phase 3 remains locked until Phase 2.1/2.2 are fully completed, verified, and explicitly authorized
-by the owner.
+Phase 3 and Phase 3.1 are code complete. Before Phase 4:
+
+1. Deploy the Phase 3 + Phase 3.1 migrations and code to `crm.nusrv.com` (owner-performed, per the
+   existing deployment model).
+2. Provision one real Microsoft 365 mailbox and one real OpenAI API key via `/dashboard/settings`
+   (or the emergency `provision-mail-configuration` CLI), with `AI_AUTO_ROUTE_ACCEPT`/Auto Accept
+   left OFF, and perform the first real SMTP/IMAP/OpenAI smoke test per the operational checklist.
+3. Re-run the disposable MariaDB live suite against this exact code (deferred from the Phase 3.1
+   verification session — no disposable MariaDB credentials were available).
+4. Only after the owner explicitly authorizes it: begin Phase 4 (Fawtara and invoice publication).

@@ -1,11 +1,11 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { ConfigService } from '@nestjs/config';
 import type { Job } from 'bullmq';
 import { PrismaService } from '../../database/prisma.service';
 import { ClassificationStatus, MessageDirection } from '../../generated/prisma/enums';
 import { AiClassificationEnqueueService } from './ai-classification-enqueue.service';
 import type { ClassifyMessageJobData } from './ai-classification-enqueue.service';
 import { AiClassificationService } from './ai-classification.service';
+import { AiSettingsResolverService } from './ai-settings-resolver.service';
 import { AiRoutingService } from './ai-routing.service';
 import type { RouteClassificationJobData } from './ai-routing-enqueue.service';
 import { AI_RECOVERY_SCAN_BATCH_SIZE } from './ai-timing.constants';
@@ -31,7 +31,7 @@ export class AiClassificationWorker extends WorkerHost {
     private readonly enqueue: AiClassificationEnqueueService,
     private readonly routing: AiRoutingService,
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
+    private readonly aiSettings: AiSettingsResolverService,
   ) {
     super();
   }
@@ -63,11 +63,13 @@ export class AiClassificationWorker extends WorkerHost {
    * pick up historical PENDING mail that accumulated while AI_ENABLED=false, the moment the
    * application is reconfigured with AI_ENABLED=true — no separate backfill step is needed.
    *
-   * When AI_ENABLED=false, this is a true no-op: not merely "the query runs but enqueue no-ops",
-   * but skipped before any DB read at all, so a disabled AI provider never even causes a bounded
-   * PENDING scan to run on a schedule for nothing. */
+   * When AI is disabled (persisted AiSettings.enabled, resolved fresh here — Phase 3.1 §J), this is
+   * a true no-op: not merely "the query runs but enqueue no-ops", but skipped before any DB read of
+   * EmailMessage at all, so a disabled AI provider never even causes a bounded PENDING scan to run
+   * on a schedule for nothing. */
   private async runRecoveryScan(): Promise<{ scanned: number }> {
-    if (this.config.get<string>('AI_ENABLED') !== 'true') {
+    const settings = await this.aiSettings.getSettings();
+    if (!settings.enabled) {
       return { scanned: 0 };
     }
     const eligible = await this.prisma.emailMessage.findMany({

@@ -17,8 +17,22 @@ import { OpenAiLlmGateway } from './openai-llm-gateway';
 
 const REAL_API_KEY = 'sk-super-secret-test-key';
 
-function fakeConfig(values: Record<string, string>) {
-  return { get: (key: string) => values[key] };
+/** Phase 3.1 §J — OpenAiLlmGateway now resolves model/API key from AiSettingsResolverService (a
+ * DB-backed, per-call resolution) rather than ConfigService. This fake keeps every existing
+ * `fakeConfig({ AI_MODEL, AI_API_KEY })` call site in this file unchanged syntactically. */
+function fakeConfig(values: { AI_MODEL?: string; AI_API_KEY?: string }) {
+  return {
+    getSettings: () =>
+      Promise.resolve({
+        enabled: true,
+        provider: 'OPENAI',
+        model: values.AI_MODEL ?? null,
+        confidenceThreshold: 0.9,
+        autoRouteAcceptEnabled: false,
+        autoRouteAcceptCutoverAt: null,
+      }),
+    getApiKey: () => Promise.resolve(values.AI_API_KEY ?? null),
+  };
 }
 
 interface FakeParsedResponse {
@@ -396,7 +410,7 @@ describe('OpenAiLlmGateway (adapter contract, mocked OpenAI SDK boundary)', () =
     expect(factoryCalled).toBe(false);
   });
 
-  it('reuses the same client across multiple classifyIntent calls (constructed only once)', async () => {
+  it('Phase 3.1 §J — reconstructs a fresh client on every classifyIntent call (never cached), so a Settings change takes effect without restart', async () => {
     const { client } = fakeResponseClient(completedResponse(validParsed));
     const config = fakeConfig({ AI_MODEL: 'gpt-test', AI_API_KEY: REAL_API_KEY });
     const gateway = new OpenAiLlmGateway(config as never);
@@ -409,7 +423,29 @@ describe('OpenAiLlmGateway (adapter contract, mocked OpenAI SDK boundary)', () =
     await gateway.classifyIntent(input());
     await gateway.classifyIntent(input());
 
-    expect(factoryCalls).toBe(1);
+    expect(factoryCalls).toBe(2);
+  });
+
+  it('Phase 3.1 §J — resolves the CURRENT model/API key on every call, so a Settings-UI change is honored on the very next attempt with no restart', async () => {
+    const { client, parse } = fakeResponseClient(completedResponse(validParsed));
+    const config = fakeConfig({ AI_MODEL: 'gpt-test-model-v1', AI_API_KEY: REAL_API_KEY });
+    const gateway = new OpenAiLlmGateway(config as never);
+    gateway.clientFactory = () => client as never;
+
+    await gateway.classifyIntent(input());
+    expect(parse).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'gpt-test-model-v1' }));
+
+    config.getSettings = () =>
+      Promise.resolve({
+        enabled: true,
+        provider: 'OPENAI',
+        model: 'gpt-test-model-v2',
+        confidenceThreshold: 0.9,
+        autoRouteAcceptEnabled: false,
+        autoRouteAcceptCutoverAt: null,
+      });
+    await gateway.classifyIntent(input());
+    expect(parse).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'gpt-test-model-v2' }));
   });
 });
 
@@ -600,7 +636,7 @@ describe('OpenAiLlmGateway.draftReply (Slice F, additive — classifyIntent is u
     expect(factoryCalled).toBe(false);
   });
 
-  it('reuses the same lazily-constructed client across a classifyIntent call and a draftReply call', async () => {
+  it('Phase 3.1 §J — reconstructs a fresh client for a classifyIntent call and a separate draftReply call (never cached)', async () => {
     let callCount = 0;
     const parse = jest.fn(() => {
       callCount++;
@@ -617,6 +653,6 @@ describe('OpenAiLlmGateway.draftReply (Slice F, additive — classifyIntent is u
     await gateway.classifyIntent(input());
     await gateway.draftReply(draftInput());
 
-    expect(factoryCalls).toBe(1);
+    expect(factoryCalls).toBe(2);
   });
 });

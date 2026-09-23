@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
-import { ConfigService } from '@nestjs/config';
 import type { Queue } from 'bullmq';
+import { AiSettingsResolverService } from './ai-settings-resolver.service';
 import { AI_CLASSIFY_JOB, AI_QUEUE } from './ai-queue.constants';
 
 export interface ClassifyMessageJobData {
@@ -46,11 +46,12 @@ export function classifyDeduplicationId(emailMessageId: string): string {
 export class AiClassificationEnqueueService {
   constructor(
     @InjectQueue(AI_QUEUE) private readonly queue: Queue<ClassifyMessageJobData>,
-    private readonly config: ConfigService,
+    private readonly aiSettings: AiSettingsResolverService,
   ) {}
 
   async enqueueIfEnabled(emailMessageId: string): Promise<void> {
-    if (this.config.get<string>('AI_ENABLED') !== 'true') return;
+    const settings = await this.aiSettings.getSettings();
+    if (!settings.enabled) return;
     try {
       await this.queue.add(
         AI_CLASSIFY_JOB,

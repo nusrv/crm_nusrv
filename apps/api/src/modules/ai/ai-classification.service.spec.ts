@@ -84,16 +84,31 @@ function harness(options: {
 }) {
   const { prisma, rows, classifications, routingDecisions, findUnique, findMany, updateMany, aiClassificationCreate, aiRoutingDecisionCreate } =
     fakePrisma(options.messages);
-  const config = {
-    get: (key: string) => {
-      const values: Record<string, unknown> = {
-        AI_ENABLED: 'true',
-        AI_PROVIDER: 'mock',
-        AI_CONFIDENCE_THRESHOLD: 0.9,
-        ...options.configValues,
-      };
-      return values[key];
-    },
+  const rawConfigValues: Record<string, unknown> = {
+    AI_ENABLED: 'true',
+    AI_PROVIDER: 'mock',
+    AI_CONFIDENCE_THRESHOLD: 0.9,
+    ...options.configValues,
+  };
+  // AI_PROVIDER remains a genuine ConfigService/env read (Phase 3.1 §D — infra-level mock/real
+  // gateway wiring, unrelated to AiSettings) — kept here for persistClassification()'s `provider`
+  // evidence field.
+  const config = { get: (key: string) => rawConfigValues[key] };
+  // Phase 3.1 §J — every other value (AI_ENABLED/AI_CONFIDENCE_THRESHOLD/AI_AUTO_ROUTE_ACCEPT/
+  // AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT) now comes from AiSettingsResolverService instead, built here
+  // from the exact same `configValues` test fixtures so every existing call site below is unchanged.
+  const aiSettings = {
+    getSettings: () =>
+      Promise.resolve({
+        enabled: rawConfigValues.AI_ENABLED === 'true',
+        provider: 'OPENAI',
+        model: (rawConfigValues.AI_MODEL as string | undefined) ?? null,
+        confidenceThreshold: Number(rawConfigValues.AI_CONFIDENCE_THRESHOLD ?? 0.9),
+        autoRouteAcceptEnabled: rawConfigValues.AI_AUTO_ROUTE_ACCEPT === 'true',
+        autoRouteAcceptCutoverAt: rawConfigValues.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT
+          ? new Date(rawConfigValues.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT as string)
+          : null,
+      }),
   };
   const auditRecord = jest.fn((event: { eventKey: string; metadata?: Record<string, unknown> }) => {
     void event;
@@ -114,6 +129,7 @@ function harness(options: {
   const service = new AiClassificationService(
     prisma as never,
     config as never,
+    aiSettings as never,
     audit as never,
     health as never,
     clock,

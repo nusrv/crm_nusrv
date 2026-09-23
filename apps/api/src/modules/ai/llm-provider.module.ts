@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { AiSettingsResolverService } from './ai-settings-resolver.service';
 import { LLM_GATEWAY, type LlmGateway } from './llm-gateway';
 import { MockLlmGateway } from './mock-llm-gateway';
 import { OpenAiLlmGateway } from './openai-llm-gateway';
@@ -20,6 +21,7 @@ import { OpenAiLlmGateway } from './openai-llm-gateway';
 @Module({
   imports: [ConfigModule],
   providers: [
+    AiSettingsResolverService,
     MockLlmGateway,
     OpenAiLlmGateway,
     {
@@ -30,6 +32,10 @@ import { OpenAiLlmGateway } from './openai-llm-gateway';
       },
     },
   ],
-  exports: [LLM_GATEWAY],
+  // AiSettingsResolverService is exported for AiClassificationService/AiClassificationEnqueueService/
+  // AiClassificationWorker/AiRoutingService (WorkerAppModule) and AiSettingsService (AiModule, the
+  // Phase 3.1 admin settings API) — every dynamic-AI-config consumer imports LlmProviderModule
+  // already or gains it here, rather than each re-declaring this provider independently.
+  exports: [LLM_GATEWAY, AiSettingsResolverService],
 })
 export class LlmProviderModule {}

@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import OpenAI, {
   APIConnectionError,
   APIConnectionTimeoutError,
@@ -16,6 +15,7 @@ import { rawDraftOutputSchema } from './ai-draft-schema';
 import { buildClassificationPrompt, CLASSIFIER_SYSTEM_INSTRUCTIONS } from './ai-prompt';
 import { buildDraftPrompt, DRAFTER_SYSTEM_INSTRUCTIONS } from './ai-draft-prompt';
 import { AI_DRAFT_MAX_OUTPUT_TOKENS, AI_MAX_OUTPUT_TOKENS, AI_PROVIDER_TIMEOUT_MS } from './ai-timing.constants';
+import { AiSettingsResolverService } from './ai-settings-resolver.service';
 import { LlmMalformedOutputError, LlmPermanentError, LlmTransientError } from './llm-errors';
 import type { ClassificationInput, DraftReplyInput, LlmGateway, NormalizedClassificationResult, NormalizedDraftResult } from './llm-gateway';
 import { DRAFT_RESULT_SCHEMA_VERSION, RESULT_SCHEMA_VERSION } from './llm-gateway';
@@ -58,16 +58,16 @@ export class OpenAiLlmGateway implements LlmGateway {
    * Defaults to the real OpenAI client constructor in production. */
   clientFactory: (options: OpenAiClientOptions) => OpenAI = (options) => new OpenAI(options);
 
-  private client: OpenAI | undefined;
-
-  constructor(private readonly config: ConfigService) {}
+  // Phase 3.1 §J — deliberately NEVER cached across calls (unlike the pre-Phase-3.1 version of this
+  // class): the API key/model now come from the admin-managed AiSettings row, which can change at
+  // runtime with no restart. A stale cached client would keep using a revoked/replaced key or the
+  // wrong model until the process happened to restart, silently defeating that requirement. The SDK
+  // client constructor performs no network I/O, so reconstructing it per call costs nothing
+  // meaningful given classification/draft volume.
+  constructor(private readonly aiSettings: AiSettingsResolverService) {}
 
   async classifyIntent(input: ClassificationInput): Promise<NormalizedClassificationResult> {
-    const client = this.ensureClient();
-    const model = this.config.get<string>('AI_MODEL');
-    if (!model) {
-      throw new LlmPermanentError('AI_MODEL is not configured.');
-    }
+    const { client, model } = await this.ensureClient();
 
     let response: Awaited<ReturnType<OpenAI['responses']['parse']>>;
     try {
@@ -115,17 +115,13 @@ export class OpenAiLlmGateway implements LlmGateway {
 
   /**
    * Slice F — an entirely independent second operation on the same gateway. Reuses `ensureClient()`
-   * (same lazy credential access, same AI_MODEL/AI_API_KEY config keys, same client instance) and
-   * the identical `toLlmError`/refusal/incomplete/re-validation discipline as classifyIntent above,
-   * but never shares its prompt, schema, or output with it. Adding this method does not modify
+   * (same lazy, per-call credential/model resolution from AiSettingsResolverService) and the
+   * identical `toLlmError`/refusal/incomplete/re-validation discipline as classifyIntent above, but
+   * never shares its prompt, schema, or output with it. Adding this method does not modify
    * classifyIntent's code or behavior at all.
    */
   async draftReply(input: DraftReplyInput): Promise<NormalizedDraftResult> {
-    const client = this.ensureClient();
-    const model = this.config.get<string>('AI_MODEL');
-    if (!model) {
-      throw new LlmPermanentError('AI_MODEL is not configured.');
-    }
+    const { client, model } = await this.ensureClient();
 
     let response: Awaited<ReturnType<OpenAI['responses']['parse']>>;
     try {
@@ -165,16 +161,21 @@ export class OpenAiLlmGateway implements LlmGateway {
     return { schemaVersion: DRAFT_RESULT_SCHEMA_VERSION, ...validated.data };
   }
 
-  /** Credential access is lazy — no API key is ever read/used until the first real classification
-   * attempt (never in mock mode, never merely because this class was constructed/injected). */
-  private ensureClient(): OpenAI {
-    if (this.client) return this.client;
-    const apiKey = this.config.get<string>('AI_API_KEY');
-    if (!apiKey) {
-      throw new LlmPermanentError('AI_API_KEY is not configured.');
+  /** Credential/model resolution is lazy AND dynamic — read fresh from AiSettingsResolverService on
+   * every call, never cached (see the constructor's doc comment for why). Never reached at all in
+   * mock mode (MockLlmGateway is wired instead — see llm-provider.module.ts) and never merely
+   * because this class was constructed/injected. */
+  private async ensureClient(): Promise<{ client: OpenAI; model: string }> {
+    const settings = await this.aiSettings.getSettings();
+    if (!settings.model) {
+      throw new LlmPermanentError('AI model is not configured.');
     }
-    this.client = this.clientFactory({ apiKey, timeout: AI_PROVIDER_TIMEOUT_MS, maxRetries: 0 });
-    return this.client;
+    const apiKey = await this.aiSettings.getApiKey();
+    if (!apiKey) {
+      throw new LlmPermanentError('AI API key is not configured.');
+    }
+    const client = this.clientFactory({ apiKey, timeout: AI_PROVIDER_TIMEOUT_MS, maxRetries: 0 });
+    return { client, model: settings.model };
   }
 }
 

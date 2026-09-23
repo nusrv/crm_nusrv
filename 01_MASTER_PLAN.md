@@ -239,6 +239,8 @@ Each mapping stores the remote identifier and supported actions.
 1. Core CP and legacy data import framework
 2. Renewal engine and notifications
 3. SmarterMail/SMTP/IMAP + LLM classification
+3.1. Administration & Integration Settings — DB-backed, admin-managed Mail/AI operational control
+   plane (see `PHASES/PHASE_03_1_ADMIN_SETTINGS.md`); required before Phase 4
 4. Fawtara and invoice publication
 5. Collection/payment workflow
 6. Technical action engine: Plesk/SmarterMail/manual + suspension/reactivation

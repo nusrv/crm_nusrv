@@ -78,6 +78,29 @@ function fakeConfigService(overrides: Record<string, string | number> = {}) {
   return { get: (key: string) => values[key] };
 }
 
+/** Phase 3.1 §J — AiClassificationService/AiClassificationWorker now resolve `enabled`/
+ * `confidenceThreshold`/`autoRouteAcceptEnabled`/`autoRouteAcceptCutoverAt` from
+ * AiSettingsResolverService (DB-backed) rather than ConfigService. This live spec's own purpose is
+ * proving real-Prisma CAS/ordering correctness (§28), not AiSettings DB resolution — which has its
+ * own dedicated unit coverage — so a lightweight fake built from the SAME `configOverrides` shape
+ * preserves every existing test's intent unchanged. */
+function fakeAiSettingsResolver(overrides: Record<string, string | number> = {}) {
+  const values: Record<string, string | number> = { AI_ENABLED: 'true', ...overrides };
+  return {
+    getSettings: () =>
+      Promise.resolve({
+        enabled: values.AI_ENABLED === 'true',
+        provider: 'OPENAI',
+        model: null,
+        confidenceThreshold: Number(values.AI_CONFIDENCE_THRESHOLD ?? 0.9),
+        autoRouteAcceptEnabled: values.AI_AUTO_ROUTE_ACCEPT === 'true',
+        autoRouteAcceptCutoverAt: values.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT
+          ? new Date(values.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT as string)
+          : null,
+      }),
+  };
+}
+
 function validResult(overrides: Partial<NormalizedClassificationResult> = {}): NormalizedClassificationResult {
   return {
     schemaVersion: RESULT_SCHEMA_VERSION,
@@ -290,6 +313,7 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
     return new AiClassificationService(
       prisma as never,
       fakeConfigService(configOverrides) as never,
+      fakeAiSettingsResolver(configOverrides) as never,
       new AuditService(prisma as never),
       new AiHealthService(prisma as never),
       new ClockService(),
@@ -623,7 +647,7 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
       fakeEnqueue as never,
       fakeRoutingWorkerService() as never,
       prisma as never,
-      fakeConfigService({ AI_ENABLED: 'false' }) as never,
+      fakeAiSettingsResolver({ AI_ENABLED: 'false' }) as never,
     );
     const disabledScan = await disabledWorker.process({
       name: AI_RECOVERY_JOB,
@@ -643,7 +667,7 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
       fakeEnqueue as never,
       fakeRoutingWorkerService() as never,
       prisma as never,
-      fakeConfigService({ AI_ENABLED: 'true' }) as never,
+      fakeAiSettingsResolver({ AI_ENABLED: 'true' }) as never,
     );
     const enabledScan = await enabledWorker.process({
       name: AI_RECOVERY_JOB,

@@ -65,6 +65,11 @@ const navigation: Array<{ href: string; label: string; roles: RoleCode[] }> = [
     roles: ['ADMIN', 'IT'],
   },
   {
+    href: '/dashboard/settings',
+    label: 'Settings',
+    roles: ['ADMIN', 'IT'],
+  },
+  {
     href: '/dashboard/billing-entities',
     label: 'Billing Entities',
     roles: ['ADMIN', 'ACCOUNTANT', 'MANAGEMENT'],

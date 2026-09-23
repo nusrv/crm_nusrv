@@ -48,21 +48,7 @@ export class SmtpMailTransport implements MailTransport {
   ) {}
 
   async send(message: PreparedOutboundMessage, config: MailConfiguration): Promise<void> {
-    const credentials = config.smtpCredentialsCiphertext
-      ? this.encryption.decrypt<SmtpCredentials>(config.smtpCredentialsCiphertext)
-      : undefined;
-    const auth = await this.resolveAuth(config.smtpUsername, credentials);
-
-    const transporter = this.transportFactory({
-      host: config.smtpHost,
-      port: config.smtpPort,
-      secure: config.smtpSecure,
-      auth,
-      connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
-      greetingTimeout: SMTP_GREETING_TIMEOUT_MS,
-      socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
-    });
-
+    const transporter = await this.buildTransporter(config);
     try {
       await transporter.sendMail({
         messageId: message.messageId,
@@ -76,6 +62,37 @@ export class SmtpMailTransport implements MailTransport {
     } finally {
       transporter.close();
     }
+  }
+
+  /** Phase 3.1 §G — the explicit ADMIN "Test SMTP Connection" action. Uses nodemailer's own
+   * `verify()`, which authenticates against the SMTP server without transmitting any message —
+   * never a substitute for `send()`, never called from any automatic sending path. Reuses
+   * `buildTransporter()` so the connection test can never drift from the exact host/port/secure/
+   * auth-resolution logic a real send would use. */
+  async verify(config: MailConfiguration): Promise<void> {
+    const transporter = await this.buildTransporter(config);
+    try {
+      await transporter.verify();
+    } finally {
+      transporter.close();
+    }
+  }
+
+  private async buildTransporter(config: MailConfiguration) {
+    const credentials = config.smtpCredentialsCiphertext
+      ? this.encryption.decrypt<SmtpCredentials>(config.smtpCredentialsCiphertext)
+      : undefined;
+    const auth = await this.resolveAuth(config.smtpUsername, credentials);
+
+    return this.transportFactory({
+      host: config.smtpHost,
+      port: config.smtpPort,
+      secure: config.smtpSecure,
+      auth,
+      connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
+      greetingTimeout: SMTP_GREETING_TIMEOUT_MS,
+      socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
+    });
   }
 
   /** MICROSOFT_OAUTH2 credentials never reach nodemailer as a password — only a freshly resolved

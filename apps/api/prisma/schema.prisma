@@ -1320,6 +1320,27 @@ model MailConfiguration {
   fromName                  String                   @map("from_name") @db.VarChar(191)
   environment               IntegrationEnvironment   @default(SANDBOX)
   enabled                   Boolean                  @default(true)
+  // Phase 3.1 §D — the per-mailbox OPERATIONAL toggle an ADMIN flips from Settings, at runtime, with
+  // no restart: MailInboundIngestService.syncAll() only considers a config when this is true (in
+  // addition to `enabled`); the global IMAP_SYNC_ENABLED env var remains a coarser, rarely-touched
+  // deployment-level gate above this (see that env var's own doc comment in environment.ts) — it is
+  // never the routine control plane. Defaults false: a migration must never silently start syncing
+  // an existing mailbox that was never explicitly turned on for this.
+  inboundSyncEnabled        Boolean                  @default(false) @map("inbound_sync_enabled")
+  // Same operational-toggle role as inboundSyncEnabled, for outbound SMTP sending.
+  // MailConfigurationResolverService's resolveForOutbound()/resolvePinned() require this true (in
+  // addition to `enabled` and the environment guard) before a config is usable for sending; the
+  // global MAIL_SEND_ENABLED env var remains a coarser deployment-level gate above this. Defaults
+  // false for the same fail-closed reason as inboundSyncEnabled.
+  outboundSendEnabled       Boolean                  @default(false) @map("outbound_send_enabled")
+  // Per-mailbox equivalent of the legacy global MAIL_SEND_CUTOVER_AT env var — consulted by
+  // MailConfigurationResolverService for ordinary reminder sends only (MailOutboundService), exactly
+  // mirroring MAIL_SEND_CUTOVER_AT's own historical-message-protection role. Deliberately NOT
+  // consulted for operator-initiated replies (OperatorReplyOutboundService), matching that service's
+  // existing, already-tested contract that only outboundSendEnabled/MAIL_SEND_ENABLED gates it, never
+  // a cutover. Null means "outbound sending has no cutover configured yet" — outboundSendEnabled
+  // alone is never sufficient to send; both must be set.
+  outboundSendCutoverAt     DateTime?                @map("outbound_send_cutover_at")
   lastSyncedAt              DateTime?                @map("last_synced_at")
   lastSyncUidValidity       BigInt?                  @map("last_sync_uid_validity")
   lastSyncUid               BigInt?                  @map("last_sync_uid")
@@ -1363,4 +1384,45 @@ model IntegrationHealthEvent {
   // than relying on an auto-generated name that happens to just barely fit.
   @@index([integration, mailConfigurationId, createdAt], map: "integration_health_events_integration_mailbox_created_idx")
   @@map("integration_health_events")
+}
+
+// Phase 3.1 — the ONE persisted, admin-managed AI runtime configuration. `singleton` is a DB-enforced
+// at-most-one-row constraint (a unique column that can only ever hold the literal value `true`), the
+// same pattern used to guarantee "GLOBAL" uniqueness on MailConfiguration.scopeKey, chosen instead of
+// a fixed well-known id so `upsert({ where: { singleton: true }, ... })` never needs to know or
+// generate an id up front.
+//
+// NO ROW = AI FULLY DISABLED (AiSettingsResolverService.getSettings() returns safe, all-off
+// defaults when this table is empty) — a fresh/migrated deployment must never infer any enablement
+// from the absence of a row, and this migration itself never creates one.
+//
+// `apiKeyCiphertext` uses the SAME SecretEncryptionService primitive MailConfiguration's credential
+// fields already use — no second cryptography system. `provider` is presently constrained to
+// 'OPENAI' at the service layer (the only real provider Phase 3 ships); the column stays a plain
+// String, not an enum, purely so a future additional provider never needs a migration to add it.
+model AiSettings {
+  id                       String    @id @default(uuid()) @db.VarChar(36)
+  singleton                Boolean   @unique @default(true)
+  enabled                  Boolean   @default(false)
+  provider                 String    @default("OPENAI") @db.VarChar(50)
+  model                    String?   @db.VarChar(191)
+  // Stored as a fixed-precision decimal (never Float) to avoid binary floating-point representation
+  // drift on a value operators compare/display exactly (e.g. 0.90), matching the existing precedent
+  // of using @db.Decimal for other exact-comparison business values in this schema.
+  confidenceThreshold      Decimal?  @map("confidence_threshold") @db.Decimal(4, 3)
+  apiKeyCiphertext         String?   @map("api_key_ciphertext") @db.Text
+  // Phase 3.1 §J — the dynamic replacement for the env-level AI_AUTO_ROUTE_ACCEPT kill switch.
+  // AiRoutingService.processOne() reads this at EXECUTION time, immediately before claiming a
+  // PENDING AUTO_ACCEPT decision — never at classification time (that snapshot, frozen forever onto
+  // AiRoutingDecision.action, is untouched by this field; see AiRoutingDecision's own doc comment).
+  autoRouteAccept          Boolean   @default(false) @map("auto_route_accept")
+  // The dynamic replacement for AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT — read at CLASSIFICATION time only
+  // (decideClassificationTimeRoutingAction's `cutoverAt` input), exactly like the env var it
+  // replaces. Changing this after a classification has already snapshotted its routing action never
+  // reinterprets that already-created AiRoutingDecision row.
+  autoRouteAcceptCutoverAt DateTime? @map("auto_route_accept_cutover_at")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+
+  @@map("ai_settings")
 }

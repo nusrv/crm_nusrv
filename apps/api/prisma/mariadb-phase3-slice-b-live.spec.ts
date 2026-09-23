@@ -4,6 +4,7 @@ import mariadb, { type Connection } from 'mariadb';
 import { toMariaDbDriverUrl } from '../src/database/mariadb-url';
 import { AuditService } from '../src/audit/audit.service';
 import { BusinessTimeService } from '../src/time/business-time.service';
+import { ClockService } from '../src/time/clock.service';
 import { PrismaClient } from '../src/generated/prisma/client';
 import type { MailConfiguration } from '../src/generated/prisma/client';
 import {
@@ -134,6 +135,8 @@ liveDescribe('Phase 3 Slice B MariaDB outbound-mail integration', () => {
         fromName: 'Slice B',
         environment: IntegrationEnvironment.SANDBOX,
         enabled: true,
+        outboundSendEnabled: true,
+        outboundSendCutoverAt: new Date('2020-01-01T00:00:00.000Z'),
       },
     });
 
@@ -224,7 +227,7 @@ liveDescribe('Phase 3 Slice B MariaDB outbound-mail integration', () => {
       new AuditService(prisma as never),
       { now: () => new Date() },
       fakeConfigService() as never,
-      new MailConfigurationResolverService(prisma as never, fakeConfigService() as never),
+      new MailConfigurationResolverService(prisma as never, fakeConfigService() as never, new ClockService()),
       new MailThreadResolutionService(prisma as never),
       new MailHealthService(prisma as never),
       new CustomerEmailResolutionService(prisma as never),
@@ -563,6 +566,8 @@ liveDescribe('Phase 3 Slice B MariaDB outbound-mail integration', () => {
           fromName: 'Override',
           environment: IntegrationEnvironment.SANDBOX,
           enabled: true,
+          outboundSendEnabled: true,
+          outboundSendCutoverAt: new Date('2020-01-01T00:00:00.000Z'),
         },
       });
 

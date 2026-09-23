@@ -142,6 +142,7 @@ liveDescribe('Phase 3 Slice C MariaDB inbound-mail integration', () => {
         fromName: 'Slice C',
         environment: IntegrationEnvironment.SANDBOX,
         enabled: true,
+        inboundSyncEnabled: true,
       },
     });
     mailConfigurationId = primary.id;
@@ -160,6 +161,7 @@ liveDescribe('Phase 3 Slice C MariaDB inbound-mail integration', () => {
         fromName: 'Slice C Other',
         environment: IntegrationEnvironment.SANDBOX,
         enabled: true,
+        inboundSyncEnabled: true,
       },
     });
     otherMailConfigurationId = other.id;

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../database/prisma.service';
+import { AiSettingsResolverService } from './ai-settings-resolver.service';
 import { ClockService } from '../../time/clock.service';
 import type { AiRoutingDecision, Prisma } from '../../generated/prisma/client';
 import {
@@ -70,18 +70,20 @@ export class AiRoutingService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly clock: ClockService,
-    private readonly config: ConfigService,
+    private readonly aiSettings: AiSettingsResolverService,
   ) {}
 
   async processBatch(): Promise<AiRoutingBatchSummary> {
     const now = this.clock.now();
     const staleThreshold = this.staleThreshold(now);
-    // Contract-audit hardening §4 — while AI_AUTO_ROUTE_ACCEPT is off, AUTO_ACCEPT decisions are
-    // excluded from the candidate set entirely, so the periodic scanner never repeatedly re-selects
-    // a paused row every tick. HUMAN_REVIEW decisions are never affected by this switch — excluding
-    // them too would incorrectly pause a routing action that has nothing to do with automatic
-    // acceptance. No new column, no retry-scheduling change: this is a query-time filter only.
-    const autoAcceptEnabled = this.autoRouteAcceptEnabled();
+    // Contract-audit hardening §4 / Phase 3.1 §J — while the persisted AiSettings.autoRouteAccept
+    // switch is off, AUTO_ACCEPT decisions are excluded from the candidate set entirely, so the
+    // periodic scanner never repeatedly re-selects a paused row every tick. HUMAN_REVIEW decisions
+    // are never affected by this switch — excluding them too would incorrectly pause a routing
+    // action that has nothing to do with automatic acceptance. No new column, no retry-scheduling
+    // change: this is a query-time filter only, re-evaluated fresh every batch (no restart needed
+    // for a Settings-UI change to take effect on the very next tick).
+    const autoAcceptEnabled = (await this.aiSettings.getSettings()).autoRouteAcceptEnabled;
     const actionFilter = autoAcceptEnabled ? {} : { action: AiRoutingAction.HUMAN_REVIEW };
     // §20 — bounded, deterministic order. Scans ONLY AiRoutingDecision — never AiClassification —
     // so a historical classification created before Slice G existed (and therefore has no decision
@@ -119,7 +121,7 @@ export class AiRoutingService {
     // normally once the switch is restored, via the same claim/lease path (recovery or a fresh
     // enqueue). A HUMAN_REVIEW decision is never affected by this check.
     const peek = await this.prisma.aiRoutingDecision.findUnique({ where: { id: decisionId }, select: { action: true } });
-    if (peek?.action === AiRoutingAction.AUTO_ACCEPT && !this.autoRouteAcceptEnabled()) {
+    if (peek?.action === AiRoutingAction.AUTO_ACCEPT && !(await this.aiSettings.getSettings()).autoRouteAcceptEnabled) {
       return 'paused';
     }
 
@@ -131,10 +133,6 @@ export class AiRoutingService {
     return decision.action === AiRoutingAction.AUTO_ACCEPT
       ? this.executeAutoAccept(decision, leaseToken)
       : this.executeHumanReviewRouting(decision, leaseToken);
-  }
-
-  private autoRouteAcceptEnabled(): boolean {
-    return this.config.get<string>('AI_AUTO_ROUTE_ACCEPT') === 'true';
   }
 
   private staleThreshold(now: Date): Date {
@@ -174,15 +172,19 @@ export class AiRoutingService {
     });
     const message = classification.emailMessage;
 
-    // Defensive invariant checks only — AiClassification is immutable, so these facts cannot
-    // actually differ from what decideClassificationTimeRoutingAction() already observed. A failure
-    // here indicates a real application bug, never a legitimate concurrent business event, so it is
-    // FAILED (not SKIPPED) and never silently retried.
+    // Defensive invariant checks only, against fields FROZEN on AiClassification at classification
+    // time — never against the CURRENT confidence threshold. Phase 3.1 §J made
+    // AiSettings.confidenceThreshold admin-mutable at runtime, so re-deriving "was this confident
+    // enough" from today's threshold would be WRONG: an admin raising the threshold after this
+    // classification already passed the (lower) threshold that was in effect at classification time
+    // must never retroactively fail an already-legitimately-CLASSIFIED (non-HUMAN_REVIEW) decision.
+    // `requiresHumanReview`/`intent`/`direction` are all immutable facts recorded once and never
+    // reinterpreted; a failure here indicates a real application bug, never a legitimate concurrent
+    // business event or a settings change, so it is FAILED (not SKIPPED) and never silently retried.
     if (
       message.direction !== MessageDirection.INBOUND ||
       classification.requiresHumanReview ||
-      classification.intent !== AiIntent.ACCEPT_RENEWAL ||
-      Number(classification.confidence) < (this.config.get<number>('AI_CONFIDENCE_THRESHOLD') ?? 0.9)
+      classification.intent !== AiIntent.ACCEPT_RENEWAL
     ) {
       await this.finalizeDecisionOnly(decision.id, leaseToken, AiRoutingStatus.FAILED, AI_ROUTING_RESULT_CODE.INVARIANT_VIOLATION);
       return 'failed';

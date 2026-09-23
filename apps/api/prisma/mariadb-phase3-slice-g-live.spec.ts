@@ -73,6 +73,32 @@ function fakeConfigService(overrides: Record<string, string | number> = {}) {
   return { get: (key: string) => values[key] };
 }
 
+/** Phase 3.1 §J — see mariadb-phase3-slice-d-live.spec.ts's identical helper doc comment: this
+ * live spec's own purpose is real-Prisma routing/CAS correctness, not AiSettings DB resolution
+ * (covered by dedicated unit tests), so a lightweight fake built from the same `configOverrides`
+ * shape preserves every existing test's intent unchanged. */
+function fakeAiSettingsResolver(overrides: Record<string, string | number> = {}) {
+  const values: Record<string, string | number> = {
+    AI_ENABLED: 'true',
+    AI_CONFIDENCE_THRESHOLD: 0.9,
+    AI_AUTO_ROUTE_ACCEPT: 'false',
+    ...overrides,
+  };
+  return {
+    getSettings: () =>
+      Promise.resolve({
+        enabled: values.AI_ENABLED === 'true',
+        provider: 'OPENAI',
+        model: null,
+        confidenceThreshold: Number(values.AI_CONFIDENCE_THRESHOLD ?? 0.9),
+        autoRouteAcceptEnabled: values.AI_AUTO_ROUTE_ACCEPT === 'true',
+        autoRouteAcceptCutoverAt: values.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT
+          ? new Date(values.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT as string)
+          : null,
+      }),
+  };
+}
+
 function acceptResult(overrides: Partial<NormalizedClassificationResult> = {}): NormalizedClassificationResult {
   return {
     schemaVersion: RESULT_SCHEMA_VERSION,
@@ -255,6 +281,7 @@ liveDescribe('Phase 3 Slice G MariaDB AI-routing integration', () => {
     return new AiClassificationService(
       prisma as never,
       fakeConfigService(configOverrides) as never,
+      fakeAiSettingsResolver(configOverrides) as never,
       new AuditService(prisma as never),
       new AiHealthService(prisma as never),
       new ClockService(),
@@ -264,7 +291,7 @@ liveDescribe('Phase 3 Slice G MariaDB AI-routing integration', () => {
   }
 
   function buildRoutingService(configOverrides: Record<string, string | number> = {}) {
-    return new AiRoutingService(prisma as never, new AuditService(prisma as never), new ClockService(), fakeConfigService(configOverrides) as never);
+    return new AiRoutingService(prisma as never, new AuditService(prisma as never), new ClockService(), fakeAiSettingsResolver(configOverrides) as never);
   }
 
   function buildReviewService() {

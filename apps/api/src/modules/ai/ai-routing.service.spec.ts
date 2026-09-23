@@ -102,11 +102,13 @@ function buildHarness() {
   const auditRecord = jest.fn(() => Promise.resolve());
   const audit = { record: auditRecord };
   const clock = { now: () => currentTime };
-  const config = {
-    get: (key: string) =>
-      ({ AI_CONFIDENCE_THRESHOLD: 0.9, AI_AUTO_ROUTE_ACCEPT: autoRouteAcceptEnabled ? 'true' : 'false' })[
-        key as 'AI_CONFIDENCE_THRESHOLD' | 'AI_AUTO_ROUTE_ACCEPT'
-      ],
+  // Phase 3.1 §J — AiRoutingService now resolves autoRouteAcceptEnabled from
+  // AiSettingsResolverService (DB-backed) instead of reading AI_AUTO_ROUTE_ACCEPT off ConfigService;
+  // the confidence-threshold re-check this used to also need was removed entirely from
+  // executeAutoAccept() (see that method's own doc comment for why re-deriving against a
+  // now-mutable threshold would be unsafe).
+  const aiSettings = {
+    getSettings: () => Promise.resolve({ autoRouteAcceptEnabled }),
   };
 
   const aiRoutingDecisionUpdateMany = makeUpdateMany(routingDecisions);
@@ -170,7 +172,7 @@ function buildHarness() {
     $transaction,
   };
 
-  const service = new AiRoutingService(prisma as never, audit as never, clock, config as never);
+  const service = new AiRoutingService(prisma as never, audit as never, clock, aiSettings as never);
 
   return {
     service,

@@ -251,6 +251,7 @@ export class OperatorReplyOutboundService {
     // §9 — always the thread's own pinned mailbox; never re-resolved to a different one.
     const configResolution = this.mailConfigResolver.resolvePinned(
       await this.prisma.mailConfiguration.findUnique({ where: { id: row.mailConfigurationId } }),
+      { checkCutover: false },
     );
     if (!configResolution.usable) {
       return { kind: 'defer', reason: `mail_configuration_unusable:${configResolution.reason}` };

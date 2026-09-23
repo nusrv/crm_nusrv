@@ -14,6 +14,7 @@ import {
 import type { Prisma } from '../../generated/prisma/client';
 import { AI_AUDIT_EVENT } from './ai-events.constants';
 import { AiHealthService } from './ai-health.service';
+import { AiSettingsResolverService, type AiRuntimeSettings } from './ai-settings-resolver.service';
 import { buildClassificationInput, MAX_HISTORY_MESSAGES } from './ai-context.util';
 import { decideClassificationTimeRoutingAction } from './ai-routing-eligibility.util';
 import { AiRoutingEnqueueService } from './ai-routing-enqueue.service';
@@ -46,7 +47,13 @@ export type ClassifyMessageOutcome =
 export class AiClassificationService {
   constructor(
     private readonly prisma: PrismaService,
+    // §D — deliberately NOT part of the dynamic AiSettings runtime config: AI_PROVIDER decides which
+    // LlmGateway IMPLEMENTATION is wired into the DI container at boot (mock vs. real — see
+    // llm-provider.module.ts), an infrastructure/deployment-level decision analogous to SMTP_MODE/
+    // IMAP_MODE, never an admin-managed operational setting. Read here only to record which adapter
+    // actually executed this one classification, as evidence metadata.
     private readonly config: ConfigService,
+    private readonly aiSettings: AiSettingsResolverService,
     private readonly audit: AuditService,
     private readonly health: AiHealthService,
     private readonly clock: ClockService,
@@ -59,7 +66,13 @@ export class AiClassificationService {
    * that knows the job's own attempt budget — see ai.worker.ts.
    */
   async classifyMessage(emailMessageId: string, isLastAttempt: boolean): Promise<ClassifyMessageOutcome> {
-    if (this.config.get<string>('AI_ENABLED') !== 'true') {
+    // Phase 3.1 §J — resolved ONCE per attempt, from the persisted AiSettings row, read fresh every
+    // call (never cached across attempts) so a Settings-UI change takes effect on the very next
+    // classification with no restart. The same resolved settings object is threaded through to
+    // persistClassification() below so a single attempt is judged by ONE consistent snapshot of
+    // config, never two different reads racing a concurrent Settings change mid-attempt.
+    const settings = await this.aiSettings.getSettings();
+    if (!settings.enabled) {
       // §10 — no provider call, no classificationStatus change, no fake success, no health flap.
       return 'skipped_disabled';
     }
@@ -101,9 +114,10 @@ export class AiClassificationService {
 
     await this.health.record(HealthStatus.HEALTHY, 'AI provider call succeeded.');
 
-    const threshold = this.config.get<number>('AI_CONFIDENCE_THRESHOLD') ?? 0.9;
     const requiresReview =
-      normalized.confidence < threshold || normalized.requiresHumanReview || normalized.intent === 'UNCLEAR';
+      normalized.confidence < settings.confidenceThreshold ||
+      normalized.requiresHumanReview ||
+      normalized.intent === 'UNCLEAR';
     const finalStatus = requiresReview ? ClassificationStatus.HUMAN_REVIEW : ClassificationStatus.CLASSIFIED;
 
     const persisted = await this.persistClassification(
@@ -113,6 +127,7 @@ export class AiClassificationService {
       message.occurredAt,
       normalized,
       finalStatus,
+      settings,
     );
     if (!persisted) return 'lost_cas'; // §13 — CAS lost; another worker already owns this message.
 
@@ -206,9 +221,13 @@ export class AiClassificationService {
     messageOccurredAt: Date,
     normalized: NormalizedClassificationResult,
     finalStatus: ClassificationStatus,
+    settings: AiRuntimeSettings,
   ): Promise<{ routingDecisionId: string } | null> {
     const provider = this.config.get<string>('AI_PROVIDER') ?? 'mock';
-    const model = provider === 'mock' ? 'mock' : (this.config.get<string>('AI_MODEL') ?? 'unknown');
+    // The mock gateway never reads AiSettings.model at all, so when provider === 'mock' this
+    // evidence field is fixed to 'mock' regardless of whatever model happens to be configured —
+    // exactly mirroring this method's pre-Phase-3.1 behavior for the mock path.
+    const model = provider === 'mock' ? 'mock' : (settings.model ?? 'unknown');
     const now = this.clock.now();
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -269,8 +288,8 @@ export class AiClassificationService {
                 action: decideClassificationTimeRoutingAction({
                   intent: normalized.intent,
                   renewalCaseId,
-                  autoRouteAcceptEnabled: this.config.get<string>('AI_AUTO_ROUTE_ACCEPT') === 'true',
-                  cutoverAt: this.autoRouteAcceptCutoverAt(),
+                  autoRouteAcceptEnabled: settings.autoRouteAcceptEnabled,
+                  cutoverAt: settings.autoRouteAcceptCutoverAt,
                   now,
                   messageCreatedAt,
                   messageOccurredAt,
@@ -283,16 +302,5 @@ export class AiClassificationService {
     });
 
     return result;
-  }
-
-  /** null whenever AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT is unset/unparseable — environment.ts already
-   * requires a valid ISO-8601 value whenever AI_AUTO_ROUTE_ACCEPT=true, so this can only be null
-   * when the switch itself is off, which decideClassificationTimeRoutingAction() already checks
-   * independently. */
-  private autoRouteAcceptCutoverAt(): Date | null {
-    const raw = this.config.get<string>('AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT');
-    if (!raw) return null;
-    const parsed = new Date(raw);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 }

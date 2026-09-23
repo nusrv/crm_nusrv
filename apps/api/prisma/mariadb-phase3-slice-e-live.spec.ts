@@ -134,6 +134,7 @@ liveDescribe('Phase 3 Slice E MariaDB Communication Center integration', () => {
         fromName: 'Slice E',
         environment: IntegrationEnvironment.SANDBOX,
         enabled: true,
+        outboundSendEnabled: true,
       },
     });
     mailConfigurationId = mailConfiguration.id;
@@ -239,7 +240,7 @@ liveDescribe('Phase 3 Slice E MariaDB Communication Center integration', () => {
       prisma as never,
       new AuditService(prisma as never),
       new ClockService(),
-      new MailConfigurationResolverService(prisma as never, fakeConfigService() as never),
+      new MailConfigurationResolverService(prisma as never, fakeConfigService() as never, new ClockService()),
       new CustomerEmailResolutionService(prisma as never),
     );
   }
@@ -250,7 +251,7 @@ liveDescribe('Phase 3 Slice E MariaDB Communication Center integration', () => {
       new AuditService(prisma as never),
       new ClockService(),
       fakeConfigService(configOverrides) as never,
-      new MailConfigurationResolverService(prisma as never, fakeConfigService() as never),
+      new MailConfigurationResolverService(prisma as never, fakeConfigService() as never, new ClockService()),
       new CustomerEmailResolutionService(prisma as never),
       new MailHealthService(prisma as never),
       transport,

@@ -7,8 +7,11 @@ function fakeJob(name: string, data: unknown, attemptsMade: number, attempts: nu
   return { name, data, attemptsMade, opts: { attempts } } as never;
 }
 
+/** Phase 3.1 §J — AiClassificationWorker's recovery scan now resolves `enabled` from
+ * AiSettingsResolverService (DB-backed) rather than ConfigService. This fake keeps every existing
+ * `fakeConfig({ AI_ENABLED: ... })` call site in this file unchanged syntactically. */
 function fakeConfig(values: Record<string, string>) {
-  return { get: (key: string) => values[key] };
+  return { getSettings: () => Promise.resolve({ enabled: values.AI_ENABLED === 'true' }) };
 }
 
 // Slice G — a shared no-op fake; none of the classify-message/recover-pending tests below ever
@@ -99,15 +102,15 @@ describe('AiClassificationWorker', () => {
     const findMany = jest.fn(() => Promise.resolve([{ id: 'msg-stranded-while-disabled' }]));
     const prisma = { emailMessage: { findMany } };
     const configValues: Record<string, string> = { AI_ENABLED: 'false' };
-    const config = { get: (key: string) => configValues[key] };
+    const config = { getSettings: () => Promise.resolve({ enabled: configValues.AI_ENABLED === 'true' }) };
     const worker = new AiClassificationWorker(classification as never, enqueue as never, fakeRouting() as never, prisma as never, config as never);
 
     const disabledResult = await worker.process(fakeJob(AI_RECOVERY_JOB, { trigger: 'scheduled' }, 0, 3));
     expect(disabledResult).toEqual({ scanned: 0 });
     expect(enqueueIfEnabled).not.toHaveBeenCalled();
 
-    // Simulate the application being reconfigured with AI_ENABLED=true (e.g. a restart) and the
-    // next scheduled recovery-scan tick firing.
+    // Simulate the application being reconfigured with AI enabled from Settings (no restart needed —
+    // Phase 3.1 §J) and the next scheduled recovery-scan tick firing.
     configValues.AI_ENABLED = 'true';
     const enabledResult = await worker.process(fakeJob(AI_RECOVERY_JOB, { trigger: 'scheduled' }, 0, 3));
 

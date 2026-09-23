@@ -118,7 +118,13 @@ export class MailInboundIngestService {
     if (this.config.get<string>('IMAP_SYNC_ENABLED') !== 'true') return summary;
 
     const nodeEnv = this.config.get<string>('NODE_ENV') ?? 'development';
-    const enabledConfigs = await this.prisma.mailConfiguration.findMany({ where: { enabled: true } });
+    // Phase 3.1 §D — `inboundSyncEnabled` is the per-mailbox, admin-managed, restart-free
+    // operational toggle (Settings UI); IMAP_SYNC_ENABLED above remains the coarser,
+    // rarely-touched deployment-level gate. Both must currently allow this config, in addition to
+    // the legacy `enabled` flag and the environment guard below.
+    const enabledConfigs = await this.prisma.mailConfiguration.findMany({
+      where: { enabled: true, inboundSyncEnabled: true },
+    });
     const configs = enabledConfigs.filter((row) => isMailConfigEnvironmentAllowed(row.environment, nodeEnv));
 
     for (const mailConfiguration of configs) {
