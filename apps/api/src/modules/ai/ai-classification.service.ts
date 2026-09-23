@@ -2,8 +2,11 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../database/prisma.service';
 import { AuditService } from '../../audit/audit.service';
+import { ClockService } from '../../time/clock.service';
 import {
   ActorType,
+  AiRoutingAction,
+  AiRoutingStatus,
   ClassificationStatus,
   HealthStatus,
   MessageDirection,
@@ -12,6 +15,9 @@ import type { Prisma } from '../../generated/prisma/client';
 import { AI_AUDIT_EVENT } from './ai-events.constants';
 import { AiHealthService } from './ai-health.service';
 import { buildClassificationInput, MAX_HISTORY_MESSAGES } from './ai-context.util';
+import { decideClassificationTimeRoutingAction } from './ai-routing-eligibility.util';
+import { AiRoutingEnqueueService } from './ai-routing-enqueue.service';
+import { AI_ROUTING_RESULT_CODE, AI_ROUTING_VERSION } from './ai-routing.constants';
 import { LLM_GATEWAY, PROMPT_VERSION } from './llm-gateway';
 import type { LlmGateway, NormalizedClassificationResult } from './llm-gateway';
 import { LlmMalformedOutputError, LlmPermanentError, LlmTransientError } from './llm-errors';
@@ -43,6 +49,8 @@ export class AiClassificationService {
     private readonly config: ConfigService,
     private readonly audit: AuditService,
     private readonly health: AiHealthService,
+    private readonly clock: ClockService,
+    private readonly routingEnqueue: AiRoutingEnqueueService,
     @Inject(LLM_GATEWAY) private readonly gateway: LlmGateway,
   ) {}
 
@@ -58,7 +66,17 @@ export class AiClassificationService {
 
     const message = await this.prisma.emailMessage.findUnique({
       where: { id: emailMessageId },
-      select: { id: true, threadId: true, subject: true, bodyText: true, occurredAt: true, direction: true, classificationStatus: true },
+      select: {
+        id: true,
+        threadId: true,
+        subject: true,
+        bodyText: true,
+        occurredAt: true,
+        createdAt: true,
+        direction: true,
+        classificationStatus: true,
+        renewalCaseId: true,
+      },
     });
     // §9 — eligibility is exact: INBOUND + EMAIL channel (EmailMessage.channel is always EMAIL in
     // this schema, so direction+status alone already fully expresses it) + PENDING. Anything else
@@ -88,8 +106,23 @@ export class AiClassificationService {
       normalized.confidence < threshold || normalized.requiresHumanReview || normalized.intent === 'UNCLEAR';
     const finalStatus = requiresReview ? ClassificationStatus.HUMAN_REVIEW : ClassificationStatus.CLASSIFIED;
 
-    const persisted = await this.persistClassification(emailMessageId, normalized, finalStatus);
+    const persisted = await this.persistClassification(
+      emailMessageId,
+      message.renewalCaseId,
+      message.createdAt,
+      message.occurredAt,
+      normalized,
+      finalStatus,
+    );
     if (!persisted) return 'lost_cas'; // §13 — CAS lost; another worker already owns this message.
+
+    // Slice G §5/§8 — enqueue AFTER the classification+routing-decision transaction has already
+    // committed, never before, never inside it. Only PENDING decisions (finalStatus === CLASSIFIED)
+    // need a worker at all — an immediately-completed HUMAN_REVIEW decision (finalStatus ===
+    // HUMAN_REVIEW) has nothing left to enqueue.
+    if (finalStatus === ClassificationStatus.CLASSIFIED && persisted.routingDecisionId) {
+      await this.routingEnqueue.enqueue(persisted.routingDecisionId);
+    }
 
     return finalStatus === ClassificationStatus.CLASSIFIED ? 'classified' : 'human_review';
   }
@@ -159,24 +192,31 @@ export class AiClassificationService {
     });
   }
 
-  /** §13 — the DB transaction is the final concurrency boundary: EmailMessage.classificationStatus
-   * = PENDING is the CAS ownership check, and the AiClassification row is created in the SAME
-   * transaction, so a losing worker's transaction rolls back entirely (no orphan AiClassification —
-   * §28B). Returns false when the CAS was lost. */
+  /** §13/Slice G §5 — the DB transaction is the final concurrency boundary:
+   * EmailMessage.classificationStatus = PENDING is the CAS ownership check, and BOTH the
+   * AiClassification row AND its AiRoutingDecision are created in the SAME transaction, so a losing
+   * worker's transaction rolls back entirely (no orphan AiClassification, and — new in Slice G — no
+   * AiClassification can ever exist without exactly one AiRoutingDecision, and vice versa; see
+   * ai-routing.constants.ts / schema.prisma's AiRoutingDecision doc comment). Returns null when the
+   * CAS was lost. */
   private async persistClassification(
     emailMessageId: string,
+    renewalCaseId: string | null,
+    messageCreatedAt: Date,
+    messageOccurredAt: Date,
     normalized: NormalizedClassificationResult,
     finalStatus: ClassificationStatus,
-  ): Promise<boolean> {
+  ): Promise<{ routingDecisionId: string } | null> {
     const provider = this.config.get<string>('AI_PROVIDER') ?? 'mock';
     const model = provider === 'mock' ? 'mock' : (this.config.get<string>('AI_MODEL') ?? 'unknown');
+    const now = this.clock.now();
 
-    const won = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const cas = await tx.emailMessage.updateMany({
         where: { id: emailMessageId, direction: MessageDirection.INBOUND, classificationStatus: ClassificationStatus.PENDING },
         data: { classificationStatus: finalStatus },
       });
-      if (cas.count !== 1) return false;
+      if (cas.count !== 1) return null;
 
       const classification = await tx.aiClassification.create({
         data: {
@@ -206,9 +246,53 @@ export class AiClassificationService {
         tx,
       );
 
-      return true;
+      // Slice G §6/§7 — the routing-action snapshot. finalStatus === HUMAN_REVIEW means the
+      // classifier itself already decided; the decision is born already-complete (no worker
+      // execution needed — §7). finalStatus === CLASSIFIED snapshots whatever
+      // decideClassificationTimeRoutingAction() computes from RIGHT NOW's config, frozen forever.
+      const routingDecision = await tx.aiRoutingDecision.create({
+        data:
+          finalStatus === ClassificationStatus.HUMAN_REVIEW
+            ? {
+                aiClassificationId: classification.id,
+                renewalCaseId,
+                routingVersion: AI_ROUTING_VERSION,
+                action: AiRoutingAction.HUMAN_REVIEW,
+                status: AiRoutingStatus.SUCCEEDED,
+                resultCode: AI_ROUTING_RESULT_CODE.CLASSIFIER_REQUIRED_HUMAN_REVIEW,
+                completedAt: now,
+              }
+            : {
+                aiClassificationId: classification.id,
+                renewalCaseId,
+                routingVersion: AI_ROUTING_VERSION,
+                action: decideClassificationTimeRoutingAction({
+                  intent: normalized.intent,
+                  renewalCaseId,
+                  autoRouteAcceptEnabled: this.config.get<string>('AI_AUTO_ROUTE_ACCEPT') === 'true',
+                  cutoverAt: this.autoRouteAcceptCutoverAt(),
+                  now,
+                  messageCreatedAt,
+                  messageOccurredAt,
+                }),
+                status: AiRoutingStatus.PENDING,
+              },
+      });
+
+      return { routingDecisionId: routingDecision.id };
     });
 
-    return won;
+    return result;
+  }
+
+  /** null whenever AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT is unset/unparseable — environment.ts already
+   * requires a valid ISO-8601 value whenever AI_AUTO_ROUTE_ACCEPT=true, so this can only be null
+   * when the switch itself is off, which decideClassificationTimeRoutingAction() already checks
+   * independently. */
+  private autoRouteAcceptCutoverAt(): Date | null {
+    const raw = this.config.get<string>('AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT');
+    if (!raw) return null;
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 }

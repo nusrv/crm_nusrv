@@ -8,6 +8,8 @@ import { AiClassificationEnqueueService } from './modules/ai/ai-classification-e
 import { AiClassificationService } from './modules/ai/ai-classification.service';
 import { AiHealthService } from './modules/ai/ai-health.service';
 import { AI_QUEUE } from './modules/ai/ai-queue.constants';
+import { AiRoutingEnqueueService } from './modules/ai/ai-routing-enqueue.service';
+import { AiRoutingService } from './modules/ai/ai-routing.service';
 import { AiClassificationWorker } from './modules/ai/ai.worker';
 import { LlmProviderModule } from './modules/ai/llm-provider.module';
 import { OperatorReplyOutboundService } from './modules/communications/operator-reply-outbound.service';
@@ -112,6 +114,8 @@ import { TimeModule } from './time/time.module';
     AiClassificationEnqueueService,
     AiHealthService,
     AiClassificationService,
+    AiRoutingEnqueueService,
+    AiRoutingService,
     AiClassificationWorker,
     OperatorReplyOutboundService,
     OperatorReplyWorker,

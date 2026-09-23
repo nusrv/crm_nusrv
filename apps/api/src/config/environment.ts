@@ -56,9 +56,22 @@ const environmentSchema = z
     AI_MODEL: z.string().optional(),
     AI_API_KEY: z.string().optional(),
     AI_CONFIDENCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.9),
-    // Preserved for a future slice — Slice D itself never reads this flag to perform a workflow
-    // action; see AiClassificationService's own doc comment.
+    // Phase 3 Slice G — DEPRECATED. This combined switch never performed any business action in any
+    // shipped slice (Slice D never read it). It is kept ONLY as a config-detection field so a
+    // deployment still setting it to 'true' fails validation with a clear message instead of being
+    // silently ignored or silently aliased to the new switch below — see the superRefine rule.
     AI_AUTO_ROUTE_ACCEPT_REJECT: z.enum(['true', 'false']).default('false'),
+    // Phase 3 Slice G — the one real automatic-business-action switch: high-confidence
+    // ACCEPT_RENEWAL -> RenewalCase ACCEPTED. Off by default. Requires AI_ENABLED=true and a valid
+    // AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT whenever enabled (validated below) — the exact
+    // MAIL_SEND_ENABLED/MAIL_SEND_CUTOVER_AT precedent, fail-closed. There is deliberately no
+    // AI_AUTO_ROUTE_REJECT yet — no safe automatic rejection routing exists in this slice.
+    AI_AUTO_ROUTE_ACCEPT: z.enum(['true', 'false']).default('false'),
+    // Required, ISO-8601, whenever AI_AUTO_ROUTE_ACCEPT=true. AiRoutingService only ever considers
+    // an AiClassification eligible for AUTO_ACCEPT if it was created at or after this instant —
+    // historical classifications created before this boundary can never suddenly auto-route just
+    // because the switch was flipped on later.
+    AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT: z.string().optional(),
     FAWTARA_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
     SMTP_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
     PLESK_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
@@ -147,6 +160,36 @@ const environmentSchema = z
         path: ['AI_MODEL'],
         message: 'AI_MODEL and AI_API_KEY are both required whenever AI_ENABLED=true and AI_PROVIDER=openai',
       });
+    }
+    // Phase 3 Slice G — the deprecated combined switch must never silently activate routing, and
+    // must never be silently aliased to the new switch either (it previously performed no business
+    // action, so treating it as equivalent to AI_AUTO_ROUTE_ACCEPT=true would be a behavior change
+    // no deployment ever opted into). Fail closed with an explicit message instead.
+    if (value.AI_AUTO_ROUTE_ACCEPT_REJECT === 'true') {
+      context.addIssue({
+        code: 'custom',
+        path: ['AI_AUTO_ROUTE_ACCEPT_REJECT'],
+        message:
+          'AI_AUTO_ROUTE_ACCEPT_REJECT is deprecated and performs no business action in this version — remove it and set AI_AUTO_ROUTE_ACCEPT explicitly (with AI_ENABLED=true and AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT) if automatic acceptance routing is intended',
+      });
+    }
+    if (value.AI_AUTO_ROUTE_ACCEPT === 'true') {
+      if (value.AI_ENABLED !== 'true') {
+        context.addIssue({
+          code: 'custom',
+          path: ['AI_AUTO_ROUTE_ACCEPT'],
+          message: 'AI_ENABLED must be true whenever AI_AUTO_ROUTE_ACCEPT=true',
+        });
+      }
+      const parsedCutover = value.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT ? Date.parse(value.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT) : NaN;
+      if (!value.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT || Number.isNaN(parsedCutover)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT'],
+          message:
+            'a valid ISO-8601 AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT is required whenever AI_AUTO_ROUTE_ACCEPT=true (fail closed: automatic acceptance routing must never activate without an explicit cutover boundary)',
+        });
+      }
     }
   });
 

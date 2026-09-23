@@ -607,6 +607,7 @@ model RenewalCase {
   evaluationDecisions   RenewalEvaluationDecision[]
   communicationThread   CommunicationThread?
   emailMessages         EmailMessage[]
+  aiRoutingDecisions    AiRoutingDecision[]
 
   @@unique([subscriptionId, dueDate])
   @@index([status, dueDate])
@@ -1154,11 +1155,75 @@ model AiClassification {
   createdAt            DateTime               @default(now()) @map("created_at")
   emailMessage         EmailMessage           @relation(fields: [emailMessageId], references: [id], onDelete: Restrict)
   reviews              ClassificationReview[]
+  routingDecision      AiRoutingDecision?
 
   @@index([emailMessageId])
   @@index([requiresHumanReview])
   @@index([intent])
   @@map("ai_classifications")
+}
+
+// Slice G — the ONE safe automatic business action this application performs on the AI's behalf,
+// and the durable exactly-once boundary for it. AiClassification itself remains immutable evidence
+// (never updated after creation, per its own doc comment above) — this is deliberately a SEPARATE,
+// mutable "routing work" record, never a column bolted onto AiClassification.
+//
+// `aiClassificationId @unique` (not a composite key with routingVersion) is the frozen owner
+// decision: there is EXACTLY ONE durable routing decision per AiClassification, ever. This is what
+// makes routingVersion pure evidence/reproducibility metadata rather than part of the correctness
+// boundary — bumping AI_ROUTING_VERSION in the future can never cause a classification that already
+// has a decision row to be re-evaluated or re-created; it only labels which rule-set produced NEW
+// decisions going forward. A historical AiClassification created before Slice G existed has no row
+// here at all and can never acquire one automatically (see AiRoutingService's recovery scan, which
+// only ever scans THIS table, never AiClassification, for exactly this reason).
+enum AiRoutingAction {
+  AUTO_ACCEPT
+  HUMAN_REVIEW
+}
+
+enum AiRoutingStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  SKIPPED
+  FAILED
+}
+
+model AiRoutingDecision {
+  id                 String            @id @default(uuid()) @db.VarChar(36)
+  aiClassificationId String            @unique @map("ai_classification_id") @db.VarChar(36)
+  // Nullable, evidence/context only — never the correctness boundary for anything. SetNull (not
+  // Restrict, not Cascade) mirrors EmailMessage.renewalCaseId's own established precedent exactly:
+  // deleting a (terminal-status) RenewalCase must never delete the routing evidence of what the AI
+  // decided about it, but this table also must never block a legitimate RenewalCase deletion.
+  renewalCaseId      String?           @map("renewal_case_id") @db.VarChar(36)
+  // Evidence/reproducibility metadata only (see the model's own doc comment above) — NEVER part of
+  // the uniqueness/correctness boundary.
+  routingVersion     String            @map("routing_version") @db.VarChar(50)
+  // Frozen at classification time (Slice G §6) — never reinterpreted by a later config change.
+  action             AiRoutingAction
+  status             AiRoutingStatus   @default(PENDING)
+  // Free-text safe reason/outcome code (e.g. "AUTO_ACCEPTED", "SKIPPED_ALREADY_ACCEPTED") — never a
+  // stack trace, never raw error text, mirroring OperatorReplyOutbox.lastError's own safety
+  // discipline.
+  resultCode         String?           @map("result_code") @db.VarChar(191)
+  // Claim/lease bookkeeping — same discipline as OperatorReplyOutbox/CommunicationOutbox: attempts
+  // increments only on a genuine claim, lastAttemptAt is the exact lease token every subsequent
+  // guarded write must re-check.
+  attempts           Int               @default(0)
+  lastAttemptAt      DateTime?         @map("last_attempt_at")
+  completedAt        DateTime?         @map("completed_at")
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+  aiClassification   AiClassification  @relation(fields: [aiClassificationId], references: [id], onDelete: Restrict)
+  renewalCase        RenewalCase?      @relation(fields: [renewalCaseId], references: [id], onDelete: SetNull)
+
+  // Serves the recovery scanner's PENDING scan and its stale-PROCESSING reclaim scan respectively —
+  // see AiRoutingService.processBatch()'s two-branch WHERE clause.
+  @@index([status, createdAt])
+  @@index([status, lastAttemptAt])
+  @@index([renewalCaseId])
+  @@map("ai_routing_decisions")
 }
 
 // Separate, human-authored, append-only review evidence — never a mutation of AiClassification.

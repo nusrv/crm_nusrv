@@ -2,7 +2,14 @@ import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { AI_RECOVERY_SCAN_INTERVAL_MS } from './ai-timing.constants';
-import { AI_QUEUE, AI_RECOVERY_JOB, AI_RECOVERY_SCHEDULER } from './ai-queue.constants';
+import { AI_ROUTING_RECOVERY_SCAN_INTERVAL_MS } from './ai-routing.constants';
+import {
+  AI_QUEUE,
+  AI_RECOVERY_JOB,
+  AI_RECOVERY_SCHEDULER,
+  AI_ROUTING_RECOVERY_JOB,
+  AI_ROUTING_RECOVERY_SCHEDULER,
+} from './ai-queue.constants';
 
 export interface RecoverPendingJobData {
   trigger: 'scheduled';
@@ -31,6 +38,14 @@ export class AiQueueService implements OnModuleInit {
       AI_RECOVERY_SCHEDULER,
       { every: AI_RECOVERY_SCAN_INTERVAL_MS },
       { name: AI_RECOVERY_JOB, data: { trigger: 'scheduled' } },
+    );
+    // Slice G §20 — the routing recovery scan. Scans ONLY AiRoutingDecision rows (PENDING / stale
+    // PROCESSING) — see AiRoutingService.processBatch()'s own doc comment for why this can never
+    // discover or auto-route a historical AiClassification.
+    await this.queue.upsertJobScheduler(
+      AI_ROUTING_RECOVERY_SCHEDULER,
+      { every: AI_ROUTING_RECOVERY_SCAN_INTERVAL_MS },
+      { name: AI_ROUTING_RECOVERY_JOB, data: { trigger: 'scheduled' } },
     );
   }
 }

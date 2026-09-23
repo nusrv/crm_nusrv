@@ -11,12 +11,17 @@ interface FakeMessageRow {
   subject: string;
   bodyText: string;
   occurredAt: Date;
+  /** Optional — defaults to occurredAt when omitted (existing test literals never set this
+   * explicitly; only the dedicated cutover-hardening tests below override it). */
+  createdAt?: Date;
+  /** Optional — defaults to null (no linked case) when omitted. */
+  renewalCaseId?: string | null;
   direction: MessageDirection;
   classificationStatus: ClassificationStatus | null;
 }
 
 function fakePrisma(messages: FakeMessageRow[]) {
-  const rows = new Map(messages.map((m) => [m.id, { ...m }]));
+  const rows = new Map(messages.map((m) => [m.id, { createdAt: m.occurredAt, renewalCaseId: null, ...m }]));
   const classifications: Record<string, unknown>[] = [];
 
   const findUnique = jest.fn(({ where }: { where: { id: string } }) => {
@@ -54,11 +59,22 @@ function fakePrisma(messages: FakeMessageRow[]) {
     return Promise.resolve(created);
   });
 
-  const tx = { emailMessage: { updateMany }, aiClassification: { create: aiClassificationCreate } };
+  const routingDecisions: Record<string, unknown>[] = [];
+  const aiRoutingDecisionCreate = jest.fn((args: { data: Record<string, unknown> }) => {
+    const created = { id: `route-${routingDecisions.length + 1}`, createdAt: new Date(), updatedAt: new Date(), ...args.data };
+    routingDecisions.push(created);
+    return Promise.resolve(created);
+  });
+
+  const tx = {
+    emailMessage: { updateMany },
+    aiClassification: { create: aiClassificationCreate },
+    aiRoutingDecision: { create: aiRoutingDecisionCreate },
+  };
   const $transaction = jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(tx)));
 
   const prisma = { emailMessage: { findUnique, findMany, updateMany }, $transaction };
-  return { prisma, rows, classifications, findUnique, findMany, updateMany, aiClassificationCreate };
+  return { prisma, rows, classifications, routingDecisions, findUnique, findMany, updateMany, aiClassificationCreate, aiRoutingDecisionCreate };
 }
 
 function harness(options: {
@@ -66,9 +82,8 @@ function harness(options: {
   configValues?: Record<string, string>;
   classifyIntentImpl: (input: unknown) => Promise<unknown>;
 }) {
-  const { prisma, rows, classifications, findUnique, findMany, updateMany, aiClassificationCreate } = fakePrisma(
-    options.messages,
-  );
+  const { prisma, rows, classifications, routingDecisions, findUnique, findMany, updateMany, aiClassificationCreate, aiRoutingDecisionCreate } =
+    fakePrisma(options.messages);
   const config = {
     get: (key: string) => {
       const values: Record<string, unknown> = {
@@ -91,11 +106,36 @@ function harness(options: {
     return Promise.resolve();
   });
   const health = { record: healthRecord };
+  const clock = { now: () => new Date('2026-01-15T00:00:00.000Z') };
+  const routingEnqueueFn = jest.fn(() => Promise.resolve());
+  const routingEnqueue = { enqueue: routingEnqueueFn };
   const gateway = { classifyIntent: jest.fn(options.classifyIntentImpl) };
 
-  const service = new AiClassificationService(prisma as never, config as never, audit as never, health as never, gateway as never);
+  const service = new AiClassificationService(
+    prisma as never,
+    config as never,
+    audit as never,
+    health as never,
+    clock,
+    routingEnqueue as never,
+    gateway as never,
+  );
 
-  return { service, rows, classifications, findUnique, findMany, updateMany, aiClassificationCreate, auditRecord, healthRecord, gateway };
+  return {
+    service,
+    rows,
+    classifications,
+    routingDecisions,
+    findUnique,
+    findMany,
+    updateMany,
+    aiClassificationCreate,
+    aiRoutingDecisionCreate,
+    auditRecord,
+    healthRecord,
+    gateway,
+    routingEnqueueFn,
+  };
 }
 
 const baseMessage: FakeMessageRow = {
@@ -331,5 +371,51 @@ describe('AiClassificationService', () => {
     );
     const passedInput = gateway.classifyIntent.mock.calls[0]![0] as { priorMessages: unknown[] };
     expect(passedInput.priorMessages).toHaveLength(4);
+  });
+
+  describe('contract-audit hardening §1 — cutover must also protect historical PENDING mail', () => {
+    const CUTOVER = '2026-01-15T00:00:00.000Z';
+    const configValues = {
+      AI_AUTO_ROUTE_ACCEPT: 'true',
+      AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT: CUTOVER,
+    };
+
+    it('a historical message (createdAt/occurredAt BEFORE cutover) classified AFTER cutover never gets AUTO_ACCEPT, even with a valid ACCEPT_RENEWAL classification', async () => {
+      const historicalMessage = {
+        ...baseMessage,
+        occurredAt: new Date('2026-01-10T00:00:00.000Z'),
+        createdAt: new Date('2026-01-10T00:00:00.000Z'),
+        renewalCaseId: 'case-1',
+      };
+      const { service, routingDecisions } = harness({
+        messages: [historicalMessage],
+        configValues,
+        classifyIntentImpl: () => Promise.resolve(validResult()),
+      });
+
+      await service.classifyMessage('msg-1', false);
+
+      expect(routingDecisions).toHaveLength(1);
+      expect(routingDecisions[0]!.action).toBe('HUMAN_REVIEW');
+    });
+
+    it('a message ingested and occurring AFTER cutover, classified AFTER cutover, with a linked case: AUTO_ACCEPT', async () => {
+      const freshMessage = {
+        ...baseMessage,
+        occurredAt: new Date('2026-01-20T00:00:00.000Z'),
+        createdAt: new Date('2026-01-20T00:00:00.000Z'),
+        renewalCaseId: 'case-1',
+      };
+      const { service, routingDecisions } = harness({
+        messages: [freshMessage],
+        configValues,
+        classifyIntentImpl: () => Promise.resolve(validResult()),
+      });
+
+      await service.classifyMessage('msg-1', false);
+
+      expect(routingDecisions).toHaveLength(1);
+      expect(routingDecisions[0]!.action).toBe('AUTO_ACCEPT');
+    });
   });
 });

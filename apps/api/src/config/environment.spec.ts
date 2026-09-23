@@ -288,10 +288,60 @@ describe('environment validation', () => {
     expect(validateEnvironment({ ...valid, AI_CONFIDENCE_THRESHOLD: '1' }).AI_CONFIDENCE_THRESHOLD).toBe(1);
   });
 
-  it('§34 — AI_AUTO_ROUTE_ACCEPT_REJECT=true is accepted as plain config (Slice D never consumes it for actions)', () => {
-    expect(
-      validateEnvironment({ ...valid, AI_AUTO_ROUTE_ACCEPT_REJECT: 'true' }),
-    ).toMatchObject({ AI_AUTO_ROUTE_ACCEPT_REJECT: 'true' });
+  it('Slice G — AI_AUTO_ROUTE_ACCEPT_REJECT=true now fails validation: the deprecated combined switch must never silently activate routing', () => {
+    expect(() => validateEnvironment({ ...valid, AI_AUTO_ROUTE_ACCEPT_REJECT: 'true' })).toThrow(
+      'AI_AUTO_ROUTE_ACCEPT_REJECT is deprecated',
+    );
+  });
+
+  it('Slice G — AI_AUTO_ROUTE_ACCEPT_REJECT=false (the default) remains valid plain config', () => {
+    expect(validateEnvironment({ ...valid, AI_AUTO_ROUTE_ACCEPT_REJECT: 'false' })).toMatchObject({
+      AI_AUTO_ROUTE_ACCEPT_REJECT: 'false',
+    });
+  });
+
+  it('Slice G — defaults AI_AUTO_ROUTE_ACCEPT=false with no cutover required', () => {
+    const result = validateEnvironment(valid);
+    expect(result.AI_AUTO_ROUTE_ACCEPT).toBe('false');
+  });
+
+  it('Slice G §2/25.B — AI_AUTO_ROUTE_ACCEPT=true without a cutover fails validation', () => {
+    expect(() =>
+      validateEnvironment({ ...valid, AI_ENABLED: 'true', AI_AUTO_ROUTE_ACCEPT: 'true' }),
+    ).toThrow('AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT');
+  });
+
+  it('Slice G — AI_AUTO_ROUTE_ACCEPT=true with a malformed (non-ISO) cutover fails validation', () => {
+    expect(() =>
+      validateEnvironment({
+        ...valid,
+        AI_ENABLED: 'true',
+        AI_AUTO_ROUTE_ACCEPT: 'true',
+        AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT: 'not-a-date',
+      }),
+    ).toThrow('AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT');
+  });
+
+  it('Slice G — AI_AUTO_ROUTE_ACCEPT=true requires AI_ENABLED=true', () => {
+    expect(() =>
+      validateEnvironment({
+        ...valid,
+        AI_ENABLED: 'false',
+        AI_AUTO_ROUTE_ACCEPT: 'true',
+        AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
+      }),
+    ).toThrow('AI_ENABLED must be true');
+  });
+
+  it('Slice G — AI_AUTO_ROUTE_ACCEPT=true with AI_ENABLED=true and a valid ISO cutover succeeds', () => {
+    const result = validateEnvironment({
+      ...valid,
+      AI_ENABLED: 'true',
+      AI_AUTO_ROUTE_ACCEPT: 'true',
+      AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
+    });
+    expect(result.AI_AUTO_ROUTE_ACCEPT).toBe('true');
+    expect(result.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT).toBe('2026-01-01T00:00:00.000Z');
   });
 
   it('§34 — rejects an AI_PROVIDER outside the mock/openai enum', () => {

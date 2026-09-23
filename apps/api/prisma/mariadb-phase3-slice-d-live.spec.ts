@@ -25,7 +25,17 @@ import { ClassificationReviewService } from '../src/modules/ai/classification-re
 import { EffectiveClassificationService } from '../src/modules/ai/effective-classification.service';
 import { RESULT_SCHEMA_VERSION } from '../src/modules/ai/llm-gateway';
 import type { LlmGateway, NormalizedClassificationResult } from '../src/modules/ai/llm-gateway';
+import { ClockService } from '../src/time/clock.service';
 import { readAllMigrationsSql } from './read-all-migrations';
+
+// Slice G — this live spec exercises Slice D classification correctness only; routing is a
+// separate concern with its own live spec. A no-op stand-in is sufficient here.
+function fakeRoutingEnqueue() {
+  return { enqueue: () => Promise.resolve() };
+}
+function fakeRoutingWorkerService() {
+  return { processOne: () => Promise.resolve('succeeded'), processBatch: () => Promise.resolve({}) };
+}
 
 // Live-DB verification (Slice D §28) of invariants a hand-rolled Prisma fake cannot actually prove:
 // real CAS enforcement of the PENDING ownership boundary under genuine concurrency (no orphan
@@ -154,6 +164,11 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
     // audit_events is intentionally NOT cleared — append-only (see Slice C live spec for the same
     // established rationale); rows accumulate for the life of this suite.
     await prisma.classificationReview.deleteMany({});
+    // Slice G — AiRoutingDecision.aiClassificationId is onDelete: Restrict; every classification
+    // created via persistClassification() now atomically creates exactly one routing decision, so
+    // it must be deleted before its parent AiClassification row or this cleanup fails with an FK
+    // constraint violation.
+    await prisma.aiRoutingDecision.deleteMany({});
     await prisma.aiClassification.deleteMany({});
     await prisma.emailMessage.deleteMany({});
     await prisma.communicationThread.deleteMany({});
@@ -277,6 +292,8 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
       fakeConfigService(configOverrides) as never,
       new AuditService(prisma as never),
       new AiHealthService(prisma as never),
+      new ClockService(),
+      fakeRoutingEnqueue() as never,
       gateway,
     );
   }
@@ -604,6 +621,7 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
     const disabledWorker = new AiClassificationWorker(
       buildClassificationService(() => Promise.resolve(validResult())),
       fakeEnqueue as never,
+      fakeRoutingWorkerService() as never,
       prisma as never,
       fakeConfigService({ AI_ENABLED: 'false' }) as never,
     );
@@ -623,6 +641,7 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
     const enabledWorker = new AiClassificationWorker(
       buildClassificationService(() => Promise.resolve(validResult())),
       fakeEnqueue as never,
+      fakeRoutingWorkerService() as never,
       prisma as never,
       fakeConfigService({ AI_ENABLED: 'true' }) as never,
     );

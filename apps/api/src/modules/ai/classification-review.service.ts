@@ -49,6 +49,20 @@ export class ClassificationReviewService {
     };
 
     return this.prisma.$transaction(async (tx) => {
+      // Slice G §10 — moved to be the FIRST write in this transaction, deliberately: this is one
+      // side of the closed AI-routing/human-review race. AiRoutingService's own AUTO_ACCEPT
+      // transaction touches this SAME EmailMessage row as ITS first write too (a guarded, same-value
+      // CAS "touch") — whichever transaction's write to this row commits first genuinely wins the
+      // InnoDB row lock, and the loser's own CAS/guard naturally observes the new state and aborts
+      // cleanly. See AiRoutingService's own doc comment for the other side of this race. Still
+      // unconditional (not CAS-guarded by a prior-status check) — a human append always ends the
+      // message at RESOLVED regardless of its prior classificationStatus, and a second review simply
+      // keeps it RESOLVED.
+      await tx.emailMessage.update({
+        where: { id: input.emailMessageId },
+        data: { classificationStatus: ClassificationStatus.RESOLVED },
+      });
+
       const review = await tx.classificationReview.create({
         data: {
           aiClassificationId: input.aiClassificationId,
@@ -59,14 +73,6 @@ export class ClassificationReviewService {
           // §20 — resultingAction is never populated in Slice D; a review never triggers execution.
           resultingAction: null,
         },
-      });
-
-      // §21 — classification-review-resolved only. Never touches RenewalCase/Thread/Subscription.
-      // Unconditional (not CAS-guarded): a human append always ends the message at RESOLVED
-      // regardless of its prior classificationStatus, and a second review simply keeps it RESOLVED.
-      await tx.emailMessage.update({
-        where: { id: input.emailMessageId },
-        data: { classificationStatus: ClassificationStatus.RESOLVED },
       });
 
       await this.audit.record(

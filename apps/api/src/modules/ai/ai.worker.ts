@@ -6,11 +6,17 @@ import { ClassificationStatus, MessageDirection } from '../../generated/prisma/e
 import { AiClassificationEnqueueService } from './ai-classification-enqueue.service';
 import type { ClassifyMessageJobData } from './ai-classification-enqueue.service';
 import { AiClassificationService } from './ai-classification.service';
+import { AiRoutingService } from './ai-routing.service';
+import type { RouteClassificationJobData } from './ai-routing-enqueue.service';
 import { AI_RECOVERY_SCAN_BATCH_SIZE } from './ai-timing.constants';
-import { AI_CLASSIFY_JOB, AI_QUEUE, AI_RECOVERY_JOB } from './ai-queue.constants';
+import { AI_CLASSIFY_JOB, AI_QUEUE, AI_RECOVERY_JOB, AI_ROUTE_JOB, AI_ROUTING_RECOVERY_JOB } from './ai-queue.constants';
 import type { RecoverPendingJobData } from './ai-queue.service';
 
-type AiJobData = ClassifyMessageJobData | RecoverPendingJobData;
+interface RecoverPendingRoutingJobData {
+  trigger: 'scheduled';
+}
+
+type AiJobData = ClassifyMessageJobData | RecoverPendingJobData | RouteClassificationJobData | RecoverPendingRoutingJobData;
 
 /**
  * Slice D §11 — the dedicated AI-classification worker; the only place either job type actually
@@ -23,6 +29,7 @@ export class AiClassificationWorker extends WorkerHost {
   constructor(
     private readonly classification: AiClassificationService,
     private readonly enqueue: AiClassificationEnqueueService,
+    private readonly routing: AiRoutingService,
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
   ) {
@@ -37,6 +44,14 @@ export class AiClassificationWorker extends WorkerHost {
     }
     if (job.name === AI_RECOVERY_JOB) {
       return this.runRecoveryScan();
+    }
+    // Slice G §8 — routing shares this same queue/worker, distinct job names only.
+    if (job.name === AI_ROUTE_JOB) {
+      const data = job.data as RouteClassificationJobData;
+      return this.routing.processOne(data.routingDecisionId);
+    }
+    if (job.name === AI_ROUTING_RECOVERY_JOB) {
+      return this.routing.processBatch();
     }
     throw new Error(`Unsupported AI job: ${job.name}.`);
   }

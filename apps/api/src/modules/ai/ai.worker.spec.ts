@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
 import { ClassificationStatus, MessageDirection } from '../../generated/prisma/enums';
 import { AiClassificationWorker } from './ai.worker';
-import { AI_CLASSIFY_JOB, AI_RECOVERY_JOB } from './ai-queue.constants';
+import { AI_CLASSIFY_JOB, AI_RECOVERY_JOB, AI_ROUTE_JOB, AI_ROUTING_RECOVERY_JOB } from './ai-queue.constants';
 
 function fakeJob(name: string, data: unknown, attemptsMade: number, attempts: number) {
   return { name, data, attemptsMade, opts: { attempts } } as never;
@@ -11,13 +11,19 @@ function fakeConfig(values: Record<string, string>) {
   return { get: (key: string) => values[key] };
 }
 
+// Slice G — a shared no-op fake; none of the classify-message/recover-pending tests below ever
+// invoke routing methods, so one harmless stand-in suffices for every such constructor call.
+function fakeRouting() {
+  return { processOne: jest.fn(), processBatch: jest.fn() };
+}
+
 describe('AiClassificationWorker', () => {
   it('dispatches a classify-message job to AiClassificationService with isLastAttempt=false on an early attempt', async () => {
     const classifyMessage = jest.fn(() => Promise.resolve('classified'));
     const classification = { classifyMessage };
     const enqueue = { enqueueIfEnabled: jest.fn() };
     const prisma = { emailMessage: { findMany: jest.fn() } };
-    const worker = new AiClassificationWorker(classification as never, enqueue as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
+    const worker = new AiClassificationWorker(classification as never, enqueue as never, fakeRouting() as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
 
     await worker.process(fakeJob(AI_CLASSIFY_JOB, { emailMessageId: 'msg-1' }, 0, 3));
 
@@ -29,7 +35,7 @@ describe('AiClassificationWorker', () => {
     const classification = { classifyMessage };
     const enqueue = { enqueueIfEnabled: jest.fn() };
     const prisma = { emailMessage: { findMany: jest.fn() } };
-    const worker = new AiClassificationWorker(classification as never, enqueue as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
+    const worker = new AiClassificationWorker(classification as never, enqueue as never, fakeRouting() as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
 
     await worker.process(fakeJob(AI_CLASSIFY_JOB, { emailMessageId: 'msg-1' }, 2, 3));
 
@@ -44,7 +50,7 @@ describe('AiClassificationWorker', () => {
     const classification = { classifyMessage };
     const enqueue = { enqueueIfEnabled: jest.fn() };
     const prisma = { emailMessage: { findMany: jest.fn() } };
-    const worker = new AiClassificationWorker(classification as never, enqueue as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
+    const worker = new AiClassificationWorker(classification as never, enqueue as never, fakeRouting() as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
 
     const outcome = await worker.process(fakeJob(AI_CLASSIFY_JOB, { emailMessageId: 'msg-1' }, 0, 3));
 
@@ -62,7 +68,7 @@ describe('AiClassificationWorker', () => {
       return Promise.resolve([{ id: 'msg-1' }, { id: 'msg-2' }]);
     });
     const prisma = { emailMessage: { findMany } };
-    const worker = new AiClassificationWorker(classification as never, enqueue as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
+    const worker = new AiClassificationWorker(classification as never, enqueue as never, fakeRouting() as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
 
     const result = await worker.process(fakeJob(AI_RECOVERY_JOB, { trigger: 'scheduled' }, 0, 3));
 
@@ -77,7 +83,7 @@ describe('AiClassificationWorker', () => {
     const enqueue = { enqueueIfEnabled };
     const findMany = jest.fn(() => Promise.resolve([{ id: 'msg-1' }]));
     const prisma = { emailMessage: { findMany } };
-    const worker = new AiClassificationWorker(classification as never, enqueue as never, prisma as never, fakeConfig({ AI_ENABLED: 'false' }) as never);
+    const worker = new AiClassificationWorker(classification as never, enqueue as never, fakeRouting() as never, prisma as never, fakeConfig({ AI_ENABLED: 'false' }) as never);
 
     const result = await worker.process(fakeJob(AI_RECOVERY_JOB, { trigger: 'scheduled' }, 0, 3));
 
@@ -94,7 +100,7 @@ describe('AiClassificationWorker', () => {
     const prisma = { emailMessage: { findMany } };
     const configValues: Record<string, string> = { AI_ENABLED: 'false' };
     const config = { get: (key: string) => configValues[key] };
-    const worker = new AiClassificationWorker(classification as never, enqueue as never, prisma as never, config as never);
+    const worker = new AiClassificationWorker(classification as never, enqueue as never, fakeRouting() as never, prisma as never, config as never);
 
     const disabledResult = await worker.process(fakeJob(AI_RECOVERY_JOB, { trigger: 'scheduled' }, 0, 3));
     expect(disabledResult).toEqual({ scanned: 0 });
@@ -109,11 +115,39 @@ describe('AiClassificationWorker', () => {
     expect(enqueueIfEnabled).toHaveBeenCalledWith('msg-stranded-while-disabled');
   });
 
+  it('Slice G §8 — dispatches a route-classification job to AiRoutingService.processOne with the decision id', async () => {
+    const classification = { classifyMessage: jest.fn() };
+    const enqueue = { enqueueIfEnabled: jest.fn() };
+    const prisma = { emailMessage: { findMany: jest.fn() } };
+    const processOne = jest.fn(() => Promise.resolve('succeeded'));
+    const routing = { processOne, processBatch: jest.fn() };
+    const worker = new AiClassificationWorker(classification as never, enqueue as never, routing as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
+
+    const outcome = await worker.process(fakeJob(AI_ROUTE_JOB, { routingDecisionId: 'decision-1' }, 0, 3));
+
+    expect(processOne).toHaveBeenCalledWith('decision-1');
+    expect(outcome).toBe('succeeded');
+  });
+
+  it('Slice G §20 — dispatches a recover-pending-routing job to AiRoutingService.processBatch', async () => {
+    const classification = { classifyMessage: jest.fn() };
+    const enqueue = { enqueueIfEnabled: jest.fn() };
+    const prisma = { emailMessage: { findMany: jest.fn() } };
+    const processBatch = jest.fn(() => Promise.resolve({ candidates: 1, succeeded: 1, skipped: 0, failed: 0, notClaimed: 0, conflicts: 0 }));
+    const routing = { processOne: jest.fn(), processBatch };
+    const worker = new AiClassificationWorker(classification as never, enqueue as never, routing as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
+
+    const outcome = await worker.process(fakeJob(AI_ROUTING_RECOVERY_JOB, { trigger: 'scheduled' }, 0, 3));
+
+    expect(processBatch).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({ candidates: 1, succeeded: 1, skipped: 0, failed: 0, notClaimed: 0, conflicts: 0 });
+  });
+
   it('rejects an unsupported job name', async () => {
     const classification = { classifyMessage: jest.fn() };
     const enqueue = { enqueueIfEnabled: jest.fn() };
     const prisma = { emailMessage: { findMany: jest.fn() } };
-    const worker = new AiClassificationWorker(classification as never, enqueue as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
+    const worker = new AiClassificationWorker(classification as never, enqueue as never, fakeRouting() as never, prisma as never, fakeConfig({ AI_ENABLED: 'true' }) as never);
 
     await expect(worker.process(fakeJob('unknown-job', {}, 0, 3))).rejects.toThrow('Unsupported AI job');
   });

@@ -16,7 +16,7 @@ import {
   RenewalCaseListQueryDto,
   RenewalHoldFilter,
 } from './renewal-cases.dto';
-import { assertLegalRenewalCaseTransition } from './renewal-transition-policy';
+import { applyRenewalCaseTransition, assertLegalRenewalCaseTransition } from './renewal-transition-policy';
 
 // Resolved/dead-end states: a case here is no longer "in flight", so manual workflow actions
 // (mark awaiting customer / accepted / do-not-renew / fulfilled) refuse to fire from any of them,
@@ -316,39 +316,23 @@ export class RenewalCasesService {
     assertLegalRenewalCaseTransition(current.status, status);
 
     return this.prisma.$transaction(async (tx) => {
-      // Compare-and-swap: the WHERE clause re-checks status at the moment of the write, not at the
-      // moment of the read above. If another request already moved this case away from
-      // `current.status` since we read it, this affects 0 rows and we report a clear conflict
-      // instead of silently overwriting whatever the other request just wrote (last-write-wins).
-      const result = await tx.renewalCase.updateMany({
-        where: { id, status: current.status },
-        data: { status, ...extraData },
+      // Slice G §L — this shared primitive owns the actual CAS write, the re-fetch, and the audit
+      // record; see its own doc comment (renewal-transition-policy.ts) for why it was extracted
+      // (AiRoutingService's AI-actor auto-accept transition reuses the exact same function).
+      const result = await applyRenewalCaseTransition(tx, this.audit, {
+        id,
+        currentRow: current,
+        toStatus: status,
+        extraData,
+        eventKey,
+        actor: { actorType: ActorType.USER, actorId: context.actorId, ipAddress: context.ipAddress },
       });
-      if (result.count === 0) {
-        const latest = await tx.renewalCase.findUnique({ where: { id } });
+      if (result.kind === 'cas_lost') {
         throw new ConflictException(
-          `Renewal Case status changed concurrently (now ${latest?.status ?? 'unknown'}); the requested transition to ${status} was not applied. Reload and try again.`,
+          `Renewal Case status changed concurrently (now ${result.currentStatus}); the requested transition to ${status} was not applied. Reload and try again.`,
         );
       }
-      // Re-fetch to get the row as it now stands for the response/audit `newState` — updateMany
-      // does not return the updated row itself. Since the CAS above only succeeds when the row's
-      // status still matched `current.status` at write time, `current` is guaranteed accurate as
-      // the audited `oldState` for this specific successful transition, not a stale pre-race value.
-      const renewalCase = await tx.renewalCase.findUniqueOrThrow({ where: { id } });
-      await this.audit.record(
-        {
-          actorType: ActorType.USER,
-          actorId: context.actorId,
-          eventKey,
-          subjectType: 'RenewalCase',
-          subjectId: id,
-          oldState: current,
-          newState: renewalCase,
-          ipAddress: context.ipAddress,
-        },
-        tx,
-      );
-      return renewalCase;
+      return result.renewalCase;
     });
   }
 }
