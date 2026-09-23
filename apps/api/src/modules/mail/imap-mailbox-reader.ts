@@ -4,6 +4,8 @@ import { simpleParser } from 'mailparser';
 import type { AddressObject, HeaderValue } from 'mailparser';
 import type { MailConfiguration } from '../../generated/prisma/client';
 import type { ImapCredentials } from './imap-credentials';
+import { isMicrosoftOAuth2Credentials } from './microsoft-oauth-credentials';
+import { MicrosoftOAuthTokenProvider } from './microsoft-oauth-token-provider';
 import {
   IMAP_CONNECTION_TIMEOUT_MS,
   IMAP_GREETING_TIMEOUT_MS,
@@ -57,6 +59,12 @@ const EMPTY_MESSAGE: Omit<FetchedMailboxMessage, 'uid' | 'internalDate'> = {
  * One reader instance is scoped to one MailConfiguration for the lifetime of one sync attempt —
  * MailInboundIngestService constructs a fresh instance per config per scheduled run rather than
  * pooling/reusing connections across configs or across runs.
+ *
+ * Supports two decrypted-credential shapes (see imap-credentials.ts): BASIC (unchanged — a plain
+ * password) and MICROSOFT_OAUTH2 (a Microsoft Entra app-only access token resolved via
+ * MicrosoftOAuthTokenProvider immediately before connecting, never a password). Every existing
+ * BASIC-configured MailConfiguration keeps behaving exactly as before this feature was added; all
+ * UIDVALIDITY/cursor/bounded-fetch/MIME-parsing behavior above is unaffected by auth mode.
  */
 export class ImapMailboxReader implements MailboxReader {
   private client: ImapFlow | undefined;
@@ -73,6 +81,12 @@ export class ImapMailboxReader implements MailboxReader {
   constructor(
     private readonly config: MailConfiguration,
     private readonly encryption: SecretEncryptionService,
+    // Defaulted purely so every pre-existing BASIC-only test construction site
+    // (`new ImapMailboxReader(config, encryption)`) keeps compiling unchanged; those tests never
+    // reach a MICROSOFT_OAUTH2 credential, so this default instance's real fetch is never invoked.
+    // ImapMailboxReaderFactory (the real, NestJS-injected production caller) always passes an
+    // explicit, shared instance instead — see that class.
+    private readonly oauthTokenProvider: MicrosoftOAuthTokenProvider = new MicrosoftOAuthTokenProvider(),
   ) {}
 
   async getMailboxState(folder: string): Promise<MailboxSyncState> {
@@ -157,14 +171,15 @@ export class ImapMailboxReader implements MailboxReader {
 
   private async ensureConnected(): Promise<ImapFlow> {
     if (this.client) return this.client;
-    const password = this.config.imapCredentialsCiphertext
-      ? this.encryption.decrypt<ImapCredentials>(this.config.imapCredentialsCiphertext).password
+    const credentials = this.config.imapCredentialsCiphertext
+      ? this.encryption.decrypt<ImapCredentials>(this.config.imapCredentialsCiphertext)
       : undefined;
+    const auth = await this.resolveAuth(credentials);
     const client = this.clientFactory({
       host: this.config.imapHost,
       port: this.config.imapPort,
       secure: this.config.imapSecure,
-      auth: password ? { user: this.config.imapUsername, pass: password } : undefined,
+      auth,
       logger: false,
       connectionTimeout: IMAP_CONNECTION_TIMEOUT_MS,
       greetingTimeout: IMAP_GREETING_TIMEOUT_MS,
@@ -173,6 +188,21 @@ export class ImapMailboxReader implements MailboxReader {
     await client.connect();
     this.client = client;
     return client;
+  }
+
+  /** MICROSOFT_OAUTH2 credentials never reach ImapFlow as a password — only a freshly resolved
+   * access token, via ImapFlow's native `accessToken` auth option (XOAUTH2), so ImapFlow never
+   * itself holds the client secret; MicrosoftOAuthTokenProvider remains the single place that ever
+   * contacts Microsoft's identity platform. */
+  private async resolveAuth(
+    credentials: ImapCredentials | undefined,
+  ): Promise<{ user: string; accessToken: string } | { user: string; pass: string } | undefined> {
+    if (!credentials) return undefined;
+    if (isMicrosoftOAuth2Credentials(credentials)) {
+      const accessToken = await this.oauthTokenProvider.getAccessToken(credentials);
+      return { user: this.config.imapUsername, accessToken };
+    }
+    return { user: this.config.imapUsername, pass: credentials.password };
   }
 
   private async ensureFolderOpen(client: ImapFlow, folder: string): Promise<void> {

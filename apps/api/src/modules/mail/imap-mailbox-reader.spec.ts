@@ -374,4 +374,75 @@ describe('ImapMailboxReader (adapter contract, mocked ImapFlow/mailparser bounda
     expect(connect).toHaveBeenCalledTimes(1);
     expect(getMailboxLock).toHaveBeenCalledTimes(1);
   });
+
+  describe('MICROSOFT_OAUTH2 credentials', () => {
+    // Deliberately NOT cast to MicrosoftOAuthTokenProvider here — keeping it a plain object literal
+    // lets `expect(tokenProvider.getAccessToken).toHaveBeenCalledWith(...)` reference the mock
+    // directly (casting to the class type makes ESLint's unbound-method rule flag it). The cast
+    // happens only at the ImapMailboxReader constructor call site, via `as never`, exactly like
+    // `encryption as never` already does for SecretEncryptionService above.
+    function fakeTokenProvider(accessToken = 'access-token-abc') {
+      return { getAccessToken: jest.fn(() => Promise.resolve(accessToken)) };
+    }
+
+    function fakeOAuthEncryption() {
+      return {
+        decrypt: jest.fn(() => ({
+          authMode: 'MICROSOFT_OAUTH2',
+          tenantId: 'tenant-1',
+          clientId: 'client-1',
+          clientSecret: 'super-secret-client-secret',
+        })),
+      };
+    }
+
+    it('resolves an access token via the token provider and connects with it, never a password', async () => {
+      const { client } = fakeClient();
+      const encryption = fakeOAuthEncryption();
+      const tokenProvider = fakeTokenProvider('access-token-abc');
+      const reader = new ImapMailboxReader(
+        fakeConfig({ imapHost: 'outlook.office365.com', imapPort: 993, imapUsername: 'renewals@example.onmicrosoft.com' }) as never,
+        encryption as never,
+        tokenProvider as never,
+      );
+      let capturedOptions: Record<string, unknown> | undefined;
+      reader.clientFactory = (options) => {
+        capturedOptions = options as never;
+        return client as never;
+      };
+
+      await reader.getMailboxState('INBOX');
+
+      expect(tokenProvider.getAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ authMode: 'MICROSOFT_OAUTH2', tenantId: 'tenant-1', clientId: 'client-1' }),
+      );
+      expect(capturedOptions?.auth).toEqual({ user: 'renewals@example.onmicrosoft.com', accessToken: 'access-token-abc' });
+      expect(JSON.stringify(capturedOptions)).not.toContain('super-secret-client-secret');
+    });
+
+    it('does not call the token provider at all for a BASIC-credentialed configuration', async () => {
+      const { client } = fakeClient();
+      const encryption = fakeEncryption();
+      const tokenProvider = fakeTokenProvider();
+      const reader = new ImapMailboxReader(fakeConfig() as never, encryption as never, tokenProvider as never);
+      reader.clientFactory = () => client as never;
+
+      await reader.getMailboxState('INBOX');
+
+      expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('propagates a token-provider failure without ever connecting', async () => {
+      const { client, connect } = fakeClient();
+      const encryption = fakeOAuthEncryption();
+      const tokenProvider = {
+        getAccessToken: jest.fn(() => Promise.reject(new Error('Microsoft OAuth token request rejected (status 401).'))),
+      };
+      const reader = new ImapMailboxReader(fakeConfig() as never, encryption as never, tokenProvider as never);
+      reader.clientFactory = () => client as never;
+
+      await expect(reader.getMailboxState('INBOX')).rejects.toThrow('status 401');
+      expect(connect).not.toHaveBeenCalled();
+    });
+  });
 });

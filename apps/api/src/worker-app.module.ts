@@ -31,6 +31,7 @@ import { MAIL_TRANSPORT, type MailTransport } from './modules/mail/mail-transpor
 import { MailThreadResolutionService } from './modules/mail/mail-thread-resolution.service';
 import { MailWorker } from './modules/mail/mail.worker';
 import { MAILBOX_READER_FACTORY, type MailboxReaderFactory } from './modules/mail/mailbox-reader';
+import { MicrosoftOAuthTokenProvider } from './modules/mail/microsoft-oauth-token-provider';
 import { MockMailboxReaderFactory } from './modules/mail/mock-mailbox-reader-factory';
 import { MockMailTransport } from './modules/mail/mock-mail-transport';
 import { SmtpMailTransport } from './modules/mail/smtp-mail-transport';
@@ -77,6 +78,7 @@ import { TimeModule } from './time/time.module';
     MailThreadResolutionService,
     MailHealthService,
     MailOutboundService,
+    MicrosoftOAuthTokenProvider,
     MockMailTransport,
     SmtpMailTransport,
     {

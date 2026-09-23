@@ -134,4 +134,97 @@ describe('SmtpMailTransport', () => {
     expect(configuredMax).toBe(SMTP_TIMEOUT_BUDGET_MS);
     expect(configuredMax).toBeLessThan(STALE_PROCESSING_LEASE_MS);
   });
+
+  describe('MICROSOFT_OAUTH2 credentials', () => {
+    // Deliberately NOT cast to MicrosoftOAuthTokenProvider here — keeping it a plain object literal
+    // lets `expect(tokenProvider.getAccessToken).toHaveBeenCalledWith(...)` reference the mock
+    // directly (casting to the class type makes ESLint's unbound-method rule flag it, since a real
+    // class method detached from its instance is genuinely unsafe). The cast happens only at the
+    // SmtpMailTransport constructor call site, via `as never`, exactly like `{ decrypt } as never`
+    // already does for SecretEncryptionService above.
+    function fakeTokenProvider(accessToken = 'access-token-abc') {
+      return { getAccessToken: jest.fn(() => Promise.resolve(accessToken)) };
+    }
+
+    it('resolves an access token via the token provider and passes OAuth2 auth to nodemailer, never a password', async () => {
+      const sendMail = jest.fn(() => Promise.resolve({ messageId: 'ignored' }));
+      const close = jest.fn();
+      const createTransport = fakeTransportFactory(sendMail, close);
+      const decrypt = jest.fn(() => ({
+        authMode: 'MICROSOFT_OAUTH2',
+        tenantId: 'tenant-1',
+        clientId: 'client-1',
+        clientSecret: 'super-secret-client-secret',
+      }));
+      const tokenProvider = fakeTokenProvider('access-token-abc');
+      const transport = new SmtpMailTransport({ decrypt } as never, tokenProvider as never);
+      transport.transportFactory = createTransport;
+
+      const config = {
+        smtpHost: 'smtp.office365.com',
+        smtpPort: 587,
+        smtpSecure: false,
+        smtpUsername: 'renewals@example.onmicrosoft.com',
+        smtpCredentialsCiphertext: 'v1.iv.tag.ciphertext',
+      };
+
+      await transport.send(message, config as never);
+
+      expect(tokenProvider.getAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ authMode: 'MICROSOFT_OAUTH2', tenantId: 'tenant-1', clientId: 'client-1' }),
+      );
+      expect(createTransport).toHaveBeenCalledWith(
+        expect.objectContaining({
+          auth: { type: 'OAuth2', user: 'renewals@example.onmicrosoft.com', accessToken: 'access-token-abc' },
+        }),
+      );
+      const [options] = (createTransport as unknown as jest.Mock).mock.calls[0]! as [Record<string, unknown>];
+      expect(JSON.stringify(options)).not.toContain('super-secret-client-secret');
+    });
+
+    it('does not call the token provider at all for a BASIC-credentialed configuration', async () => {
+      const sendMail = jest.fn(() => Promise.resolve({ messageId: 'ignored' }));
+      const close = jest.fn();
+      const createTransport = fakeTransportFactory(sendMail, close);
+      const decrypt = jest.fn(() => ({ password: 'super-secret' }));
+      const tokenProvider = fakeTokenProvider();
+      const transport = new SmtpMailTransport({ decrypt } as never, tokenProvider as never);
+      transport.transportFactory = createTransport;
+
+      await transport.send(message, {
+        smtpHost: 'smtp.example.test',
+        smtpPort: 587,
+        smtpSecure: true,
+        smtpUsername: 'renewals',
+        smtpCredentialsCiphertext: 'v1.iv.tag.ciphertext',
+      } as never);
+
+      expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+      expect(createTransport).toHaveBeenCalledWith(expect.objectContaining({ auth: { user: 'renewals', pass: 'super-secret' } }));
+    });
+
+    it('propagates a token-provider failure without ever sending mail', async () => {
+      const sendMail = jest.fn();
+      const close = jest.fn();
+      const createTransport = fakeTransportFactory(sendMail, close);
+      const decrypt = jest.fn(() => ({ authMode: 'MICROSOFT_OAUTH2', tenantId: 't', clientId: 'c', clientSecret: 's' }));
+      const tokenProvider = {
+        getAccessToken: jest.fn(() => Promise.reject(new Error('Microsoft OAuth token request rejected (status 401).'))),
+      };
+      const transport = new SmtpMailTransport({ decrypt } as never, tokenProvider as never);
+      transport.transportFactory = createTransport;
+
+      await expect(
+        transport.send(message, {
+          smtpHost: 'smtp.office365.com',
+          smtpPort: 587,
+          smtpSecure: false,
+          smtpUsername: 'renewals@example.onmicrosoft.com',
+          smtpCredentialsCiphertext: 'v1.iv.tag.ciphertext',
+        } as never),
+      ).rejects.toThrow('status 401');
+      expect(createTransport).not.toHaveBeenCalled();
+      expect(sendMail).not.toHaveBeenCalled();
+    });
+  });
 });
