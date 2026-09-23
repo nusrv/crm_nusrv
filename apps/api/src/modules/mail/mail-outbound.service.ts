@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../database/prisma.service';
 import { ClockService } from '../../time/clock.service';
@@ -58,12 +57,10 @@ export type OutboxProcessingOutcome =
   | 'cancelled'
   | 'failed'
   | 'not_claimed'
-  | 'disabled'
   | 'conflict'
   | 'ownership_lost_after_send';
 
 export interface MailBatchSummary {
-  disabled: boolean;
   candidates: number;
   sent: number;
   deferred: number;
@@ -76,9 +73,17 @@ export interface MailBatchSummary {
 
 /**
  * Slice B outbound orchestrator. See PHASES/PHASE_03_MAIL_AI.md and the Slice B approval messages
- * for the full rule set; this class is the single place all of it is enforced. Every public entry
- * point re-checks MAIL_SEND_ENABLED/cutover for itself — this must never send anything just
- * because it was invoked, only because it was invoked AND currently permitted to.
+ * for the full rule set; this class is the single place all of it is enforced.
+ *
+ * Phase 3.1 §D/§Q correction — there is NO global env-level enablement/cutover gate here any more.
+ * MAIL_SEND_ENABLED/MAIL_SEND_CUTOVER_AT are deprecated/parsed-only (see environment.ts) and are
+ * never read by this class. Every candidate row's mailbox is resolved fresh via
+ * MailConfigurationResolverService inside evaluateEligibility(), which requires that mailbox's own
+ * `outboundSendEnabled`/`outboundSendCutoverAt` (DB, admin-managed, Settings-driven) before treating
+ * it as eligible — an unusable configuration for any reason (disabled mailbox, cutover not reached,
+ * environment mismatch, etc.) defers the row exactly like before, just resolved per-mailbox instead
+ * of via one global upfront gate. This is intentional: two different mailboxes can now have
+ * completely independent enablement/cutover state, which a single global gate could never express.
  *
  * IDENTITY BOUNDARY: a logical outbound message's identity (recipient, MailConfiguration/mailbox,
  * Message-ID) is only ever mutable BEFORE its first real SMTP attempt (`attempts === 0`). Once any
@@ -121,7 +126,6 @@ export class MailOutboundService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly clock: ClockService,
-    private readonly config: ConfigService,
     private readonly mailConfigResolver: MailConfigurationResolverService,
     private readonly threadResolution: MailThreadResolutionService,
     private readonly health: MailHealthService,
@@ -131,7 +135,6 @@ export class MailOutboundService {
 
   async processBatch(): Promise<MailBatchSummary> {
     const summary: MailBatchSummary = {
-      disabled: false,
       candidates: 0,
       sent: 0,
       deferred: 0,
@@ -141,26 +144,18 @@ export class MailOutboundService {
       conflicts: 0,
       ownershipLostAfterSend: 0,
     };
-    if (!this.sendingEnabled()) {
-      summary.disabled = true;
-      return summary;
-    }
-    const cutover = this.cutoverDate();
-    if (!cutover) {
-      summary.disabled = true;
-      return summary;
-    }
 
     const now = this.clock.now();
     const staleThreshold = this.staleThreshold(now);
     // Claim predicate (exact — see also claim()): a row is a candidate when it is either freshly
     // QUEUED (lastAttemptAt may be NULL — the two OR-branches are independent, so a NULL
     // lastAttemptAt never has to satisfy the stale-PROCESSING branch's own condition), or PROCESSING
-    // with a lastAttemptAt older than the stale lease — never both at once, and a pre-cutover row
-    // never matches either branch.
+    // with a lastAttemptAt older than the stale lease — never both at once. Phase 3.1 §D correction:
+    // deliberately no `createdAt >= cutover` pre-filter here any more — cutover is now per-mailbox
+    // (MailConfiguration.outboundSendCutoverAt), checked once each candidate's mailbox is resolved
+    // in evaluateEligibility(), never at this global query level.
     const candidates = await this.prisma.communicationOutbox.findMany({
       where: {
-        createdAt: { gte: cutover },
         scheduledAt: { lte: now },
         OR: [
           { status: CommunicationOutboxStatus.QUEUED },
@@ -195,12 +190,8 @@ export class MailOutboundService {
    * class-level LEASE OWNERSHIP doc comment).
    */
   async processOne(outboxId: string): Promise<OutboxProcessingOutcome> {
-    if (!this.sendingEnabled()) return 'disabled';
-    const cutover = this.cutoverDate();
-    if (!cutover) return 'disabled';
-
     const now = this.clock.now();
-    const leaseToken = await this.claim(outboxId, now, cutover);
+    const leaseToken = await this.claim(outboxId, now);
     if (!leaseToken) return 'not_claimed';
 
     try {
@@ -296,17 +287,6 @@ export class MailOutboundService {
     }
   }
 
-  private sendingEnabled(): boolean {
-    return this.config.get<string>('MAIL_SEND_ENABLED') === 'true';
-  }
-
-  private cutoverDate(): Date | null {
-    const raw = this.config.get<string>('MAIL_SEND_CUTOVER_AT');
-    if (!raw) return null;
-    const parsed = new Date(raw);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  }
-
   private staleThreshold(now: Date): Date {
     return new Date(now.getTime() - STALE_PROCESSING_LEASE_MS);
   }
@@ -322,18 +302,19 @@ export class MailOutboundService {
    *   OR
    *   (status = PROCESSING AND lastAttemptAt < staleLeaseCutoff)   <- stale-lease reclaim only.
    *
-   *   AND createdAt >= cutover                                    <- historical rows never claimed.
+   * Phase 3.1 §D correction — no `createdAt >= cutover` clause here any more; a "historical" row's
+   * protection now comes entirely from its resolved mailbox's own outboundSendCutoverAt, checked in
+   * evaluateEligibility() after claim — never at claim time, and never a global watermark.
    *
    * Returns the lease/ownership token (the EXACT `lastAttemptAt` MariaDB actually persisted, read
    * back rather than assumed to equal the `now` we wrote — see the class-level LEASE OWNERSHIP doc
    * comment for why: this makes the token correct regardless of the column's DATETIME precision,
    * with no need to reason about round-tripping at all) on success, or null if the claim was lost.
    */
-  private async claim(id: string, now: Date, cutover: Date): Promise<Date | null> {
+  private async claim(id: string, now: Date): Promise<Date | null> {
     const result = await this.prisma.communicationOutbox.updateMany({
       where: {
         id,
-        createdAt: { gte: cutover },
         OR: [
           { status: CommunicationOutboxStatus.QUEUED },
           { status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: { lt: this.staleThreshold(now) } },

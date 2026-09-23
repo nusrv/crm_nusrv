@@ -13,6 +13,40 @@ This phase does not change renewal business rules (only replaces static env-var 
 dynamic DB-backed lookup at the exact same decision points), does not add AUTO REJECT, does not
 start Phase 4, and does not touch Invoice/Fawtara/payment/technical-suspension/MCP.
 
+## Correction pass (2026-09-23) — "effective truth" fix
+
+The initial Phase 3.1 implementation kept several env vars runtime-authoritative
+(`MAIL_SEND_ENABLED`, `MAIL_SEND_CUTOVER_AT`, `IMAP_SYNC_ENABLED`) without stopping to explain the
+exception, as AGENTS.md/the Phase 3.1 brief required — and, more seriously, left a real bug: the
+worker's actual `LLM_GATEWAY`/`MAIL_TRANSPORT` DI selection still keyed off `AI_PROVIDER`/
+`MAIL_SEND_ENABLED` at process boot, so Settings could display "AI enabled, provider OpenAI, Test AI
+succeeds" or "Outbound sending ON" while the real runtime silently used a mock gateway/transport —
+the exact contradiction Phase 3.1 exists to prevent. This correction pass:
+
+- Removed `AI_PROVIDER`-based (and any env-based) mock/real selection from the AI DI graph entirely.
+  `DynamicLlmGateway` (`llm-provider.module.ts`) resolves provider/model purely from
+  `AiSettingsResolverService` on every call and has no `ConfigService` dependency at all — it is
+  architecturally incapable of reading an env var. `AiSettingsService.test()` resolves through the
+  exact same `AiSettingsResolverService`, so a successful Test AI is proof the runtime would use
+  that same configuration, not a coincidentally similar check.
+- Removed `MAIL_SEND_ENABLED`/`MAIL_SEND_CUTOVER_AT` from `MailOutboundService`/
+  `OperatorReplyOutboundService` entirely, and removed `IMAP_SYNC_ENABLED` from
+  `MailInboundIngestService.syncAll()`. The per-mailbox DB switches
+  (`outboundSendEnabled`/`outboundSendCutoverAt`/`inboundSyncEnabled`) are now the ONLY operational
+  authority for mail sending/syncing — exactly as AGENTS.md's "DB state is authoritative" principle
+  requires, with no second, env-based gate layered invisibly on top.
+- Found and fixed the same class of bug one layer deeper: `worker-app.module.ts`'s `MAIL_TRANSPORT`
+  factory-provider ALSO consulted `MAIL_SEND_ENABLED` (in addition to `SMTP_MODE`) to choose between
+  the mock and real SMTP transport at boot — meaning even after the service-level fix above, an
+  unset/`false` `MAIL_SEND_ENABLED` would still have silently forced every send through the mock
+  transport regardless of `MailConfiguration.outboundSendEnabled`. Fixed by extracting the
+  adapter-selection logic into `deployment-mail-capability.ts`
+  (`resolveSmtpAdapterCapability`/`resolveImapAdapterCapability`), which reads `SMTP_MODE`/
+  `IMAP_MODE` ONLY, and using it both for the worker's real DI selection and for the CRM's read-only
+  effective-status reporting (`IntegrationHealthService`) — so the two can never disagree.
+- See the "Infrastructure vs. operational settings boundary" and "Legacy env vars" sections below
+  for the corrected, final state.
+
 ## Infrastructure vs. operational settings boundary
 
 Two categories of configuration now exist, and this boundary is intentional and load-bearing:
@@ -22,35 +56,35 @@ admin action):**
 
 - `NODE_ENV`, `DATABASE_URL`, Redis connection, JWT secrets, `ENCRYPTION_KEY_BASE64`, ports/URLs,
   CAPTCHA infra secrets.
-- `SMTP_MODE` / `IMAP_MODE` / `AI_PROVIDER` — these decide which ADAPTER CLASS is wired into the DI
-  container at process boot (mock vs. real SmtpMailTransport/ImapMailboxReader/OpenAiLlmGateway),
-  exactly mirroring the existing `FAWTARA_MODE`/`PLESK_MODE`/`SMARTERMAIL_MODE` precedent for every
-  other external integration in this codebase (AGENTS.md §6: "use mock/sandbox adapters until
-  explicit production credentials are configured"). This is a structural safety rail, not an
-  operational toggle: it must survive even a Settings-UI bug or a misconfigured admin session, so a
-  brand-new/staging/demo environment can never be flipped into attempting real Outlook/OpenAI
-  network calls by anything short of a deliberate deployment change.
-- `MAIL_SEND_ENABLED` / `IMAP_SYNC_ENABLED` — kept as a coarser, one-time, deployment-level gate
-  layered ABOVE the new per-mailbox DB flags (see below), for the same reason. **This is the one
-  documented exception to "operational DB state is authoritative" (AGENTS.md/Phase 3.1 §Q)**: these
-  two env vars are the deployment's one-time declaration that "this environment is allowed to
-  attempt real mail I/O at all." Set once during initial environment setup (`true`), all ROUTINE
-  day-to-day changes (turn a specific mailbox's sync/send on or off, change its cutover, switch its
-  auth mode, test its connections) happen exclusively through Settings, with zero further env/.env
-  involvement. Left at their default (`false`), the DB-backed toggles below can never cause any
-  mail I/O regardless of their own state — a genuine double-lock, not a redundant one.
+- `SMTP_MODE` / `IMAP_MODE` — the ONE retained infrastructure-capability concept, after the
+  correction pass above. These decide which ADAPTER CLASS is wired into the DI container at process
+  boot (mock vs. real `SmtpMailTransport`/`ImapMailboxReader`), exactly mirroring the existing
+  `FAWTARA_MODE`/`PLESK_MODE`/`SMARTERMAIL_MODE` precedent for every other external integration in
+  this codebase (AGENTS.md §6: "use mock/sandbox adapters until explicit production credentials are
+  configured"). This is a structural safety rail, not an operational toggle: it must survive even a
+  Settings-UI bug or a misconfigured admin session, so a brand-new/staging/demo environment can
+  never be flipped into attempting real Outlook network calls by anything short of a deliberate
+  deployment change. Unlike the pre-correction design, this is the ONLY infra-level mail gate, it is
+  never combined with any other env var to decide adapter selection, and its EFFECTIVE state is
+  surfaced read-only in Settings → Integration Health (`IntegrationHealthService`,
+  `deployment-mail-capability.ts`) rather than kept invisible — an ADMIN can always see whether a
+  DB-enabled mailbox will actually be able to send/sync for real.
+- AI has **no equivalent infra-level gate at all** — `DynamicLlmGateway` always resolves against
+  `AiSettingsResolverService`; there is no mock/real DI switch for AI to expose.
 
-**OPERATIONAL (now fully DB-backed, admin-managed, restart-free):**
+**OPERATIONAL (now fully DB-backed, admin-managed, restart-free — and, after the correction pass,
+the ONLY authority of any kind for these decisions):**
 
 - MAIL: per-mailbox authentication type/credentials, SMTP/IMAP host/port/secure, inbound
   sync enable/disable, outbound send enable/disable, outbound send cutover, connection tests,
-  health.
+  health. `MAIL_SEND_ENABLED`/`MAIL_SEND_CUTOVER_AT`/`IMAP_SYNC_ENABLED` are deprecated/parsed-only
+  (see Legacy env vars below) and are never read by `MailOutboundService`,
+  `OperatorReplyOutboundService`, `MailInboundIngestService`, or the worker's DI wiring.
 - AI: enable/disable, model, API key, confidence threshold, automatic-ACCEPT enable/disable,
-  automatic-ACCEPT cutover, connection test, health. `AI_ENABLED`/`AI_MODEL`/`AI_API_KEY`/
-  `AI_CONFIDENCE_THRESHOLD`/`AI_AUTO_ROUTE_ACCEPT`/`AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT` env vars have
-  **no equivalent infra-level gate** — AI's only infra-level concern (`AI_PROVIDER`, mock-vs-real
-  gateway wiring) is already fully separate. These six legacy env vars are no longer read anywhere
-  in the runtime AI pipeline; the DB row (`AiSettings`) is the sole and complete source of truth.
+  automatic-ACCEPT cutover, connection test, health. `AI_ENABLED`/`AI_PROVIDER`/`AI_MODEL`/
+  `AI_API_KEY`/`AI_CONFIDENCE_THRESHOLD`/`AI_AUTO_ROUTE_ACCEPT`/`AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT` are
+  all deprecated/parsed-only. These seven legacy env vars are no longer read anywhere in the runtime
+  AI pipeline; the DB row (`AiSettings`) is the sole and complete source of truth.
 
 ## Schema (additive only — see migration `20260923000000_phase3_1_admin_settings`)
 
@@ -81,18 +115,33 @@ admin action):**
   `SmtpMailTransport.verify()` (new method, reusing the exact same auth-resolution code as `send()`)
   — authenticates without transmitting any message.
 - `GET /settings/health` (`IntegrationHealthService`) aggregates SMTP/IMAP/AI latest health from the
-  existing `IntegrationHealthEvent` log — no competing health model introduced.
+  existing `IntegrationHealthEvent` log — no competing health model introduced. Corrected by §3: it
+  also reports, per mailbox per channel, `configured` / `operationallyEnabled` (the DB switch) /
+  `deploymentAdapter` (`REAL`/`MOCK`, via `SMTP_MODE`/`IMAP_MODE`) / `effective`
+  (`READY`/`NOT_CONFIGURED`/`DISABLED`/`BLOCKED_BY_DEPLOYMENT`) — computed from, and never
+  independent of, the same three inputs, and read via the identical
+  `resolveSmtpAdapterCapability()`/`resolveImapAdapterCapability()` helpers the worker's real DI
+  selection uses, so Settings can never display a readiness state the worker cannot actually
+  deliver.
 
-## Dynamic mail runtime (§D)
+## Dynamic mail runtime (§D, corrected by §2A/§2B)
 
-`MailConfigurationResolverService.resolveForOutbound()`/`resolvePinned()` now additionally require
+`MailConfigurationResolverService.resolveForOutbound()`/`resolvePinned()` require
 `outboundSendEnabled === true` and (for ordinary reminder sends only) `outboundSendCutoverAt` to be
 set and reached, resolved fresh on every call. `OperatorReplyOutboundService` requires
 `outboundSendEnabled` but explicitly opts out of the cutover check (`{ checkCutover: false }`),
 preserving its own pre-existing, already-tested contract that a cutover must never strand a
-human-authored reply. `MailInboundIngestService.syncAll()` additionally filters candidate configs on
-`inboundSyncEnabled: true`. Turning a mailbox's sync/send on or off, or changing its cutover, takes
-effect on the very next scheduled cycle — no restart.
+human-authored reply. `MailInboundIngestService.syncAll()` filters candidate configs on
+`inboundSyncEnabled: true`. These DB flags are the ONLY operational authority — `MailOutboundService`
+no longer has any global env-level enablement/cutover gate at all (no `ConfigService` dependency),
+and `MailInboundIngestService.syncAll()` no longer checks `IMAP_SYNC_ENABLED`. Turning a mailbox's
+sync/send on or off, or changing its cutover, takes effect on the very next scheduled cycle — no
+restart, and with no env var anywhere that could override or duplicate it.
+
+Separately, `worker-app.module.ts`'s `MAIL_TRANSPORT`/`MAILBOX_READER_FACTORY` DI factories decide
+which ADAPTER CLASS (mock vs. real) the worker uses at all, via `SMTP_MODE`/`IMAP_MODE` only (see
+`deployment-mail-capability.ts`) — this is the one remaining infrastructure-capability layer, and it
+is now the ONLY thing `MAIL_SEND_ENABLED` used to also (wrongly) gate.
 
 ## AI settings
 
@@ -105,8 +154,10 @@ effect on the very next scheduled cycle — no restart.
   `AiSettingsService.update()` regardless of what the UI already checked.
 - `POST /settings/ai/test` makes exactly one minimal raw OpenAI request (never through
   `AiClassificationService`/`LlmGateway.classifyIntent()`/`draftReply()`) — creates no
-  AiClassification, no AiRoutingDecision, sends no email, mutates no RenewalCase, independent of
-  `AI_PROVIDER`'s mock/real DI wiring (it always calls the real API to prove the stored credentials).
+  AiClassification, no AiRoutingDecision, sends no email, mutates no RenewalCase. It resolves
+  model/API key through the exact same `AiSettingsResolverService` `DynamicLlmGateway` uses at real
+  classification time, so a successful Test AI is a direct proof that "the runtime would use this
+  same OpenAI configuration" — there is no separate mock/real DI wiring for AI to be independent of.
 
 ## Dynamic AI runtime (§J)
 
@@ -162,39 +213,47 @@ when no row exists; `MailInboundIngestService`/`MailOutboundService`/`OperatorRe
 already treated "no usable configuration" as a normal, non-fatal outcome before this phase, and
 continue to.
 
-## Legacy env vars — complete list and status
+## Legacy env vars — complete list and status (corrected)
 
 | Env var | Status |
 |---|---|
-| `MAIL_SEND_ENABLED` | **Retained as an infrastructure-level emergency/deployment gate** (see boundary section above) — set once, never the routine control plane. |
-| `MAIL_SEND_CUTOVER_AT` | Retained, same infra role as `MAIL_SEND_ENABLED`. |
-| `SMTP_MODE` | Retained — infra-level mock/real adapter selection, unchanged, unrelated to this phase. |
-| `IMAP_SYNC_ENABLED` | **Retained as an infrastructure-level emergency/deployment gate**, same role as `MAIL_SEND_ENABLED`. |
-| `IMAP_MODE` | Retained — infra-level mock/real adapter selection, unchanged. |
+| `MAIL_SEND_ENABLED` | **Deprecated / parsed-only.** No longer read by `MailOutboundService`, `OperatorReplyOutboundService`, or the worker's `MAIL_TRANSPORT` DI factory. `MailConfiguration.outboundSendEnabled` (DB) is the sole operational authority. |
+| `MAIL_SEND_CUTOVER_AT` | **Deprecated / parsed-only.** No longer read anywhere. `MailConfiguration.outboundSendCutoverAt` (DB) is the sole cutover authority for reminder sends. |
+| `SMTP_MODE` | **Infrastructure capability — retained**, and now the ONLY thing that decides SMTP adapter selection (`deployment-mail-capability.ts`). Its effective state is surfaced read-only via `GET /settings/health`. |
+| `IMAP_SYNC_ENABLED` | **Deprecated / parsed-only.** No longer read by `MailInboundIngestService.syncAll()`. `MailConfiguration.inboundSyncEnabled` (DB) is the sole operational authority. |
+| `IMAP_MODE` | **Infrastructure capability — retained**, and now the ONLY thing that decides IMAP adapter selection (`deployment-mail-capability.ts`). Its effective state is surfaced read-only via `GET /settings/health`. |
 | `AI_ENABLED` | **Fully replaced.** No longer read anywhere in the runtime AI pipeline; `AiSettings.enabled` is authoritative. |
-| `AI_PROVIDER` | Retained — infra-level mock/real gateway selection (`llm-provider.module.ts`), unrelated to `AiSettings`. |
+| `AI_PROVIDER` | **Fully replaced.** `DynamicLlmGateway` has no `ConfigService` dependency and cannot read this var under any circumstance; `AiSettings.provider` is authoritative. There is no AI adapter-selection env var of any kind any more. |
 | `AI_MODEL` | **Fully replaced** by `AiSettings.model`. |
 | `AI_API_KEY` | **Fully replaced** by `AiSettings.apiKeyCiphertext` (encrypted, admin-managed). |
 | `AI_CONFIDENCE_THRESHOLD` | **Fully replaced** by `AiSettings.confidenceThreshold`. |
 | `AI_AUTO_ROUTE_ACCEPT` | **Fully replaced** by `AiSettings.autoRouteAccept`. |
 | `AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT` | **Fully replaced** by `AiSettings.autoRouteAcceptCutoverAt`. |
 
-No contradictory-state situation exists: the six fully-replaced AI env vars are simply never read by
-the runtime pipeline any more (Zod validation in `environment.ts` still parses them for backward
-compatibility with existing `.env` files, but nothing acts on the parsed values), and the four
-retained infra-level vars operate one layer above the DB state they gate, never in conflict with it
-(they can only ever narrow, never expand, what the DB allows).
+No contradictory-state situation exists: the ten deprecated/fully-replaced env vars are simply never
+read by any runtime pipeline any more (Zod validation in `environment.ts` still parses them for
+backward compatibility with existing `.env` files, but nothing acts on the parsed values). The two
+retained infra-level vars (`SMTP_MODE`/`IMAP_MODE`) are the ONLY infrastructure-capability concept
+left, they never combine with any other env var to make that decision, and their effective state is
+never hidden — it is read by the exact same helper the worker's real DI selection uses, and surfaced
+read-only in Settings → Integration Health, so a DB-enabled mailbox's true readiness is always
+visible to an ADMIN.
 
 ## Test/health behavior
 
-Targeted new coverage: `ai-settings-resolver.service.spec.ts` (safe defaults, fresh-per-call
-resolution, decrypt-on-demand), `ai-settings.service.spec.ts` (secret handling, independent
-enablement validation, connection-test isolation), `mail-settings.service.spec.ts` (secret handling,
-blank-means-keep, auth-mode switching, connection-test isolation), `settings-rbac.spec.ts` (both
-controllers), plus a `mail-configuration-resolver.service.spec.ts` extension for the new
-outbound-enablement/cutover gate and a `mail-inbound-ingest.service.spec.ts` extension for the new
-`inboundSyncEnabled` filter. All pre-existing AI/mail unit and RBAC suites continue to pass
-unmodified in behavior (only their fake collaborators were updated to the new constructor shapes).
+Targeted coverage: `ai-settings-resolver.service.spec.ts` (safe defaults, fresh-per-call resolution,
+decrypt-on-demand), `ai-settings.service.spec.ts` (secret handling, independent enablement
+validation, connection-test isolation, shared resolver with runtime), `dynamic-llm-gateway.spec.ts`
+(regression: DB AI enabled + OpenAI configured never silently uses mock because of `AI_PROVIDER`;
+re-resolves settings on every call), `mail-settings.service.spec.ts` (secret handling,
+blank-means-keep, auth-mode switching, connection-test isolation), `deployment-mail-capability.spec.ts`
+/ `integration-health.service.spec.ts` (effective-status computation, regression: never READY when
+the deployment adapter is mock, regardless of DB config; `MAIL_SEND_ENABLED`/`IMAP_SYNC_ENABLED` have
+no effect), `settings-rbac.spec.ts` (both controllers), plus `mail-configuration-resolver.service.spec.ts`,
+`mail-outbound.service.spec.ts`, `operator-reply-outbound.service.spec.ts`, and
+`mail-inbound-ingest.service.spec.ts` extensions proving the DB switches are the sole operational
+authority. All pre-existing AI/mail unit and RBAC suites continue to pass unmodified in behavior
+(only their fake collaborators were updated to the new constructor shapes).
 
 ## Acceptance criteria
 
@@ -205,8 +264,19 @@ unmodified in behavior (only their fake collaborators were updated to the new co
 - [x] Every configuration mutation is audited with safe metadata.
 - [x] Test IMAP/SMTP/AI cause zero production mutation (no cursor advance, no EmailMessage, no send,
       no AiClassification/AiRoutingDecision/RenewalCase change).
-- [x] Routine Mail/AI changes take effect on the next worker/action cycle with no restart, once the
-      one-time infra-level gates are set.
+- [x] A successful Test AI resolves through the identical runtime provider/config semantics
+      (`AiSettingsResolverService`) — never a separately duplicated check.
+- [x] Routine Mail changes (enable/disable inbound/outbound, cutover, auth mode/credentials) take
+      effect on the next worker cycle with no restart and with NO env var of any kind able to
+      override or duplicate that DB state.
+- [x] Routine AI changes take effect on the next call with no restart and with NO env var of any
+      kind able to override or duplicate that DB state; there is no AI adapter-selection env var at
+      all any more.
+- [x] The one remaining infrastructure-capability concept (`SMTP_MODE`/`IMAP_MODE`) is surfaced
+      read-only in Settings → Integration Health as an explicit Effective Status
+      (Configured / Operationally enabled / Deployment adapter / Effective), computed via the same
+      helper the worker's real adapter-selection DI uses — Settings can never display a readiness
+      state the worker cannot actually deliver.
 - [x] DB defaults are OFF everywhere; the migration cannot itself enable any live behavior.
 - [x] Slice G safety rules (kill switch, cutover, historical-message protection, no AUTO REJECT)
       preserved exactly.

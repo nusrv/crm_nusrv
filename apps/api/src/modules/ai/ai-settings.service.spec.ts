@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import { AiSettingsResolverService } from './ai-settings-resolver.service';
 import { AiSettingsService } from './ai-settings.service';
 
 function baseRow(overrides: Record<string, unknown> = {}) {
@@ -41,7 +42,12 @@ function harness(options: { existing?: ReturnType<typeof baseRow> | null } = {})
     aiSettings: { findUnique },
     $transaction: jest.fn((cb: (t: typeof tx) => unknown) => Promise.resolve(cb(tx))),
   };
-  const service = new AiSettingsService(prisma as never, encryption as never, audit as never, health as never);
+  // Phase 3.1 §4 correction — AiSettingsService.test() now resolves via AiSettingsResolverService
+  // (the SAME real class runtime uses), constructed here from the identical prisma/encryption fakes
+  // already set up above, rather than a separately hand-rolled fake — proving Test AI and runtime
+  // genuinely share resolution logic, not just coincidentally similar mocks.
+  const aiSettings = new AiSettingsResolverService(prisma as never, encryption as never);
+  const service = new AiSettingsService(prisma as never, encryption as never, audit as never, health as never, aiSettings);
   return { service, encryption, auditRecord, healthRecord, getUpsertArgs: () => upsertArgs };
 }
 

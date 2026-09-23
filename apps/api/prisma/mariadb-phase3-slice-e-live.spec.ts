@@ -245,12 +245,11 @@ liveDescribe('Phase 3 Slice E MariaDB Communication Center integration', () => {
     );
   }
 
-  function buildOutboundService(transport: MockMailTransport, configOverrides: Record<string, string> = {}) {
+  function buildOutboundService(transport: MockMailTransport) {
     return new OperatorReplyOutboundService(
       prisma as never,
       new AuditService(prisma as never),
       new ClockService(),
-      fakeConfigService(configOverrides) as never,
       new MailConfigurationResolverService(prisma as never, fakeConfigService() as never, new ClockService()),
       new CustomerEmailResolutionService(prisma as never),
       new MailHealthService(prisma as never),
@@ -497,30 +496,18 @@ liveDescribe('Phase 3 Slice E MariaDB Communication Center integration', () => {
     expect(outbox.status).toBe(CommunicationOutboxStatus.QUEUED);
   });
 
-  it('MAIL_SEND_ENABLED=false never falsely reports sent, and the reply remains safely QUEUED', async () => {
+  it('Phase 3.1 §2A/§2B correction — MAIL_SEND_ENABLED/MAIL_SEND_CUTOVER_AT env vars no longer affect operator-reply sending at all (real DB)', async () => {
     const customer = await createCustomer();
     const thread = await createThread(customer.id);
     const result = await buildReplyService().queueReply({ threadId: thread.id, actorId: reviewerId, idempotencyKey: `idem-${randomUUID()}`, bodyText: 'x' });
     const transport = new MockMailTransport();
 
-    const outcome = await buildOutboundService(transport, { MAIL_SEND_ENABLED: 'false' }).processOne(result.outboxId);
-
-    expect(outcome).toBe('disabled');
-    expect(transport.sent).toHaveLength(0);
-    const outbox = await prisma.operatorReplyOutbox.findUniqueOrThrow({ where: { id: result.outboxId } });
-    expect(outbox.status).toBe(CommunicationOutboxStatus.QUEUED);
-  });
-
-  it('§7 (contract audit) — a reply is never stranded by MAIL_SEND_CUTOVER_AT, even when it is set LATER than the reply\'s own queuedAt', async () => {
-    const customer = await createCustomer();
-    const thread = await createThread(customer.id);
-    const result = await buildReplyService().queueReply({ threadId: thread.id, actorId: reviewerId, idempotencyKey: `idem-${randomUUID()}`, bodyText: 'x' });
-    const transport = new MockMailTransport();
-
-    // Simulates the strand scenario the audit flagged: MAIL_SEND_CUTOVER_AT set to a value AFTER
-    // this row's real queuedAt, as if the env var were moved forward post-creation. Unlike Slice
-    // B's reminder cutover, this must never block a real human reply from sending.
-    const outcome = await buildOutboundService(transport, { MAIL_SEND_CUTOVER_AT: '2099-01-01T00:00:00.000Z' }).processOne(result.outboxId);
+    // Simulates the strand scenario the original contract audit flagged: MAIL_SEND_CUTOVER_AT set
+    // to a value AFTER this row's real queuedAt, as if the env var were moved forward
+    // post-creation, with MAIL_SEND_ENABLED also left unset/false. Both are deprecated/parsed-only
+    // now (see environment.ts) and OperatorReplyOutboundService has no ConfigService dependency at
+    // all — this must still send normally.
+    const outcome = await buildOutboundService(transport).processOne(result.outboxId);
 
     expect(outcome).toBe('sent');
     expect(transport.sent).toHaveLength(1);

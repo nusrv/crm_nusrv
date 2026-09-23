@@ -53,10 +53,18 @@ describe('environment validation', () => {
     expect(() => validateEnvironment(withoutRedis)).toThrow('Invalid environment configuration');
   });
 
+  // Every production-NODE_ENV fixture below that expects SUCCESS must also set SMTP_MODE/IMAP_MODE
+  // to a non-mock value, independently of whatever it's actually testing — see the unconditional
+  // SMTP_MODE/IMAP_MODE-mock-forbidden-in-production rules (Phase 3.1 §D/§Q correction) further
+  // down this file. A fixture that expects `.toThrow()` does not need this — any additional reason
+  // to fail closed is harmless to that assertion.
+  const productionMailModeDefaults = { SMTP_MODE: 'production', IMAP_MODE: 'real' } as const;
+
   it('accepts CAPTCHA_PROVIDER=none in production without CAPTCHA credentials', () => {
     expect(
       validateEnvironment({
         ...valid,
+        ...productionMailModeDefaults,
         NODE_ENV: 'production',
         CAPTCHA_PROVIDER: 'none',
         CAPTCHA_TEST_TOKEN: undefined,
@@ -78,6 +86,7 @@ describe('environment validation', () => {
       expect(
         validateEnvironment({
           ...valid,
+          ...productionMailModeDefaults,
           NODE_ENV: 'production',
           CAPTCHA_PROVIDER: provider,
           CAPTCHA_TEST_TOKEN: undefined,
@@ -118,71 +127,53 @@ describe('environment validation', () => {
     ).toThrow('Invalid environment configuration');
   });
 
-  it('defaults MAIL_SEND_ENABLED to false and leaves MAIL_SEND_CUTOVER_AT optional', () => {
+  // Phase 3.1 §J/§Q correction — MAIL_SEND_ENABLED/MAIL_SEND_CUTOVER_AT/AI_ENABLED/AI_PROVIDER/
+  // AI_MODEL/AI_API_KEY/AI_AUTO_ROUTE_ACCEPT/AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT are DEPRECATED/
+  // PARSED-ONLY: none of them is cross-validated or read by the runtime any more (see
+  // PHASES/PHASE_03_1_ADMIN_SETTINGS.md's env-status table). They still parse as plain, independent
+  // fields for backward-compatible `.env` files.
+  it('parses MAIL_SEND_ENABLED/MAIL_SEND_CUTOVER_AT as plain deprecated fields, with no cross-validation', () => {
     const result = validateEnvironment(valid);
     expect(result.MAIL_SEND_ENABLED).toBe('false');
     expect(result.MAIL_SEND_CUTOVER_AT).toBeUndefined();
-  });
-
-  it('fails closed: rejects MAIL_SEND_ENABLED=true with no cutover configured', () => {
-    expect(() => validateEnvironment({ ...valid, MAIL_SEND_ENABLED: 'true' })).toThrow(
-      'Invalid environment configuration',
-    );
-  });
-
-  it('fails closed: rejects MAIL_SEND_ENABLED=true with an unparseable cutover', () => {
-    expect(() =>
-      validateEnvironment({ ...valid, MAIL_SEND_ENABLED: 'true', MAIL_SEND_CUTOVER_AT: 'not-a-date' }),
-    ).toThrow('Invalid environment configuration');
-  });
-
-  it('accepts MAIL_SEND_ENABLED=true with a valid ISO-8601 cutover', () => {
+    // No longer fails closed: MAIL_SEND_ENABLED=true with no cutover configured is valid to PARSE
+    // (it is simply never read) — MailConfiguration.outboundSendCutoverAt is the sole authority now.
+    expect(validateEnvironment({ ...valid, MAIL_SEND_ENABLED: 'true' })).toMatchObject({ MAIL_SEND_ENABLED: 'true' });
     expect(
-      validateEnvironment({
-        ...valid,
-        MAIL_SEND_ENABLED: 'true',
-        MAIL_SEND_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
-      }),
-    ).toMatchObject({ MAIL_SEND_ENABLED: 'true', MAIL_SEND_CUTOVER_AT: '2026-01-01T00:00:00.000Z' });
+      validateEnvironment({ ...valid, MAIL_SEND_ENABLED: 'true', MAIL_SEND_CUTOVER_AT: 'not-a-date' }),
+    ).toMatchObject({ MAIL_SEND_CUTOVER_AT: 'not-a-date' }); // never parsed as a Date here — accepted as an opaque, unused string.
   });
 
-  it('fails closed: rejects production with mail sending enabled through SMTP_MODE=mock', () => {
+  // Phase 3.1 §D/§Q correction — SMTP_MODE=mock is now UNCONDITIONALLY forbidden in production
+  // (previously gated on MAIL_SEND_ENABLED=true, which is no longer authoritative).
+  it('fails closed: rejects production with SMTP_MODE=mock regardless of MAIL_SEND_ENABLED', () => {
     expect(() =>
       validateEnvironment({
         ...valid,
         NODE_ENV: 'production',
         CAPTCHA_PROVIDER: 'none',
         CAPTCHA_TEST_TOKEN: undefined,
-        MAIL_SEND_ENABLED: 'true',
-        MAIL_SEND_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
+        MAIL_SEND_ENABLED: 'false',
         SMTP_MODE: 'mock',
       }),
     ).toThrow('Invalid environment configuration');
   });
 
-  it('accepts production with mail sending enabled through a real SMTP_MODE', () => {
+  it('accepts production with a real SMTP_MODE', () => {
     expect(
       validateEnvironment({
         ...valid,
         NODE_ENV: 'production',
         CAPTCHA_PROVIDER: 'none',
         CAPTCHA_TEST_TOKEN: undefined,
-        MAIL_SEND_ENABLED: 'true',
-        MAIL_SEND_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
         SMTP_MODE: 'production',
+        IMAP_MODE: 'real',
       }),
     ).toMatchObject({ NODE_ENV: 'production', SMTP_MODE: 'production' });
   });
 
-  it('allows SMTP_MODE=mock outside production even with mail sending enabled', () => {
-    expect(
-      validateEnvironment({
-        ...valid,
-        MAIL_SEND_ENABLED: 'true',
-        MAIL_SEND_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
-        SMTP_MODE: 'mock',
-      }),
-    ).toMatchObject({ SMTP_MODE: 'mock' });
+  it('allows SMTP_MODE=mock outside production', () => {
+    expect(validateEnvironment({ ...valid, SMTP_MODE: 'mock' })).toMatchObject({ SMTP_MODE: 'mock' });
   });
 
   it('defaults IMAP_SYNC_ENABLED to false and IMAP_MODE to mock', () => {
@@ -191,36 +182,35 @@ describe('environment validation', () => {
     expect(result.IMAP_MODE).toBe('mock');
   });
 
-  it('fails closed: rejects production with IMAP sync enabled through IMAP_MODE=mock', () => {
+  // Phase 3.1 §D/§Q correction — same unconditional rule as SMTP_MODE.
+  it('fails closed: rejects production with IMAP_MODE=mock regardless of IMAP_SYNC_ENABLED', () => {
     expect(() =>
       validateEnvironment({
         ...valid,
         NODE_ENV: 'production',
         CAPTCHA_PROVIDER: 'none',
         CAPTCHA_TEST_TOKEN: undefined,
-        IMAP_SYNC_ENABLED: 'true',
+        IMAP_SYNC_ENABLED: 'false',
         IMAP_MODE: 'mock',
       }),
     ).toThrow('Invalid environment configuration');
   });
 
-  it('accepts production with IMAP sync enabled through IMAP_MODE=real', () => {
+  it('accepts production with IMAP_MODE=real', () => {
     expect(
       validateEnvironment({
         ...valid,
         NODE_ENV: 'production',
         CAPTCHA_PROVIDER: 'none',
         CAPTCHA_TEST_TOKEN: undefined,
-        IMAP_SYNC_ENABLED: 'true',
+        SMTP_MODE: 'production',
         IMAP_MODE: 'real',
       }),
     ).toMatchObject({ NODE_ENV: 'production', IMAP_MODE: 'real' });
   });
 
-  it('allows IMAP_MODE=mock outside production even with IMAP sync enabled', () => {
-    expect(
-      validateEnvironment({ ...valid, IMAP_SYNC_ENABLED: 'true', IMAP_MODE: 'mock' }),
-    ).toMatchObject({ IMAP_MODE: 'mock' });
+  it('allows IMAP_MODE=mock outside production', () => {
+    expect(validateEnvironment({ ...valid, IMAP_MODE: 'mock' })).toMatchObject({ IMAP_MODE: 'mock' });
   });
 
   it('rejects an IMAP_MODE outside the mock/real enum', () => {
@@ -229,7 +219,7 @@ describe('environment validation', () => {
     );
   });
 
-  it('§34 — defaults AI_ENABLED=false, AI_PROVIDER=mock, AI_CONFIDENCE_THRESHOLD=0.90, AI_AUTO_ROUTE_ACCEPT_REJECT=false', () => {
+  it('§34 — defaults AI_ENABLED=false, AI_PROVIDER=mock, AI_CONFIDENCE_THRESHOLD=0.90, AI_AUTO_ROUTE_ACCEPT_REJECT=false (all deprecated/parsed-only)', () => {
     const result = validateEnvironment(valid);
     expect(result.AI_ENABLED).toBe('false');
     expect(result.AI_PROVIDER).toBe('mock');
@@ -237,41 +227,25 @@ describe('environment validation', () => {
     expect(result.AI_AUTO_ROUTE_ACCEPT_REJECT).toBe('false');
   });
 
-  it('§34 — production + AI_ENABLED=true + AI_PROVIDER=mock fails closed', () => {
-    expect(() =>
+  // Phase 3.1 §J correction — AI_PROVIDER/AI_ENABLED/AI_MODEL/AI_API_KEY no longer cross-validate
+  // against each other or against NODE_ENV: none of them determines runtime provider selection any
+  // more (AiSettingsResolverService/DynamicLlmGateway do), so a combination that used to fail closed
+  // here is now simply an inert, unread set of values.
+  it('no longer cross-validates AI_ENABLED/AI_PROVIDER/AI_MODEL/AI_API_KEY against each other or NODE_ENV=production', () => {
+    expect(
       validateEnvironment({
         ...valid,
+        ...productionMailModeDefaults,
         NODE_ENV: 'production',
         CAPTCHA_PROVIDER: 'none',
         CAPTCHA_TEST_TOKEN: undefined,
         AI_ENABLED: 'true',
         AI_PROVIDER: 'mock',
       }),
-    ).toThrow('Invalid environment configuration');
-  });
-
-  it('§34 — AI_ENABLED=true + AI_PROVIDER=openai without AI_MODEL/AI_API_KEY fails closed', () => {
-    expect(() =>
-      validateEnvironment({ ...valid, AI_ENABLED: 'true', AI_PROVIDER: 'openai' }),
-    ).toThrow('Invalid environment configuration');
-    expect(() =>
-      validateEnvironment({ ...valid, AI_ENABLED: 'true', AI_PROVIDER: 'openai', AI_MODEL: 'gpt-test' }),
-    ).toThrow('Invalid environment configuration');
-  });
-
-  it('§34 — AI_ENABLED=true + AI_PROVIDER=openai with both AI_MODEL and AI_API_KEY configured succeeds', () => {
-    expect(
-      validateEnvironment({
-        ...valid,
-        NODE_ENV: 'production',
-        CAPTCHA_PROVIDER: 'none',
-        CAPTCHA_TEST_TOKEN: undefined,
-        AI_ENABLED: 'true',
-        AI_PROVIDER: 'openai',
-        AI_MODEL: 'gpt-test',
-        AI_API_KEY: 'sk-test',
-      }),
-    ).toMatchObject({ AI_PROVIDER: 'openai', AI_MODEL: 'gpt-test' });
+    ).toMatchObject({ AI_ENABLED: 'true', AI_PROVIDER: 'mock' });
+    expect(validateEnvironment({ ...valid, AI_ENABLED: 'true', AI_PROVIDER: 'openai' })).toMatchObject({
+      AI_PROVIDER: 'openai',
+    });
   });
 
   it('§34 — an invalid confidence threshold outside 0..1 fails validation', () => {
@@ -305,43 +279,24 @@ describe('environment validation', () => {
     expect(result.AI_AUTO_ROUTE_ACCEPT).toBe('false');
   });
 
-  it('Slice G §2/25.B — AI_AUTO_ROUTE_ACCEPT=true without a cutover fails validation', () => {
-    expect(() =>
-      validateEnvironment({ ...valid, AI_ENABLED: 'true', AI_AUTO_ROUTE_ACCEPT: 'true' }),
-    ).toThrow('AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT');
-  });
-
-  it('Slice G — AI_AUTO_ROUTE_ACCEPT=true with a malformed (non-ISO) cutover fails validation', () => {
-    expect(() =>
+  // Phase 3.1 §J correction — AI_AUTO_ROUTE_ACCEPT/AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT no longer
+  // cross-validate against AI_ENABLED or each other: AiSettings.autoRouteAccept/
+  // autoRouteAcceptCutoverAt (validated independently by AiSettingsService.update()) are the sole
+  // runtime authority now.
+  it('no longer cross-validates AI_AUTO_ROUTE_ACCEPT against AI_ENABLED or requires a cutover to parse', () => {
+    expect(validateEnvironment({ ...valid, AI_ENABLED: 'true', AI_AUTO_ROUTE_ACCEPT: 'true' })).toMatchObject({
+      AI_AUTO_ROUTE_ACCEPT: 'true',
+    });
+    expect(
+      validateEnvironment({ ...valid, AI_ENABLED: 'false', AI_AUTO_ROUTE_ACCEPT: 'true' }),
+    ).toMatchObject({ AI_AUTO_ROUTE_ACCEPT: 'true', AI_ENABLED: 'false' });
+    expect(
       validateEnvironment({
         ...valid,
-        AI_ENABLED: 'true',
         AI_AUTO_ROUTE_ACCEPT: 'true',
         AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT: 'not-a-date',
       }),
-    ).toThrow('AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT');
-  });
-
-  it('Slice G — AI_AUTO_ROUTE_ACCEPT=true requires AI_ENABLED=true', () => {
-    expect(() =>
-      validateEnvironment({
-        ...valid,
-        AI_ENABLED: 'false',
-        AI_AUTO_ROUTE_ACCEPT: 'true',
-        AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
-      }),
-    ).toThrow('AI_ENABLED must be true');
-  });
-
-  it('Slice G — AI_AUTO_ROUTE_ACCEPT=true with AI_ENABLED=true and a valid ISO cutover succeeds', () => {
-    const result = validateEnvironment({
-      ...valid,
-      AI_ENABLED: 'true',
-      AI_AUTO_ROUTE_ACCEPT: 'true',
-      AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT: '2026-01-01T00:00:00.000Z',
-    });
-    expect(result.AI_AUTO_ROUTE_ACCEPT).toBe('true');
-    expect(result.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT).toBe('2026-01-01T00:00:00.000Z');
+    ).toMatchObject({ AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT: 'not-a-date' }); // accepted as an opaque, unused string.
   });
 
   it('§34 — rejects an AI_PROVIDER outside the mock/openai enum', () => {

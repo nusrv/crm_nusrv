@@ -4,8 +4,21 @@ import { LlmMalformedOutputError, LlmPermanentError, LlmTransientError } from '.
 import { DRAFT_RESULT_SCHEMA_VERSION } from '../ai/llm-gateway';
 import { AI_AUDIT_EVENT } from '../ai/ai-events.constants';
 
+/** Phase 3.1 §J correction — AiReplyDraftService now resolves `enabled`/`provider`/`model` from
+ * AiSettingsResolverService (DB-backed) rather than ConfigService. This fake keeps the existing
+ * `fakeConfig({ AI_ENABLED, AI_PROVIDER })` call site unchanged syntactically. */
 function fakeConfig(values: Record<string, string>) {
-  return { get: (key: string) => values[key] };
+  return {
+    getSettings: () =>
+      Promise.resolve({
+        enabled: values.AI_ENABLED === 'true',
+        provider: 'OPENAI',
+        model: 'gpt-test',
+        confidenceThreshold: 0.9,
+        autoRouteAcceptEnabled: false,
+        autoRouteAcceptCutoverAt: null,
+      }),
+  };
 }
 
 const THREAD_ROW = {

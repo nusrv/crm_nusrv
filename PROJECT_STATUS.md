@@ -43,15 +43,38 @@
   tenant) has not been performed in any session — see "Phase 3.1" below for the operational control
   plane that makes that smoke test possible without SSH/Plesk.
 - **Phase 3.1 (Administration & Integration Settings)**: code complete and pushed to `origin/main` —
-  see `PHASES/PHASE_03_1_ADMIN_SETTINGS.md` for full detail. An ADMIN can now configure Outlook
-  (BASIC or Microsoft 365 OAuth2) and OpenAI completely from `/dashboard/settings`, test both
-  connections, enable/disable inbound sync and outbound sending per mailbox, enable/disable AI and
-  automatic acceptance, and change every one of these settings without SSH/Plesk/restart — *once*
-  the one-time infrastructure gates (`MAIL_SEND_ENABLED`/`IMAP_SYNC_ENABLED`/`SMTP_MODE`/`IMAP_MODE`
-  in `.env`) are set during initial environment setup. Full API/Web verification green; the
-  disposable MariaDB live suite re-run against this exact code remains a **deferred pre-production
-  verification item** (no disposable MariaDB credentials were available in the verification
-  session).
+  see `PHASES/PHASE_03_1_ADMIN_SETTINGS.md` for full detail, including the 2026-09-23 correction pass
+  described below. An ADMIN can now configure Outlook (BASIC or Microsoft 365 OAuth2) and OpenAI
+  operationally from `/dashboard/settings` (enable/disable, credentials, model, inbound
+  sync/outbound sending per mailbox, cutover, automatic AI acceptance), test both connections, and
+  change every one of these settings without SSH/Plesk/restart — with **no env var of any kind able
+  to override or duplicate that DB state**. AI has no infrastructure-level gate at all any more. Mail
+  has exactly one remaining infrastructure-capability gate (`SMTP_MODE`/`IMAP_MODE` — whether this
+  deployment is even capable of real SMTP/IMAP), which is a one-time deployment decision, never a
+  routine admin action, and whose effective state is surfaced read-only in Settings → Integration
+  Health so it can never silently contradict what Settings displays as operationally enabled. Full
+  API/Web verification green; the disposable MariaDB live suite re-run against this exact code
+  remains a **deferred pre-production verification item** (no disposable MariaDB credentials were
+  available in the verification session).
+- **Phase 3.1 correction — "effective truth" fix (2026-09-23)**: owner review of the Phase 3.1 result
+  found a real bug and a process violation. Process: several env vars had been kept
+  runtime-authoritative without stopping to explain the exception as required. Bug: the worker's
+  actual AI/mail DI wiring still keyed off `AI_PROVIDER`/`MAIL_SEND_ENABLED` at process boot, so
+  Settings could display "AI enabled, OpenAI configured, Test AI succeeds" or "Outbound sending ON"
+  while the real runtime silently used a mock gateway/transport regardless — the exact contradiction
+  Phase 3.1 exists to prevent. Fixed by (1) making `DynamicLlmGateway` resolve provider/model purely
+  from the DB-backed `AiSettingsResolverService` with no `ConfigService` dependency at all — it
+  cannot read an env var even if one is set; (2) removing `MAIL_SEND_ENABLED`/`MAIL_SEND_CUTOVER_AT`/
+  `IMAP_SYNC_ENABLED` from `MailOutboundService`/`OperatorReplyOutboundService`/
+  `MailInboundIngestService` entirely, leaving the per-mailbox DB switches as the sole operational
+  authority; and (3) a second, deeper instance of the same bug found while fixing (2):
+  `worker-app.module.ts`'s `MAIL_TRANSPORT` factory-provider ALSO consulted `MAIL_SEND_ENABLED` (on
+  top of `SMTP_MODE`) when choosing the real-vs-mock SMTP transport at boot — fixed by extracting
+  adapter selection into `deployment-mail-capability.ts`, read by both the worker's real DI selection
+  and the new Settings → Integration Health "Effective Status" (Configured / Operationally enabled /
+  Deployment adapter / Effective), so the two can never disagree. See
+  `PHASES/PHASE_03_1_ADMIN_SETTINGS.md`'s "Correction pass" section for full detail and the updated
+  legacy-env-var table.
 - Phase 4+: LOCKED
 
 ## Phase 2.1 operational data correction
@@ -748,8 +771,10 @@ claim as scoped to that.
   support; no real Outlook tenant has been configured/smoke-tested in any session
 - AI classification/routing: real OpenAI gateway implemented (Slices D/F/G); no real OpenAI
   credentials have been configured/smoke-tested in any session
-- Administration settings (Phase 3.1): DB-backed, admin-managed Mail/AI operational control plane
-  live in code; `/dashboard/settings` UI complete
+- Administration settings (Phase 3.1, corrected 2026-09-23): DB-backed, admin-managed Mail/AI
+  operational control plane live in code, with no env var able to override or duplicate that DB
+  state; `/dashboard/settings` UI complete, including an Integration Health "Effective Status"
+  breakdown (Configured / Operationally enabled / Deployment adapter / Effective) for SMTP/IMAP
 - Technical Connections: secure configuration/mapping only; no external provider calls
 - Phase 4+ integrations (Fawtara, collection, technical suspension, MCP): LOCKED and not started
 

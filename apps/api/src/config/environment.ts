@@ -47,10 +47,15 @@ const environmentSchema = z
     CAPTCHA_TEST_TOKEN: z.string().min(8).optional(),
     CAPTCHA_SITE_KEY: z.string().optional(),
     CAPTCHA_SECRET: z.string().optional(),
-    // Phase 3 Slice D — AI classification master switch, off by default. AI_PROVIDER follows the
-    // same mock/real shape as SMTP_MODE/IMAP_MODE ('mock' never makes a network call; 'openai' is
-    // the one real provider identified in 05_AI_LLM_MCP_STRATEGY.md). The fail-closed rule below
-    // (production + enabled + mock) mirrors MAIL_SEND_ENABLED/SMTP_MODE's own rule.
+    // Phase 3.1 §J correction — DEPRECATED / PARSED-ONLY. AiSettingsResolverService (the persisted
+    // `ai_settings` DB row) is the sole runtime authority for whether AI is enabled and which
+    // provider/model/key it uses. None of AI_ENABLED/AI_PROVIDER/AI_MODEL/AI_API_KEY/
+    // AI_CONFIDENCE_THRESHOLD is read anywhere in the classification/routing/drafting pipeline any
+    // more — DynamicLlmGateway (llm-provider.module.ts) resolves the real OpenAiLlmGateway
+    // dynamically from AiSettings, or fails closed (HUMAN_REVIEW), never from these env vars. Kept
+    // declared only so an existing `.env` file that still sets them does not fail to parse; no
+    // cross-field validation is applied to them any more (see PHASES/PHASE_03_1_ADMIN_SETTINGS.md's
+    // env-status table for the complete list).
     AI_ENABLED: z.enum(['true', 'false']).default('false'),
     AI_PROVIDER: z.enum(['mock', 'openai']).default('mock'),
     AI_MODEL: z.string().optional(),
@@ -61,31 +66,37 @@ const environmentSchema = z
     // deployment still setting it to 'true' fails validation with a clear message instead of being
     // silently ignored or silently aliased to the new switch below — see the superRefine rule.
     AI_AUTO_ROUTE_ACCEPT_REJECT: z.enum(['true', 'false']).default('false'),
-    // Phase 3 Slice G — the one real automatic-business-action switch: high-confidence
-    // ACCEPT_RENEWAL -> RenewalCase ACCEPTED. Off by default. Requires AI_ENABLED=true and a valid
-    // AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT whenever enabled (validated below) — the exact
-    // MAIL_SEND_ENABLED/MAIL_SEND_CUTOVER_AT precedent, fail-closed. There is deliberately no
-    // AI_AUTO_ROUTE_REJECT yet — no safe automatic rejection routing exists in this slice.
+    // Phase 3.1 §J correction — DEPRECATED / PARSED-ONLY, same reasoning as AI_ENABLED above.
+    // AiSettings.autoRouteAccept/autoRouteAcceptCutoverAt (read via AiSettingsResolverService) are
+    // the sole runtime authority. Neither of these env vars is read anywhere any more.
     AI_AUTO_ROUTE_ACCEPT: z.enum(['true', 'false']).default('false'),
-    // Required, ISO-8601, whenever AI_AUTO_ROUTE_ACCEPT=true. AiRoutingService only ever considers
-    // an AiClassification eligible for AUTO_ACCEPT if it was created at or after this instant —
-    // historical classifications created before this boundary can never suddenly auto-route just
-    // because the switch was flipped on later.
     AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT: z.string().optional(),
     FAWTARA_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
+    // Phase 3.1 §D/§Q correction — the ONE retained infrastructure-capability concept for mail:
+    // which adapter class (mock vs. a real network-capable transport) this deployment is even
+    // wired to use at process boot (see worker-app.module.ts's MAIL_TRANSPORT/MAILBOX_READER_FACTORY
+    // factories) — never a routine, admin-managed operational setting. A production deployment must
+    // never run with a mock adapter, full stop, regardless of MailConfiguration's own DB state (see
+    // the unconditional production+mock rule below) — this is the one deliberate exception to
+    // "operational DB state is authoritative," analogous to FAWTARA_MODE/PLESK_MODE/SMARTERMAIL_MODE.
+    // Its EFFECTIVE state is surfaced read-only in Settings/Integration Health
+    // (IntegrationHealthService), so the UI can never claim "Ready" while this deployment is still
+    // wired to a mock adapter.
     SMTP_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
     PLESK_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
     SMARTERMAIL_MODE: z.enum(['mock', 'sandbox', 'production']).default('mock'),
-    // Phase 3 Slice B — outbound mail master switch. Real SMTP transmission must remain off by
-    // default; see MailOutboundService. MAIL_SEND_CUTOVER_AT is required whenever sending is
-    // enabled, and is validated below (fail closed rather than inferring approval for old rows).
+    // Phase 3.1 §D/§Q correction — DEPRECATED / PARSED-ONLY. Real per-mailbox operational control
+    // (whether THIS mailbox actually sends) is exclusively MailConfiguration.outboundSendEnabled/
+    // outboundSendCutoverAt (read via MailConfigurationResolverService, fresh on every attempt).
+    // Neither of these env vars is read anywhere in MailOutboundService/OperatorReplyOutboundService
+    // any more — kept declared only for backward-compatible `.env` parsing.
     MAIL_SEND_ENABLED: z.enum(['true', 'false']).default('false'),
     MAIL_SEND_CUTOVER_AT: z.string().optional(),
-    // Phase 3 Slice C — inbound IMAP sync master switch, off by default. IMAP_MODE follows the
-    // same shape as SMTP_MODE; see MailInboundIngestService/mailbox-reader.ts. The fail-closed
-    // rule below (production + enabled + mock) mirrors MAIL_SEND_ENABLED/SMTP_MODE's own rule.
-    IMAP_SYNC_ENABLED: z.enum(['true', 'false']).default('false'),
+    // See SMTP_MODE's doc comment — the identical infrastructure-capability concept for IMAP.
     IMAP_MODE: z.enum(['mock', 'real']).default('mock'),
+    // Phase 3.1 §D/§Q correction — DEPRECATED / PARSED-ONLY, same reasoning as MAIL_SEND_ENABLED.
+    // MailConfiguration.inboundSyncEnabled is the sole per-mailbox runtime authority.
+    IMAP_SYNC_ENABLED: z.enum(['true', 'false']).default('false'),
   })
   .superRefine((value, context) => {
     if (!value.REDIS_URL && !value.REDIS_HOST) {
@@ -119,77 +130,39 @@ const environmentSchema = z
         message: 'CAPTCHA site key and secret are required for a production provider',
       });
     }
-    if (value.MAIL_SEND_ENABLED === 'true') {
-      const parsed = value.MAIL_SEND_CUTOVER_AT ? Date.parse(value.MAIL_SEND_CUTOVER_AT) : NaN;
-      if (!value.MAIL_SEND_CUTOVER_AT || Number.isNaN(parsed)) {
-        context.addIssue({
-          code: 'custom',
-          path: ['MAIL_SEND_CUTOVER_AT'],
-          message:
-            'a valid ISO-8601 MAIL_SEND_CUTOVER_AT is required whenever MAIL_SEND_ENABLED=true (fail closed: sending must never be enabled without an explicit cutover)',
-        });
-      }
-    }
-    if (value.NODE_ENV === 'production' && value.MAIL_SEND_ENABLED === 'true' && value.SMTP_MODE === 'mock') {
+    // Phase 3.1 §D/§Q correction — UNCONDITIONAL now (previously gated on the now-non-authoritative
+    // MAIL_SEND_ENABLED): a production deployment must never be wired to a mock SMTP adapter, full
+    // stop, regardless of any MailConfiguration's own DB state — the infrastructure-capability
+    // boundary must hold even if every mailbox's outboundSendEnabled happens to be true.
+    if (value.NODE_ENV === 'production' && value.SMTP_MODE === 'mock') {
       context.addIssue({
         code: 'custom',
         path: ['SMTP_MODE'],
         message:
-          'SMTP_MODE=mock is forbidden in production while MAIL_SEND_ENABLED=true — a production runtime must never mark customer messages DELIVERED through a mock transport',
+          'SMTP_MODE=mock is forbidden in production — a production runtime must never be capable of marking customer messages DELIVERED through a mock transport, regardless of any MailConfiguration.outboundSendEnabled state',
       });
     }
-    if (value.NODE_ENV === 'production' && value.IMAP_SYNC_ENABLED === 'true' && value.IMAP_MODE === 'mock') {
+    // Phase 3.1 §D/§Q correction — same unconditional rule for IMAP.
+    if (value.NODE_ENV === 'production' && value.IMAP_MODE === 'mock') {
       context.addIssue({
         code: 'custom',
         path: ['IMAP_MODE'],
         message:
-          'IMAP_MODE=mock is forbidden in production while IMAP_SYNC_ENABLED=true — a production runtime must never appear to sync mail through a fake mailbox reader',
-      });
-    }
-    if (value.NODE_ENV === 'production' && value.AI_ENABLED === 'true' && value.AI_PROVIDER === 'mock') {
-      context.addIssue({
-        code: 'custom',
-        path: ['AI_PROVIDER'],
-        message:
-          'AI_PROVIDER=mock is forbidden in production while AI_ENABLED=true — a production runtime must never appear to classify mail through a fake model',
-      });
-    }
-    if (value.AI_ENABLED === 'true' && value.AI_PROVIDER === 'openai' && (!value.AI_MODEL || !value.AI_API_KEY)) {
-      context.addIssue({
-        code: 'custom',
-        path: ['AI_MODEL'],
-        message: 'AI_MODEL and AI_API_KEY are both required whenever AI_ENABLED=true and AI_PROVIDER=openai',
+          'IMAP_MODE=mock is forbidden in production — a production runtime must never be capable of appearing to sync mail through a fake mailbox reader, regardless of any MailConfiguration.inboundSyncEnabled state',
       });
     }
     // Phase 3 Slice G — the deprecated combined switch must never silently activate routing, and
     // must never be silently aliased to the new switch either (it previously performed no business
     // action, so treating it as equivalent to AI_AUTO_ROUTE_ACCEPT=true would be a behavior change
-    // no deployment ever opted into). Fail closed with an explicit message instead.
+    // no deployment ever opted into). Fail closed with an explicit message instead. (Unrelated to
+    // the Phase 3.1 §J correction above — this field never had any runtime authority to remove.)
     if (value.AI_AUTO_ROUTE_ACCEPT_REJECT === 'true') {
       context.addIssue({
         code: 'custom',
         path: ['AI_AUTO_ROUTE_ACCEPT_REJECT'],
         message:
-          'AI_AUTO_ROUTE_ACCEPT_REJECT is deprecated and performs no business action in this version — remove it and set AI_AUTO_ROUTE_ACCEPT explicitly (with AI_ENABLED=true and AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT) if automatic acceptance routing is intended',
+          'AI_AUTO_ROUTE_ACCEPT_REJECT is deprecated and performs no business action in this version — remove it; automatic acceptance routing is now controlled exclusively by AiSettings.autoRouteAccept in Settings',
       });
-    }
-    if (value.AI_AUTO_ROUTE_ACCEPT === 'true') {
-      if (value.AI_ENABLED !== 'true') {
-        context.addIssue({
-          code: 'custom',
-          path: ['AI_AUTO_ROUTE_ACCEPT'],
-          message: 'AI_ENABLED must be true whenever AI_AUTO_ROUTE_ACCEPT=true',
-        });
-      }
-      const parsedCutover = value.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT ? Date.parse(value.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT) : NaN;
-      if (!value.AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT || Number.isNaN(parsedCutover)) {
-        context.addIssue({
-          code: 'custom',
-          path: ['AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT'],
-          message:
-            'a valid ISO-8601 AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT is required whenever AI_AUTO_ROUTE_ACCEPT=true (fail closed: automatic acceptance routing must never activate without an explicit cutover boundary)',
-        });
-      }
     }
   });
 

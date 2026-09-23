@@ -226,7 +226,6 @@ liveDescribe('Phase 3 Slice B MariaDB outbound-mail integration', () => {
       prisma as never,
       new AuditService(prisma as never),
       { now: () => new Date() },
-      fakeConfigService() as never,
       new MailConfigurationResolverService(prisma as never, fakeConfigService() as never, new ClockService()),
       new MailThreadResolutionService(prisma as never),
       new MailHealthService(prisma as never),
@@ -506,7 +505,7 @@ liveDescribe('Phase 3 Slice B MariaDB outbound-mail integration', () => {
       expect(acceptedByCurrentToken.count).toBe(1);
     });
 
-    it('never claims a row created before the configured cutover', async () => {
+    it('Phase 3.1 §2A/§2B correction — a historical row (created long ago) is still claimable; only the per-mailbox DB outboundSendCutoverAt (already reached in this fixture) gates eligibility, never a global createdAt/env cutover at claim time', async () => {
       const { customer, subscription, renewalCase } = await createFixtureCase();
       const outbox = await createQueuedOutbox({
         customerId: customer.id,
@@ -514,7 +513,6 @@ liveDescribe('Phase 3 Slice B MariaDB outbound-mail integration', () => {
         renewalCaseId: renewalCase.id,
         recipient: customer.primaryEmail,
       });
-      // fakeConfigService()'s MAIL_SEND_CUTOVER_AT is 2020-01-01 — backdate createdAt before it.
       await prisma.communicationOutbox.update({
         where: { id: outbox.id },
         data: { createdAt: new Date('2019-01-01T00:00:00.000Z') },
@@ -523,9 +521,9 @@ liveDescribe('Phase 3 Slice B MariaDB outbound-mail integration', () => {
 
       const outcome = await service.processOne(outbox.id);
 
-      expect(outcome).toBe('not_claimed');
-      const unchanged = await prisma.communicationOutbox.findUniqueOrThrow({ where: { id: outbox.id } });
-      expect(unchanged.status).toBe(CommunicationOutboxStatus.QUEUED);
+      expect(outcome).toBe('sent');
+      const updated = await prisma.communicationOutbox.findUniqueOrThrow({ where: { id: outbox.id } });
+      expect(updated.status).toBe(CommunicationOutboxStatus.DELIVERED);
     });
   });
 

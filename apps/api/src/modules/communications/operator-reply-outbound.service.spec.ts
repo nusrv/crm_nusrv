@@ -50,7 +50,6 @@ function harness(options: {
   resolvedRecipient?: { email: string; source: string } | null;
   mailConfigUsable?: boolean;
   sendImpl?: () => Promise<void>;
-  configValues?: Record<string, string>;
   clockNow?: Date;
 }) {
   const rows = new Map<string, Row>([[options.row.id, { ...options.row }]]);
@@ -141,10 +140,8 @@ function harness(options: {
   const setClockNow = (value: Date) => {
     currentTime = value;
   };
-  const configValues: Record<string, string> = { MAIL_SEND_ENABLED: 'true', MAIL_SEND_CUTOVER_AT: '2025-01-01T00:00:00.000Z', ...options.configValues };
-  const config = { get: (key: string) => configValues[key] };
   const mailConfigResolver = {
-    resolvePinned: jest.fn(() =>
+    resolvePinned: jest.fn<(config: unknown, options?: { checkCutover: boolean }) => { usable: boolean; config?: unknown; reason?: string }>(() =>
       options.mailConfigUsable === false ? { usable: false, reason: 'PINNED_CONFIGURATION_DISABLED' } : { usable: true, config: mailConfiguration },
     ),
   };
@@ -160,7 +157,6 @@ function harness(options: {
     prisma as never,
     { record: auditRecord } as never,
     clock,
-    config as never,
     mailConfigResolver as never,
     emailResolution as never,
     health as never,
@@ -187,33 +183,17 @@ function baseRow(overrides: Partial<Row> = {}): Row {
 }
 
 describe('OperatorReplyOutboundService (§9/§13/§14/§16)', () => {
-  it('G — MAIL_SEND_ENABLED=false never falsely reports sent', async () => {
-    const { service, sendMock } = harness({ row: baseRow(), configValues: { MAIL_SEND_ENABLED: 'false' } });
-    const outcome = await service.processOne('outbox-1');
-    expect(outcome).toBe('disabled');
-    expect(sendMock).not.toHaveBeenCalled();
+  it('Phase 3.1 §2A/§2B — resolvePinned() is always called with checkCutover:false, so a DB outboundSendCutoverAt can never strand a human reply', async () => {
+    const { service, mailConfigResolver } = harness({ row: baseRow() });
+    await service.processOne('outbox-1');
+    expect(mailConfigResolver.resolvePinned).toHaveBeenCalledWith(expect.anything(), { checkCutover: false });
   });
 
-  it('§7 (contract audit) — MAIL_SEND_CUTOVER_AT is NOT consulted for operator replies at all: unset, empty, or malformed never blocks sending', async () => {
-    for (const cutoverValue of ['', 'not-a-real-date', undefined]) {
-      const configValues: Record<string, string> = { MAIL_SEND_ENABLED: 'true' };
-      if (cutoverValue !== undefined) configValues.MAIL_SEND_CUTOVER_AT = cutoverValue;
-      const { service, rows } = harness({ row: baseRow({ id: `outbox-cutover-${cutoverValue}` }), configValues });
-      const outcome = await service.processOne(`outbox-cutover-${cutoverValue}`);
-      expect(outcome).toBe('sent');
-      expect(rows.get(`outbox-cutover-${cutoverValue}`)!.status).toBe('DELIVERED');
-    }
-  });
-
-  it('§7 Case B — a reply queued BEFORE MAIL_SEND_CUTOVER_AT is never stranded: it sends normally, unlike Slice B\'s reminder cutover semantics', async () => {
-    // Simulates the exact strand scenario: a row's queuedAt predates the CURRENT cutover value
-    // (as if the env var were moved forward after this row was already queued). Unlike
+  it('§7 Case B — a reply queued long ago is never stranded: it sends normally, unlike Slice B\'s reminder cutover semantics', async () => {
+    // Simulates the exact strand scenario a DB-level cutover could otherwise create. Unlike
     // MailOutboundService, this must still process normally — no queuedAt >= cutover filter exists
-    // here at all.
-    const { service, rows } = harness({
-      row: baseRow({ queuedAt: new Date('2020-01-01T00:00:00.000Z') }),
-      configValues: { MAIL_SEND_CUTOVER_AT: '2026-01-01T00:00:00.000Z' }, // cutover is LATER than queuedAt.
-    });
+    // here at all, and resolvePinned() is invoked with checkCutover:false (asserted above).
+    const { service, rows } = harness({ row: baseRow({ queuedAt: new Date('2020-01-01T00:00:00.000Z') }) });
     const outcome = await service.processOne('outbox-1');
     expect(outcome).toBe('sent');
     expect(rows.get('outbox-1')!.status).toBe('DELIVERED');

@@ -1,8 +1,8 @@
 import { Inject, Injectable, NotFoundException, ServiceUnavailableException, UnprocessableEntityException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../database/prisma.service';
 import { ActorType, HealthStatus, MessageDirection } from '../../generated/prisma/enums';
+import { AiSettingsResolverService } from '../ai/ai-settings-resolver.service';
 import { MAX_HISTORY_MESSAGES } from '../ai/ai-context.util';
 import { buildDraftReplyInput } from '../ai/ai-draft-context.util';
 import { AiHealthService } from '../ai/ai-health.service';
@@ -39,7 +39,7 @@ export interface DraftReplyResult {
 export class AiReplyDraftService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
+    private readonly aiSettings: AiSettingsResolverService,
     private readonly audit: AuditService,
     private readonly health: AiHealthService,
     private readonly effectiveClassification: EffectiveClassificationService,
@@ -47,9 +47,12 @@ export class AiReplyDraftService {
   ) {}
 
   async generateDraft(threadId: string, actorId: string): Promise<DraftReplyResult> {
-    // §6 — AI disabled fails safely, with zero provider calls and zero mutation. Never falls back
-    // to MockLlmGateway "as if AI worked."
-    if (this.config.get<string>('AI_ENABLED') !== 'true') {
+    // §6 / Phase 3.1 §J correction — AI disabled fails safely, with zero provider calls and zero
+    // mutation, resolved from AiSettings (never AI_ENABLED — see DynamicLlmGateway's own identical
+    // check, which this pre-check simply short-circuits before doing any DB reads below). Never
+    // falls back to MockLlmGateway "as if AI worked."
+    const settings = await this.aiSettings.getSettings();
+    if (!settings.enabled) {
       throw new UnprocessableEntityException('AI_ASSISTANCE_DISABLED');
     }
 
@@ -126,8 +129,11 @@ export class AiReplyDraftService {
     // domain is never duplicated (§18).
     await this.health.record(HealthStatus.HEALTHY, 'AI provider call succeeded.');
 
-    const provider = this.config.get<string>('AI_PROVIDER') ?? 'mock';
-    const model = provider === 'mock' ? 'mock' : (this.config.get<string>('AI_MODEL') ?? 'unknown');
+    // settings.enabled was already confirmed true above, and DynamicLlmGateway would have thrown
+    // LlmPermanentError (caught above) had provider/model/key been anything other than a fully
+    // configured real OpenAI setup — so reaching this line means exactly that ran.
+    const provider = settings.provider;
+    const model = settings.model ?? 'unknown';
 
     // §17 — safe metadata only. Never the generated bodyText, never the customer's bodyText, never
     // the prompt, never the raw provider response.

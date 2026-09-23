@@ -143,23 +143,16 @@ describe('MailInboundIngestService', () => {
     expect(callArgs.where).toMatchObject({ enabled: true, inboundSyncEnabled: true });
   });
 
-  it('§35 — never queries or connects to any mailbox when IMAP_SYNC_ENABLED=false', async () => {
+  it('Phase 3.1 §D/§Q correction — IMAP_SYNC_ENABLED=false no longer blocks sync; only the per-mailbox inboundSyncEnabled DB flag (asserted above) does', async () => {
     const { service, findMany } = harness({
       configs: [uninitialized],
       readers: {},
       configValues: { IMAP_SYNC_ENABLED: 'false', NODE_ENV: 'test' },
     });
 
-    const summary = await service.syncAll();
+    await service.syncAll();
 
-    expect(summary).toEqual({
-      configsProcessed: 0,
-      configsSkipped: 0,
-      messagesIngested: 0,
-      duplicatesSkipped: 0,
-      humanReviewCount: 0,
-    });
-    expect(findMany).not.toHaveBeenCalled();
+    expect(findMany).toHaveBeenCalledTimes(1);
   });
 
   it('processes only configs matching the strict environment pairing (production node -> PRODUCTION config only)', async () => {

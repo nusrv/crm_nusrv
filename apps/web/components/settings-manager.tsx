@@ -50,9 +50,47 @@ interface HealthEntry {
   message: string;
 }
 
+/** Mirrors the API's MailChannelStatus — see integration-health.service.ts. `effective` is the
+ * only field that answers "would a real send/sync actually happen right now"; the other three name
+ * exactly which layer is blocking it when `effective` is not READY. */
+interface MailChannelStatus {
+  configured: boolean;
+  operationallyEnabled: boolean;
+  deploymentAdapter: 'REAL' | 'MOCK';
+  effective: 'READY' | 'NOT_CONFIGURED' | 'DISABLED' | 'BLOCKED_BY_DEPLOYMENT';
+}
+
 interface HealthOverview {
-  mail: Array<{ mailConfigurationId: string; scope: string; label: string; smtp: HealthEntry | null; imap: HealthEntry | null }>;
+  mail: Array<{
+    mailConfigurationId: string;
+    scope: string;
+    label: string;
+    smtp: HealthEntry | null;
+    imap: HealthEntry | null;
+    smtpStatus: MailChannelStatus;
+    imapStatus: MailChannelStatus;
+  }>;
   ai: HealthEntry | null;
+}
+
+const EFFECTIVE_STATUS_LABEL: Record<MailChannelStatus['effective'], string> = {
+  READY: 'Ready',
+  NOT_CONFIGURED: 'Not configured',
+  DISABLED: 'Disabled in Settings',
+  BLOCKED_BY_DEPLOYMENT: 'BLOCKED — deployment has no real adapter',
+};
+
+function EffectiveStatusCell({ status }: { status: MailChannelStatus }) {
+  return (
+    <span>
+      {EFFECTIVE_STATUS_LABEL[status.effective]}
+      <br />
+      <span className="muted">
+        Configured: {status.configured ? 'Yes' : 'No'} · Enabled: {status.operationallyEnabled ? 'Yes' : 'No'} · Deployment
+        adapter: {status.deploymentAdapter === 'REAL' ? 'Real' : 'Mock'}
+      </span>
+    </span>
+  );
 }
 
 type TabKey = 'mail' | 'ai' | 'health';
@@ -415,6 +453,12 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
             ))}
           </tbody>
         </table>
+        <p className="muted text-sm">
+          A successful IMAP/SMTP test only proves the credentials/connection work from THIS API instance — it does not prove the background
+          worker can use the same real adapter for actual sync/sending. See the Integration Health tab for the deployment-level Effective
+          Status, which is the only place that combines configuration, this operational switch, and deployment adapter capability into one
+          answer.
+        </p>
       </section>
     </>
   );
@@ -595,9 +639,10 @@ function IntegrationHealthSection() {
           <tr>
             <th>Integration</th>
             <th>Scope / Mailbox</th>
-            <th>Status</th>
+            <th>Last Test Result</th>
             <th>Last Checked</th>
             <th>Message</th>
+            <th>Effective Status</th>
           </tr>
         </thead>
         <tbody>
@@ -613,6 +658,9 @@ function IntegrationHealthSection() {
                 <td>{row.smtp?.status ?? 'Never checked'}</td>
                 <td>{row.smtp ? new Date(row.smtp.checkedAt).toLocaleString() : '—'}</td>
                 <td>{row.smtp?.message ?? '—'}</td>
+                <td>
+                  <EffectiveStatusCell status={row.smtpStatus} />
+                </td>
               </tr>
               <tr>
                 <td>IMAP</td>
@@ -624,6 +672,9 @@ function IntegrationHealthSection() {
                 <td>{row.imap?.status ?? 'Never checked'}</td>
                 <td>{row.imap ? new Date(row.imap.checkedAt).toLocaleString() : '—'}</td>
                 <td>{row.imap?.message ?? '—'}</td>
+                <td>
+                  <EffectiveStatusCell status={row.imapStatus} />
+                </td>
               </tr>
             </Fragment>
           ))}
@@ -633,6 +684,7 @@ function IntegrationHealthSection() {
             <td>{overview.ai?.status ?? 'Never checked'}</td>
             <td>{overview.ai ? new Date(overview.ai.checkedAt).toLocaleString() : '—'}</td>
             <td>{overview.ai?.message ?? '—'}</td>
+            <td className="muted">No deployment-capability gate — see Settings → AI.</td>
           </tr>
         </tbody>
       </table>

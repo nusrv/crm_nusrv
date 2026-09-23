@@ -3,7 +3,6 @@ import { MailOutboundService } from './mail-outbound.service';
 
 const NOW = new Date('2026-09-01T12:00:00.000Z');
 const RECLAIMED_TOKEN = new Date('2026-09-01T12:05:00.000Z');
-const CUTOVER = '2026-01-01T00:00:00.000Z';
 
 const mailConfigurationA = {
   id: 'config-A',
@@ -83,8 +82,6 @@ interface HarnessOptions {
   configResolution?: ConfigResolution;
   pinnedConfigResolution?: ConfigResolution;
   recipient?: { email: string; source: string } | null;
-  sendingEnabled?: boolean;
-  cutover?: string | null;
   /** Simulates a second worker's stale-PROCESSING reclaim (writing a NEW lastAttemptAt/status)
    * landing partway through THIS worker's processOne() call. The reclaim is applied immediately
    * before the (0-indexed) `reclaimAfterGuardedCalls`-th ownership-guarded updateMany() call is
@@ -98,12 +95,6 @@ interface HarnessOptions {
 
 function buildHarness(options: HarnessOptions = {}) {
   const row = options.row ?? baseRow();
-
-  const configGet = jest.fn((key: string) => {
-    if (key === 'MAIL_SEND_ENABLED') return options.sendingEnabled === false ? 'false' : 'true';
-    if (key === 'MAIL_SEND_CUTOVER_AT') return options.cutover === null ? undefined : (options.cutover ?? CUTOVER);
-    return undefined;
-  });
 
   // Mutable "fake persisted state" for this one row. claim() writes {status: PROCESSING,
   // lastAttemptAt: now} through the same mock as everything else, so the token claim() reads back
@@ -237,7 +228,6 @@ function buildHarness(options: HarnessOptions = {}) {
     }),
   };
   const clock = { now: jest.fn(() => NOW) };
-  const config = { get: configGet };
   const mailConfigResolver = {
     resolveForOutbound: jest.fn((billingEntityId: string) => {
       void billingEntityId;
@@ -285,7 +275,6 @@ function buildHarness(options: HarnessOptions = {}) {
     prisma as never,
     audit as never,
     clock,
-    config as never,
     mailConfigResolver as never,
     threadResolution as never,
     health as never,
@@ -317,25 +306,6 @@ function buildHarness(options: HarnessOptions = {}) {
 }
 
 describe('MailOutboundService.processOne — gating', () => {
-  it('never claims or sends while MAIL_SEND_ENABLED=false', async () => {
-    const { service, prisma, transport } = buildHarness({ sendingEnabled: false });
-
-    const outcome = await service.processOne('outbox-1');
-
-    expect(outcome).toBe('disabled');
-    expect(prisma.communicationOutbox.updateMany).not.toHaveBeenCalled();
-    expect(transport.send).not.toHaveBeenCalled();
-  });
-
-  it('fails closed when sending is enabled but no valid cutover is configured', async () => {
-    const { service, prisma } = buildHarness({ cutover: null });
-
-    const outcome = await service.processOne('outbox-1');
-
-    expect(outcome).toBe('disabled');
-    expect(prisma.communicationOutbox.updateMany).not.toHaveBeenCalled();
-  });
-
   it('returns not_claimed when the CAS claim loses the race', async () => {
     const { service, prisma } = buildHarness({ claimSucceeds: false });
 
@@ -992,26 +962,17 @@ describe('MailOutboundService.processOne — INTERNAL audience', () => {
 });
 
 describe('MailOutboundService.processBatch', () => {
-  it('reports disabled without querying anything when MAIL_SEND_ENABLED=false', async () => {
-    const { service, prisma } = buildHarness({ sendingEnabled: false });
-
-    const summary = await service.processBatch();
-
-    expect(summary.disabled).toBe(true);
-    expect(prisma.communicationOutbox.updateMany).not.toHaveBeenCalled();
-  });
-
-  it('selects only cutover-eligible QUEUED/stale-PROCESSING rows and aggregates outcomes', async () => {
+  it('selects only scheduled-due QUEUED/stale-PROCESSING rows and aggregates outcomes — no global createdAt/cutover pre-filter (Phase 3.1 §D correction)', async () => {
     const { service, prisma } = buildHarness();
     prisma.communicationOutbox.findMany.mockResolvedValue([{ id: 'outbox-1' }]);
 
     const summary = await service.processBatch();
 
     const findManyArgs = prisma.communicationOutbox.findMany.mock.calls[0]![0] as {
-      where: { createdAt: { gte: Date }; OR: unknown[] };
+      where: { createdAt?: unknown; OR: unknown[] };
       take: number;
     };
-    expect(findManyArgs.where.createdAt).toEqual({ gte: new Date(CUTOVER) });
+    expect(findManyArgs.where.createdAt).toBeUndefined();
     expect(Array.isArray(findManyArgs.where.OR)).toBe(true);
     expect(findManyArgs.take).toBe(50);
     expect(summary.candidates).toBe(1);

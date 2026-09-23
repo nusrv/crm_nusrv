@@ -7,6 +7,7 @@ import { ActorType, HealthStatus } from '../../generated/prisma/enums';
 import type { AiSettings, Prisma } from '../../generated/prisma/client';
 import { SecretEncryptionService } from '../../security/secret-encryption.service';
 import { AiHealthService } from './ai-health.service';
+import { AiSettingsResolverService } from './ai-settings-resolver.service';
 import type { UpdateAiSettingsDto } from './ai-settings.dto';
 import { AI_PROVIDER_TIMEOUT_MS } from './ai-timing.constants';
 
@@ -55,6 +56,7 @@ export class AiSettingsService {
     private readonly encryption: SecretEncryptionService,
     private readonly audit: AuditService,
     private readonly health: AiHealthService,
+    private readonly aiSettings: AiSettingsResolverService,
   ) {}
 
   async get(): Promise<SerializedAiSettings> {
@@ -144,34 +146,36 @@ export class AiSettingsService {
   }
 
   /**
-   * Phase 3.1 §K — explicit ADMIN action only. Makes ONE minimal real OpenAI request (a raw SDK
+   * Phase 3.1 §K, corrected by §4 — explicit ADMIN action only. Resolves model/API key through the
+   * EXACT SAME `AiSettingsResolverService` DynamicLlmGateway/OpenAiLlmGateway use at real
+   * classification time (never a separate, independently-duplicated read of the row) — a successful
+   * Test AI is therefore a direct proof that "the runtime would use this same OpenAI configuration,"
+   * not merely a coincidentally-similar check. Makes ONE minimal real OpenAI request (a raw SDK
    * call, deliberately NEVER through LlmGateway/AiClassificationService's classifyIntent()/
-   * draftReply() — those are reserved for the real classification/drafting prompts and schemas) to
-   * prove the currently-saved provider/model/API key actually work. Creates no AiClassification, no
-   * AiRoutingDecision, sends no email, mutates no RenewalCase, and is completely independent of
-   * AI_PROVIDER's mock-vs-real DI wiring — it always calls the real OpenAI API, regardless of which
-   * gateway is currently wired for automatic classification, because its entire purpose is to prove
-   * the STORED credentials work against the real provider.
+   * draftReply() — those are reserved for the real classification/drafting prompts and schemas).
+   * Creates no AiClassification, no AiRoutingDecision, sends no email, mutates no RenewalCase.
+   * Deliberately does NOT require `enabled: true` — an admin must be able to test a model/key before
+   * ever flipping AI on.
    */
   async test(): Promise<{ success: boolean; provider: string; model: string | null; timestamp: Date; latencyMs?: number; message: string }> {
-    const row = await this.prisma.aiSettings.findUnique({ where: { singleton: true } });
+    const settings = await this.aiSettings.getSettings();
     const timestamp = new Date();
-    if (!row?.model || !row.apiKeyCiphertext) {
-      return { success: false, provider: 'OPENAI', model: row?.model ?? null, timestamp, message: 'Provider/model/API key are not fully configured.' };
+    const apiKey = await this.aiSettings.getApiKey();
+    if (!settings.model || !apiKey) {
+      return { success: false, provider: settings.provider, model: settings.model, timestamp, message: 'Provider/model/API key are not fully configured.' };
     }
-    const apiKey = this.encryption.decrypt<ApiKeyEnvelope>(row.apiKeyCiphertext).apiKey;
 
     const client = this.clientFactory({ apiKey, timeout: AI_PROVIDER_TIMEOUT_MS, maxRetries: 0 });
     const startedAt = Date.now();
     try {
-      await client.responses.create({ model: row.model, input: 'connection test — reply with the single word OK.', max_output_tokens: 16 });
+      await client.responses.create({ model: settings.model, input: 'connection test — reply with the single word OK.', max_output_tokens: 16 });
       const latencyMs = Date.now() - startedAt;
       await this.health.record(HealthStatus.HEALTHY, 'Manual AI connection test succeeded.');
-      return { success: true, provider: 'OPENAI', model: row.model, timestamp, latencyMs, message: 'AI connection succeeded.' };
+      return { success: true, provider: settings.provider, model: settings.model, timestamp, latencyMs, message: 'AI connection succeeded.' };
     } catch (error) {
       const sanitized = this.sanitizeError(error);
       await this.health.record(HealthStatus.UNAVAILABLE, `Manual AI connection test failed: ${sanitized}`);
-      return { success: false, provider: 'OPENAI', model: row.model, timestamp, message: sanitized };
+      return { success: false, provider: settings.provider, model: settings.model, timestamp, message: sanitized };
     }
   }
 

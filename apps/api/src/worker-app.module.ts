@@ -16,6 +16,7 @@ import { OperatorReplyOutboundService } from './modules/communications/operator-
 import { OPERATOR_REPLY_QUEUE } from './modules/communications/operator-reply-queue.constants';
 import { OperatorReplyWorker } from './modules/communications/operator-reply.worker';
 import { CustomersModule } from './modules/customers/customers.module';
+import { resolveImapAdapterCapability, resolveSmtpAdapterCapability } from './modules/mail/deployment-mail-capability';
 import { ImapMailboxReaderFactory } from './modules/mail/imap-mailbox-reader-factory';
 import { MailConfigurationResolverService } from './modules/mail/mail-configuration-resolver.service';
 import { MailHealthService } from './modules/mail/mail-health.service';
@@ -82,6 +83,15 @@ import { TimeModule } from './time/time.module';
     MockMailTransport,
     SmtpMailTransport,
     {
+      // Phase 3.1 §2B/§2C correction — SMTP_MODE is the ONE retained infrastructure-capability
+      // concept (see environment.ts): whether this deployment is even capable of real SMTP at all.
+      // MAIL_SEND_ENABLED must never ALSO gate this selection — that would silently route every
+      // send through the mock transport whenever the deprecated env var is unset/false, even while
+      // MailConfiguration.outboundSendEnabled (the DB, admin-managed, Settings-driven operational
+      // switch) says ON, exactly the AI_PROVIDER-style hidden-authority contradiction this
+      // correction pass exists to remove. The DB switch is enforced downstream, per-mailbox, by
+      // MailConfigurationResolverService inside MailOutboundService.evaluateEligibility() — never
+      // here.
       provide: MAIL_TRANSPORT,
       inject: [ConfigService, MockMailTransport, SmtpMailTransport],
       useFactory: (
@@ -89,9 +99,7 @@ import { TimeModule } from './time/time.module';
         mock: MockMailTransport,
         smtp: SmtpMailTransport,
       ): MailTransport => {
-        const sendingEnabled = config.get<string>('MAIL_SEND_ENABLED') === 'true';
-        const smtpMode = config.get<string>('SMTP_MODE');
-        return sendingEnabled && smtpMode !== 'mock' ? smtp : mock;
+        return resolveSmtpAdapterCapability(config) === 'MOCK' ? mock : smtp;
       },
     },
     MailWorker,
@@ -109,7 +117,7 @@ import { TimeModule } from './time/time.module';
         mock: MockMailboxReaderFactory,
         real: ImapMailboxReaderFactory,
       ): MailboxReaderFactory => {
-        return config.get<string>('IMAP_MODE') === 'mock' ? mock : real;
+        return resolveImapAdapterCapability(config) === 'MOCK' ? mock : real;
       },
     },
     MailImapWorker,

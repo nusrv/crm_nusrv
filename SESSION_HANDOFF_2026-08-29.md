@@ -1644,3 +1644,82 @@ RBAC-tested either, so there's no existing pattern to extend.
 
 Verified: typecheck and lint clean on both packages, 274 tests / 54 suites (252 passed, 22 skipped),
 both production builds succeed. **Not yet committed** at the time of writing this entry.
+
+## 2026-09-23 — Phase 3.1 correction: removed AI_PROVIDER/MAIL_SEND_ENABLED/IMAP_SYNC_ENABLED as hidden runtime authority ("effective truth" fix)
+
+Owner reviewed the just-committed/pushed Phase 3.1 result (`e069170`) and rejected it as incomplete
+for two reasons: (1) it kept several env vars runtime-authoritative without stopping to explain the
+exception first, as explicitly instructed; (2) a real bug — the worker's actual AI/mail DI wiring
+still keyed off `AI_PROVIDER`/`MAIL_SEND_ENABLED` at process boot, so Settings could display "AI
+enabled, provider OpenAI, Test AI succeeds" or "Outbound sending ON" while the real runtime silently
+used a mock gateway/transport regardless of that DB state. Owner's own words: "That violates the
+Phase 3.1 requirement that the CRM display the effective truth. Fix this."
+
+**AI side.** Created `DynamicLlmGateway` (`apps/api/src/modules/ai/dynamic-llm-gateway.ts`) — resolves
+`enabled`/`provider`/`model` purely from `AiSettingsResolverService` on every call, with **no
+`ConfigService` dependency at all**, so it is architecturally incapable of reading `AI_PROVIDER` even
+if it's set to `mock` in the real process environment. `llm-provider.module.ts` rewritten to wire
+`LLM_GATEWAY -> DynamicLlmGateway` unconditionally (`MockLlmGateway` remains available only for tests
+via direct injection, never for any production code path). `AiReplyDraftService` and
+`AiSettingsService.test()` both switched from `ConfigService`/a separately-duplicated check to the
+same `AiSettingsResolverService`, so Test AI is now proof the runtime would use that exact
+configuration, not a coincidentally similar check. New regression test
+(`dynamic-llm-gateway.spec.ts`): "DB AI enabled + OpenAI configured NEVER silently uses mock because
+of AI_PROVIDER env."
+
+**Mail side.** Removed `MAIL_SEND_ENABLED`/`MAIL_SEND_CUTOVER_AT` entirely from
+`MailOutboundService` (no more `ConfigService`, no more `sendingEnabled()`/`cutoverDate()`, no more
+`createdAt >= cutover` global pre-filter — the per-mailbox `MailConfiguration.outboundSendCutoverAt`,
+already checked per-row via `MailConfigurationResolverService`, is the sole cutover authority) and
+`OperatorReplyOutboundService` (same removal; it already passed `{ checkCutover: false }` to
+`resolvePinned()`, so no cutover-stranding behavior changes). Removed `IMAP_SYNC_ENABLED` from
+`MailInboundIngestService.syncAll()` — `MailConfiguration.inboundSyncEnabled` is now the sole
+authority there too.
+
+**The deeper bug, found while doing the above.** `worker-app.module.ts`'s `MAIL_TRANSPORT`
+factory-provider computed `sendingEnabled = config.get('MAIL_SEND_ENABLED') === 'true'` and combined
+it with `SMTP_MODE` to choose between `MockMailTransport` and `SmtpMailTransport` at process boot —
+meaning even after fixing `MailOutboundService` above, an unset/`false` `MAIL_SEND_ENABLED` would
+still have silently forced every real send through the mock transport regardless of
+`MailConfiguration.outboundSendEnabled`, exactly the same class of bug as the AI one, one layer
+deeper in the DI graph. Fixed by extracting adapter selection into a new
+`apps/api/src/modules/mail/deployment-mail-capability.ts`
+(`resolveSmtpAdapterCapability`/`resolveImapAdapterCapability`, keyed on `SMTP_MODE`/`IMAP_MODE`
+only) and using it both for `worker-app.module.ts`'s real `MAIL_TRANSPORT`/`MAILBOX_READER_FACTORY`
+selection and for a new Settings → Integration Health "Effective Status" per mailbox/channel
+(`IntegrationHealthService`, new `smtpStatus`/`imapStatus` fields: `configured` /
+`operationallyEnabled` / `deploymentAdapter` / `effective`) — the two now read the exact same helper,
+so Settings can never display a readiness state the worker cannot actually deliver. Frontend
+(`settings-manager.tsx`) Integration Health tab now shows this breakdown per mailbox, plus a note
+under the Mail settings table that a successful IMAP/SMTP test does not by itself prove the
+background worker can use the same real adapter — see the Effective Status column instead.
+
+**Result, per the owner's required report items:**
+- `AI_PROVIDER` no longer affects runtime in any way — `DynamicLlmGateway` cannot read it.
+- `MAIL_SEND_CUTOVER_AT` no longer affects runtime — `MailOutboundService` has no `ConfigService`
+  dependency at all any more.
+- Mail env vars remaining infrastructure-only: `SMTP_MODE`, `IMAP_MODE` (deployment adapter
+  selection — the one retained concept). Everything else
+  (`MAIL_SEND_ENABLED`/`MAIL_SEND_CUTOVER_AT`/`IMAP_SYNC_ENABLED`/all seven AI env vars) is
+  deprecated/parsed-only: still Zod-validated in `environment.ts` for backward `.env` compatibility,
+  never read by any runtime code path.
+- The CRM displays the infrastructure capability gate read-only, per mailbox per channel, in Settings
+  → Integration Health's new Effective Status column (`Configured` / `Enabled` / `Deployment
+  adapter` / effective verdict), computed via the identical helper the worker's real DI uses.
+- Test AI and actual runtime classification now share identical provider/config semantics
+  (`AiSettingsResolverService`) — proven by construction (same class, same instance shape in tests),
+  not by convention.
+
+New/changed test coverage: `dynamic-llm-gateway.spec.ts` (new, 6 tests), `deployment-mail-capability.spec.ts`
+(new), `integration-health.service.spec.ts` (new — effective-status computation, including the
+critical regression "never READY when the deployment adapter is MOCK, even though DB config says
+fully enabled"), plus updated specs for `environment.ts`, `ai-settings.service.ts`,
+`ai-reply-draft.service.ts`, `mail-outbound.service.ts`, `operator-reply-outbound.service.ts`, and
+`mail-inbound-ingest.service.ts` reflecting the removed env-var gates. Documentation corrected:
+`PHASES/PHASE_03_1_ADMIN_SETTINGS.md` (new "Correction pass" section, rewritten boundary section and
+legacy-env-var table, updated acceptance criteria) and `PROJECT_STATUS.md`.
+
+Per the owner's explicit instruction: implemented in one continuous task, verified in the `C:\sgv`
+local mirror (never `npm install`/`npm ci` in this cloud-synced repository), committed as `Fix Phase
+3.1 effective integration configuration`, pushed to `origin/main`. **Not deployed** — deployment
+remains the owner's manual action per the existing deployment model.

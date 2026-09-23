@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../database/prisma.service';
 import { ClockService } from '../../time/clock.service';
@@ -39,12 +38,10 @@ export type ReplyProcessingOutcome =
   | 'cancelled'
   | 'failed'
   | 'not_claimed'
-  | 'disabled'
   | 'conflict'
   | 'ownership_lost_after_send';
 
 export interface ReplyBatchSummary {
-  disabled: boolean;
   candidates: number;
   sent: number;
   deferred: number;
@@ -68,6 +65,11 @@ export interface ReplyBatchSummary {
  * are (1) the thread's pinned mailbox is currently usable and (2) the customer still has an
  * authoritative recipient. The EmailMessage is already materialized (by OperatorReplyService,
  * synchronously, before this row exists) — this class never creates one, only sends.
+ *
+ * Phase 3.1 §D/§Q correction — there is no global env-level enablement gate here any more.
+ * MAIL_SEND_ENABLED is deprecated/parsed-only (see environment.ts) and is never read by this
+ * class. Each row's mailbox is resolved fresh via resolvePinned() in evaluateEligibility(), which
+ * requires that mailbox's own DB-managed `outboundSendEnabled` before treating it as eligible.
  */
 @Injectable()
 export class OperatorReplyOutboundService {
@@ -77,7 +79,6 @@ export class OperatorReplyOutboundService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly clock: ClockService,
-    private readonly config: ConfigService,
     private readonly mailConfigResolver: MailConfigurationResolverService,
     private readonly emailResolution: CustomerEmailResolutionService,
     private readonly health: MailHealthService,
@@ -86,7 +87,6 @@ export class OperatorReplyOutboundService {
 
   async processBatch(): Promise<ReplyBatchSummary> {
     const summary: ReplyBatchSummary = {
-      disabled: false,
       candidates: 0,
       sent: 0,
       deferred: 0,
@@ -96,10 +96,6 @@ export class OperatorReplyOutboundService {
       conflicts: 0,
       ownershipLostAfterSend: 0,
     };
-    if (!this.sendingEnabled()) {
-      summary.disabled = true;
-      return summary;
-    }
 
     const now = this.clock.now();
     const staleThreshold = this.staleThreshold(now);
@@ -110,11 +106,11 @@ export class OperatorReplyOutboundService {
     // feature entirely. OperatorReplyOutbox has no such history: every row is a deliberate human
     // send action created by this very feature, with no automatic regeneration mechanism if
     // skipped. Gating on a cutover watermark here would risk PERMANENTLY stranding a real human
-    // reply queued between two values of MAIL_SEND_CUTOVER_AT if that env var is ever changed
-    // after the row was created (queuedAt is immutable) — an unacceptable outcome for a one-of-a-
-    // kind human message. MAIL_SEND_ENABLED (checked above) remains the correct safety gate: it is
-    // a live toggle, not a watermark, so it can never strand a row — disabling it just leaves
-    // QUEUED rows QUEUED until re-enabled (see sendingEnabled()'s own tests).
+    // reply — an unacceptable outcome for a one-of-a-kind human message. resolvePinned()'s own
+    // `outboundSendEnabled` DB switch (checked per-row in evaluateEligibility(), always with
+    // `{ checkCutover: false }`) remains the correct safety gate: it is a live toggle, not a
+    // watermark, so it can never strand a row — disabling it just leaves QUEUED rows QUEUED until
+    // re-enabled.
     // §2 (contract audit) — a QUEUED row is only a candidate once its own retry-backoff time has
     // arrived (nextAttemptAt IS NULL, meaning "eligible immediately" — a freshly-queued human
     // reply always is — OR nextAttemptAt <= now). See operator-reply-timing.constants.ts for the
@@ -149,8 +145,6 @@ export class OperatorReplyOutboundService {
   }
 
   async processOne(outboxId: string): Promise<ReplyProcessingOutcome> {
-    if (!this.sendingEnabled()) return 'disabled';
-
     const now = this.clock.now();
     const leaseToken = await this.claim(outboxId, now);
     if (!leaseToken) return 'not_claimed';
@@ -204,10 +198,6 @@ export class OperatorReplyOutboundService {
       if (error instanceof OwnershipLostError) return 'conflict';
       throw error;
     }
-  }
-
-  private sendingEnabled(): boolean {
-    return this.config.get<string>('MAIL_SEND_ENABLED') === 'true';
   }
 
   private staleThreshold(now: Date): Date {
