@@ -38,24 +38,58 @@ Inbound email
 → deterministic workflow service
 → optional human review
 
-## Provider abstraction
+## Provider abstraction (provider-neutral — corrected 2026-09-24)
 
-Define an interface such as:
+The CRM AI layer is **provider-neutral by requirement, not just by initial implementation**. OpenAI
+is one supported provider; it is never hard-coded as the only one, and the architecture must make
+adding a fourth provider straightforward without touching any business service.
 
-- classifyInboundMessage(context)
-- summarizeMessage(context)
-- draftReply(context)
+Layering:
 
-Initial implementation:
-- OpenAI Responses API (or another explicitly configured provider)
+```
+AiSettingsResolverService (DB: enabled/provider/model/decrypted key)
+        v
+DynamicLlmGateway            <- the ONE LlmGateway implementation business services depend on
+        v
+LlmProviderRegistry           <- maps AiSettings.provider -> one LlmProviderAdapter
+        v
+  OpenAiProviderAdapter | AnthropicProviderAdapter | GoogleGeminiProviderAdapter
+```
+
+Business services (AiClassificationService, AiClassificationWorker, AiRoutingService,
+AiReplyDraftService, RenewalCase services, Communication Center) depend ONLY on the common
+`LlmGateway` interface (`classifyIntent(context)` / `draftReply(context)`) — they never see a
+provider ID, a provider-specific request/response shape, or a model name. Adding a fourth provider
+means adding one adapter class implementing `LlmProviderAdapter` and one entry in
+`LlmProviderRegistry` — nothing else changes.
+
+Supported providers (canonical IDs, stored in `AiSettings.provider`, a plain `VARCHAR(50)` with no DB
+enum/CHECK constraint):
+- `OPENAI` — OpenAI Responses API
+- `ANTHROPIC` — Anthropic Messages API (Claude)
+- `GOOGLE_GEMINI` — Google Gemini `generateContent` API
+
+Every adapter independently re-validates the provider's raw output against the exact same Zod schema
+regardless of any provider-side structured-output enforcement (OpenAI's `text.format`, Gemini's
+`responseMimeType: "application/json"`) — no provider-specific object ever reaches business logic,
+and no provider can invent an intent outside the fixed `AiIntent` enum.
+
+The Model field is never hard-coded anywhere in business logic or an adapter — it is always the
+admin-configured string from `AiSettings.model`, entered through Settings → AI. An ADMIN can enter
+any model ID the selected provider supports (e.g. a newer model release) without a code deployment.
 
 Do not hard-code the model name in business logic.
-Use configuration:
-- AI_PROVIDER
-- AI_MODEL
-- AI_CONFIDENCE_THRESHOLD
-- AI_ENABLED
-- AI_AUTO_ROUTE_ACCEPT_REJECT
+Use the DB-backed operational settings (Settings → AI, Phase 3.1):
+- `AiSettings.enabled`
+- `AiSettings.provider`
+- `AiSettings.model`
+- `AiSettings.confidenceThreshold`
+- `AiSettings.autoRouteAccept` / `autoRouteAcceptCutoverAt`
+
+The legacy `AI_PROVIDER`/`AI_MODEL`/`AI_CONFIDENCE_THRESHOLD`/`AI_ENABLED`/
+`AI_AUTO_ROUTE_ACCEPT_REJECT` env vars are deprecated/parsed-only (see
+`PHASES/PHASE_03_1_ADMIN_SETTINGS.md`) — no environment variable can override or duplicate the
+DB-selected provider, and there is no AI adapter-selection env var of any kind.
 
 ## Structured output contract
 
@@ -165,6 +199,10 @@ External agent/n8n interaction
 
 This keeps the system functional even when MCP/n8n is offline.
 
-## Current OpenAI direction
+## Current provider direction
 
-Current OpenAI Responses tooling supports direct model requests, structured/tool workflows, function calling, and MCP tools. Therefore choosing a direct API integration now does not block MCP later.
+OpenAI's Responses API, Anthropic's Messages API, and Google's Gemini API each support direct model
+requests and structured/JSON-constrained output; none of the three real adapters uses tools, function
+calling, web/file access, or MCP tools for CRM operations — see the Provider abstraction section
+above. Therefore choosing a direct API integration now does not block MCP later, for any of the
+supported providers.

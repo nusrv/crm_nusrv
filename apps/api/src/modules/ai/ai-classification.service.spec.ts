@@ -86,22 +86,20 @@ function harness(options: {
     fakePrisma(options.messages);
   const rawConfigValues: Record<string, unknown> = {
     AI_ENABLED: 'true',
-    AI_PROVIDER: 'mock',
     AI_CONFIDENCE_THRESHOLD: 0.9,
     ...options.configValues,
   };
-  // AI_PROVIDER remains a genuine ConfigService/env read (Phase 3.1 §D — infra-level mock/real
-  // gateway wiring, unrelated to AiSettings) — kept here for persistClassification()'s `provider`
-  // evidence field.
-  const config = { get: (key: string) => rawConfigValues[key] };
-  // Phase 3.1 §J — every other value (AI_ENABLED/AI_CONFIDENCE_THRESHOLD/AI_AUTO_ROUTE_ACCEPT/
-  // AI_AUTO_ROUTE_ACCEPT_CUTOVER_AT) now comes from AiSettingsResolverService instead, built here
-  // from the exact same `configValues` test fixtures so every existing call site below is unchanged.
+  // Provider-neutral correction — AiClassificationService has no ConfigService dependency at all
+  // any more; every value (including `provider`/`model`, previously wrongly sourced from the
+  // deprecated AI_PROVIDER env var) comes from AiSettingsResolverService, built here from the same
+  // `configValues` test fixtures so every existing call site below is unchanged. `AI_PROVIDER`/
+  // `AI_MODEL` keys remain valid fixture inputs purely as this test file's own naming convention —
+  // they feed AiRuntimeSettings.provider/model, never a ConfigService read.
   const aiSettings = {
     getSettings: () =>
       Promise.resolve({
         enabled: rawConfigValues.AI_ENABLED === 'true',
-        provider: 'OPENAI',
+        provider: (rawConfigValues.AI_PROVIDER as string | undefined) ?? 'OPENAI',
         model: (rawConfigValues.AI_MODEL as string | undefined) ?? null,
         confidenceThreshold: Number(rawConfigValues.AI_CONFIDENCE_THRESHOLD ?? 0.9),
         autoRouteAcceptEnabled: rawConfigValues.AI_AUTO_ROUTE_ACCEPT === 'true',
@@ -128,7 +126,6 @@ function harness(options: {
 
   const service = new AiClassificationService(
     prisma as never,
-    config as never,
     aiSettings as never,
     audit as never,
     health as never,
@@ -247,8 +244,8 @@ describe('AiClassificationService', () => {
     expect(classifications).toHaveLength(1);
     expect(classifications[0]).toMatchObject({
       emailMessageId: 'msg-1',
-      provider: 'mock',
-      model: 'mock',
+      provider: 'OPENAI',
+      model: 'unknown',
       promptVersion: 'phase3-intent-v1',
       intent: AiIntent.ACCEPT_RENEWAL,
       requiresHumanReview: false,
@@ -256,6 +253,18 @@ describe('AiClassificationService', () => {
     expect(healthRecord).toHaveBeenCalledWith(HealthStatus.HEALTHY, expect.any(String));
     const createdAuditCall = auditRecord.mock.calls.find((call) => call[0].eventKey === AI_AUDIT_EVENT.CLASSIFICATION_CREATED);
     expect(createdAuditCall).toBeDefined();
+  });
+
+  it('provider-neutral regression — the persisted provider/model evidence always reflects AiSettingsResolverService, never a hardcoded or env-derived value, for every provider', async () => {
+    const { service, classifications } = harness({
+      messages: [baseMessage],
+      configValues: { AI_PROVIDER: 'ANTHROPIC', AI_MODEL: 'claude-test-model' },
+      classifyIntentImpl: () => Promise.resolve(validResult({ confidence: 0.96 })),
+    });
+
+    await service.classifyMessage('msg-1', false);
+
+    expect(classifications[0]).toMatchObject({ provider: 'ANTHROPIC', model: 'claude-test-model' });
   });
 
   it('§35 — valid intent at 0.89 (below default 0.90 threshold) -> HUMAN_REVIEW', async () => {

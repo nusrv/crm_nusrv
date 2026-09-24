@@ -92,7 +92,8 @@ the ONLY authority of any kind for these decisions):**
   DEFAULT false`, `outbound_send_enabled BOOLEAN DEFAULT false`, `outbound_send_cutover_at
   DATETIME NULL`.
 - New table `ai_settings`: one admin-managed GLOBAL row (`singleton BOOLEAN UNIQUE DEFAULT true` —
-  a DB-enforced at-most-one-row constraint), `enabled`, `provider` (fixed to `'OPENAI'` for V1),
+  a DB-enforced at-most-one-row constraint), `enabled`, `provider` (a plain `VARCHAR(50)`, no DB
+  enum/CHECK constraint — see the 2026-09-24 provider-neutral correction below for why that matters),
   `model`, `confidence_threshold`, `api_key_ciphertext`, `auto_route_accept`,
   `auto_route_accept_cutover_at`, timestamps.
 - No historical data touched. No existing MailConfiguration/AiClassification/AiRoutingDecision row
@@ -152,33 +153,94 @@ is now the ONLY thing `MAIL_SEND_ENABLED` used to also (wrongly) gate.
 - Server-side, independent of the browser: AI cannot be enabled without a configured model and API
   key; Auto Accept cannot be enabled without AI enabled and a valid cutover — enforced in
   `AiSettingsService.update()` regardless of what the UI already checked.
-- `POST /settings/ai/test` makes exactly one minimal raw OpenAI request (never through
-  `AiClassificationService`/`LlmGateway.classifyIntent()`/`draftReply()`) — creates no
-  AiClassification, no AiRoutingDecision, sends no email, mutates no RenewalCase. It resolves
-  model/API key through the exact same `AiSettingsResolverService` `DynamicLlmGateway` uses at real
+- `POST /settings/ai/test` makes exactly one minimal request through whichever provider adapter is
+  currently selected (never through `AiClassificationService`/`LlmGateway.classifyIntent()`/
+  `draftReply()`) — creates no AiClassification, no AiRoutingDecision, sends no email, mutates no
+  RenewalCase. It resolves model/API key through the exact same `AiSettingsResolverService`, and
+  dispatches through the exact same `LlmProviderRegistry`, `DynamicLlmGateway` uses at real
   classification time, so a successful Test AI is a direct proof that "the runtime would use this
-  same OpenAI configuration" — there is no separate mock/real DI wiring for AI to be independent of.
+  same provider/model/credential configuration" — for whichever provider is selected, never a hidden
+  OpenAI-only implementation. See the 2026-09-24 provider-neutral correction below for the full
+  adapter architecture.
 
 ## Dynamic AI runtime (§J)
 
 `AiSettingsResolverService` is the one place every AI-side consumer resolves current settings, fresh
 per call: `AiClassificationService`, `AiClassificationEnqueueService`,
-`AiClassificationWorker`'s recovery scan, `AiRoutingService`, `OpenAiLlmGateway` (which now
-reconstructs its OpenAI client per call instead of caching it forever, so a rotated API key or
-changed model takes effect immediately). The Slice G execution kill switch, cutover protections, and
-historical-message protections are all preserved exactly — `AiRoutingService.processOne()`'s
-pre-claim peek still checks the switch before claiming a PENDING `AUTO_ACCEPT` decision, and the
-frozen `AiRoutingDecision.action` snapshot is never reinterpreted when settings change. One
-correctness fix made necessary by the threshold becoming mutable at runtime:
-`AiRoutingService.executeAutoAccept()`'s defensive invariant check no longer re-compares
-`AiClassification.confidence` against the *current* threshold (that comparison already happened,
-correctly, at classification time and is frozen into `finalStatus`); it now checks only the
-genuinely immutable fields (`direction`, `requiresHumanReview`, `intent`).
+`AiClassificationWorker`'s recovery scan, `AiRoutingService`, `DynamicLlmGateway` (which resolves a
+fresh provider adapter + config on every call rather than caching anything, so a rotated API key,
+changed model, or changed provider all take effect immediately). The Slice G execution kill switch,
+cutover protections, and historical-message protections are all preserved exactly, independent of
+which provider is selected — `AiRoutingService.processOne()`'s pre-claim peek still checks the switch
+before claiming a PENDING `AUTO_ACCEPT` decision, and the frozen `AiRoutingDecision.action` snapshot
+is never reinterpreted when settings change. One correctness fix made necessary by the threshold
+becoming mutable at runtime: `AiRoutingService.executeAutoAccept()`'s defensive invariant check no
+longer re-compares `AiClassification.confidence` against the *current* threshold (that comparison
+already happened, correctly, at classification time and is frozen into `finalStatus`); it now checks
+only the genuinely immutable fields (`direction`, `requiresHumanReview`, `intent`).
+
+## Provider-neutral correction (2026-09-24)
+
+The owner flagged that the initial Phase 3.1 implementation (and this document) treated OpenAI as the
+mandatory/fixed provider — a direct violation of the explicit "provider-neutral" requirement. OpenAI
+must be one supported provider, never hard-coded as the only one. Corrected:
+
+- `AiSettings.provider` now accepts `OPENAI` / `ANTHROPIC` / `GOOGLE_GEMINI` (canonical, upper-snake
+  IDs — see `llm-provider-adapter.ts`'s `SUPPORTED_AI_PROVIDERS`). The column was already a plain
+  `VARCHAR(50)` with no enum/CHECK constraint, so **no migration was required** — the smallest
+  correct change, per the owner's explicit instruction not to touch the already-deployed Phase 3.1
+  migration.
+- `DynamicLlmGateway` was refactored from a single hard-coded OpenAI delegate into a true dispatcher:
+  it resolves `enabled`/`provider`/`model`/API key ONCE per call from `AiSettingsResolverService`,
+  then asks the new `LlmProviderRegistry` to resolve the matching `LlmProviderAdapter`
+  (`OpenAiProviderAdapter` / `AnthropicProviderAdapter` / `GoogleGeminiProviderAdapter`), and passes
+  the already-resolved `{model, apiKey}` down explicitly — an adapter never independently re-reads
+  settings, so a Settings change mid-flight can never produce a provider/model/key mismatch within
+  one call. Adding a fourth provider means adding one adapter class plus one registry entry; nothing
+  in `AiClassificationService`/`AiClassificationWorker`/`AiRoutingService`/`AiReplyDraftService`/
+  RenewalCase services/Communication Center changes, since all of them depend only on the
+  provider-neutral `LlmGateway` interface, exactly as before.
+- Added real `AnthropicProviderAdapter` (Anthropic Messages API) and `GoogleGeminiProviderAdapter`
+  (Google `generateContent` API), both using Node 22's native `fetch` — no new dependency was added,
+  per the owner's explicit preference. Neither has tools, web/file access, or function/business-action
+  calling. Where a provider has no real structured-JSON-Schema constraint (Anthropic), the model is
+  asked in plain language for a raw JSON object (`llm-json-output.util.ts`); where one exists (Gemini
+  `responseMimeType: "application/json"`), it is used — but every adapter, including OpenAI's,
+  independently re-validates the extracted output against the exact same
+  `rawClassificationOutputSchema`/`rawDraftOutputSchema` regardless, so a provider can never invent an
+  intent outside the fixed `AiIntent` enum or otherwise bypass the CRM's own contract. Every failure
+  mode (auth, rate limit, timeout, malformed/refused output) normalizes into the same
+  `LlmTransientError`/`LlmPermanentError`/`LlmMalformedOutputError` three-way contract every provider
+  must produce, via a new shared `llm-http-error.util.ts` for the two fetch-based adapters.
+- `UpdateAiSettingsDto.provider` now accepts the three canonical IDs (`@IsIn(SUPPORTED_AI_PROVIDERS)`)
+  instead of only `'OPENAI'`.
+- **Provider-switch credential safety (§G)** — `AiSettingsService.update()` treats a provider change
+  as a credential-safety boundary: switching providers REQUIRES both a new `model` and a new `apiKey`
+  in the same request (an OpenAI key is never even attempted against Anthropic, or vice versa);
+  either missing (or `clearApiKey` instead of a real new key) rejects the whole update with **no
+  partial effect** — every check runs, and can throw, strictly before the transaction that persists
+  anything, so a rejected switch never touches the previously valid configuration. Editing without
+  changing `provider` keeps the existing blank-means-keep/`clearApiKey` behavior unchanged.
+- `AiSettingsService.test()` ("Test AI") now dispatches through `LlmProviderRegistry` exactly like
+  real runtime classification, so it genuinely tests whichever provider is currently selected — never
+  a hidden OpenAI-only implementation.
+- Settings → AI's UI replaced the disabled "Provider: OpenAI" field with a real selector (OpenAI /
+  Anthropic (Claude) / Google Gemini); the Model field's placeholder changes per selected provider but
+  never becomes a hidden default; switching provider shows "Changing AI provider requires a new API
+  key and model for the selected provider" and never prefills the previous provider's key. Settings →
+  Integration Health's AI row now shows the actual effective provider/model, never hardcoded OpenAI
+  branding.
+- Found and fixed one real pre-existing bug while making this change: `AiClassificationService`
+  still read the deprecated `AI_PROVIDER` env var (falling back to the literal string `'mock'`) to
+  populate `AiClassification.provider`/`model` evidence metadata — a leftover the 2026-09-23
+  correction pass missed. It now records `settings.provider`/`settings.model` from the same
+  `AiRuntimeSettings` snapshot the attempt actually classified through, and has no `ConfigService`
+  dependency left at all.
 
 ## Security
 
-Every credential (SMTP/IMAP password, Microsoft client secret, OpenAI API key) uses the existing
-`SecretEncryptionService` — no second cryptography system. None of them, nor their ciphertext, is
+Every credential (SMTP/IMAP password, Microsoft client secret, AI provider API key) uses the
+existing `SecretEncryptionService` — no second cryptography system. None of them, nor their ciphertext, is
 ever returned from an API response, logged, or included in an audit `oldState`/`newState`/
 `metadata` — `AuditService.record()`'s existing `sanitizeAuditValue()` redacts any key matching
 `/password|secret|token|credential|api.?key/i` recursively as defense in depth, on top of the
@@ -279,7 +341,15 @@ authority. All pre-existing AI/mail unit and RBAC suites continue to pass unmodi
       state the worker cannot actually deliver.
 - [x] DB defaults are OFF everywhere; the migration cannot itself enable any live behavior.
 - [x] Slice G safety rules (kill switch, cutover, historical-message protection, no AUTO REJECT)
-      preserved exactly.
+      preserved exactly, independent of which AI provider is selected.
+- [x] ADMIN can choose OpenAI, Anthropic, or Google Gemini from Settings → AI, and enter any valid
+      model ID for the selected provider without a code deployment.
+- [x] Switching provider requires a new model and a new API key in the same request, atomically; a
+      rejected switch never touches the previously valid configuration; an OpenAI key is never
+      attempted against Anthropic or vice versa.
+- [x] Business services (AiClassificationService, AiClassificationWorker, AiRoutingService,
+      AiReplyDraftService, RenewalCase services, Communication Center) depend only on the
+      provider-neutral `LlmGateway` interface — none of them contains provider-specific logic.
 - [x] API/Web typecheck, lint, build, and full non-live Jest suite green.
 - [ ] MariaDB live-suite re-run against this exact code: **deferred pre-production verification** —
       no disposable MariaDB credentials were available in the verification session; see the final

@@ -79,7 +79,8 @@ export class MicrosoftOAuthTokenProvider {
     if (!response.ok) {
       // Microsoft's token error response body may itself echo request parameters back — never
       // parsed or logged; only the safe HTTP status crosses this boundary (mirrors
-      // OpenAiLlmGateway's SafeProviderErrorContext discipline for the same reason).
+      // OpenAiProviderAdapter's SafeProviderErrorContext / llm-http-error.util.ts discipline for the
+      // same reason).
       throw new Error(`Microsoft OAuth token request rejected (status ${response.status}).`);
     }
 

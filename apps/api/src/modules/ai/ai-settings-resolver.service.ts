@@ -18,21 +18,22 @@ interface StoredApiKeyEnvelope {
 }
 
 /**
- * Phase 3.1 §J — the ONE place operational AI behavior is resolved from the persisted AiSettings
- * row, read fresh at execution time by every caller (AiClassificationService,
- * AiClassificationEnqueueService, AiClassificationWorker's recovery scan, AiRoutingService,
- * OpenAiLlmGateway) — exactly mirroring MailConfigurationResolverService's own "resolve at the
- * moment of use, never cache across calls" discipline, so a Settings-UI change takes effect on the
- * very next classification/routing attempt with no restart.
+ * Phase 3.1 §J, corrected to be provider-neutral — the ONE place operational AI behavior is resolved
+ * from the persisted AiSettings row, read fresh at execution time by every caller
+ * (AiClassificationService, AiClassificationEnqueueService, AiClassificationWorker's recovery scan,
+ * AiRoutingService, DynamicLlmGateway, AiSettingsService) — exactly mirroring
+ * MailConfigurationResolverService's own "resolve at the moment of use, never cache across calls"
+ * discipline, so a Settings-UI change (including switching provider) takes effect on the very next
+ * classification/routing/drafting attempt with no restart.
  *
  * NO ROW = FULLY DISABLED, ALWAYS (never an error, never a fallback to any environment variable) —
  * a fresh or freshly-migrated deployment must behave identically to AI_ENABLED=false ever having
  * existed. This is the single fail-closed default every other AI-side consumer relies on.
  *
- * `AI_PROVIDER` (env) remains the separate, unrelated, deployment-level switch that decides which
- * LlmGateway implementation is even wired into the DI container (mock vs. OpenAiLlmGateway) — see
- * llm-provider.module.ts. This resolver's `provider`/`enabled` fields never influence that wiring;
- * they only decide whether the wired gateway is actually USED for a given attempt.
+ * `provider` is one of SUPPORTED_AI_PROVIDERS (llm-provider-adapter.ts) — OPENAI, ANTHROPIC, or
+ * GOOGLE_GEMINI. There is no environment variable of any kind that decides which LlmGateway
+ * implementation or provider adapter is wired into the DI container: DynamicLlmGateway resolves the
+ * concrete adapter purely from this field, via LlmProviderRegistry (see dynamic-llm-gateway.ts).
  */
 @Injectable()
 export class AiSettingsResolverService {

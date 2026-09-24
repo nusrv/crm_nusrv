@@ -1,15 +1,17 @@
 import { IsBoolean, IsDateString, IsIn, IsNumber, IsOptional, IsString, Length, Max, Min } from 'class-validator';
+import { SUPPORTED_AI_PROVIDERS, type AiProviderId } from './llm-provider-adapter';
 
 export class UpdateAiSettingsDto {
   @IsOptional()
   @IsBoolean()
   enabled?: boolean;
 
-  // V1 supports exactly one real provider — see AiSettingsService's own validation for why this is
-  // still a free-text field rather than an enum (schema.prisma's AiSettings.provider doc comment).
+  // Provider-neutral correction — accepts exactly the supported canonical provider IDs (never an
+  // arbitrary unknown string in V1). See AiSettingsService.update() for the credential-safety rule
+  // that applies when this value actually changes the stored provider.
   @IsOptional()
-  @IsIn(['OPENAI'])
-  provider?: 'OPENAI';
+  @IsIn(SUPPORTED_AI_PROVIDERS)
+  provider?: AiProviderId;
 
   @IsOptional()
   @IsString()

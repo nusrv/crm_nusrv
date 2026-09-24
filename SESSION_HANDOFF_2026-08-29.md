@@ -1723,3 +1723,78 @@ Per the owner's explicit instruction: implemented in one continuous task, verifi
 local mirror (never `npm install`/`npm ci` in this cloud-synced repository), committed as `Fix Phase
 3.1 effective integration configuration`, pushed to `origin/main`. **Not deployed** — deployment
 remains the owner's manual action per the existing deployment model.
+
+## 2026-09-24 — Made the AI layer provider-neutral (OpenAI/Anthropic/Google Gemini adapters)
+
+Owner flagged a real requirement violation in the just-shipped Phase 3.1 work: the CRM AI layer was
+supposed to be provider-neutral from the start (OpenAI as one supported provider, never hard-coded as
+the only one), but production code violated it in several places — Settings UI showed a disabled
+"Provider: OpenAI" field, `UpdateAiSettingsDto` only accepted `'OPENAI'`, `AiSettingsService` wrote
+`provider: 'OPENAI'` unconditionally, `DynamicLlmGateway` explicitly rejected every other provider,
+and the docs described OpenAI as fixed for V1.
+
+**Architecture.** Refactored the OpenAI-specific `OpenAiLlmGateway` into a stateless, credential-free
+`OpenAiProviderAdapter` (renamed file `openai-provider-adapter.ts`) implementing a new
+`LlmProviderAdapter` interface (`classifyIntent(input, config)` / `draftReply(input, config)` /
+`testConnection(config)`, `apps/api/src/modules/ai/llm-provider-adapter.ts`) — every method now
+receives an already-resolved `{model, apiKey}` instead of independently reading
+`AiSettingsResolverService` itself. Added `AnthropicProviderAdapter` (Anthropic Messages API) and
+`GoogleGeminiProviderAdapter` (Google `generateContent` API), both using Node 22's native `fetch` —
+no new npm dependency, per the owner's explicit preference and the standing "no npm install in the
+cloud-synced repo" rule. New `LlmProviderRegistry` (`llm-provider-registry.service.ts`) is the ONE
+place `AiSettings.provider` maps to a concrete adapter — a fourth provider later means one more
+adapter class plus one registry entry, nothing else. `DynamicLlmGateway` was rewritten to resolve
+settings ONCE per call and delegate to the registry-selected adapter with the resolved config, rather
+than hard-coding OpenAI.
+
+**Independent validation, shared everywhere.** Anthropic/Gemini have no OpenAI-style enforced JSON
+schema, so they're asked in plain language for a raw JSON object
+(`llm-json-output.util.ts`'s `*_JSON_CONTRACT_INSTRUCTIONS` + `extractJsonObject()`, which strips a
+markdown fence or extracts `{...}` from surrounding prose) — but ALL THREE adapters, including
+OpenAI's, independently re-validate whatever comes back against the exact same
+`rawClassificationOutputSchema`/`rawDraftOutputSchema` regardless of provider-side enforcement, so no
+provider can ever invent an intent outside the fixed `AiIntent` enum or otherwise smuggle something
+past the CRM's own contract. A new `llm-http-error.util.ts` centralizes HTTP-status/network-failure
+classification for the two fetch-based adapters (never reading a response body on an error path, so a
+provider error body can never leak into a thrown message).
+
+**Credential safety on provider switch (§G).** `AiSettingsService.update()` now treats a `provider`
+change as a safety boundary: it requires BOTH a new `model` and a new `apiKey` in the same request
+(an OpenAI key is never sent to Anthropic, or vice versa); missing either (or `clearApiKey` instead of
+a real key) throws `BadRequestException` before any DB write at all, so a rejected switch never
+disturbs the previously valid configuration. Same-provider edits keep the existing blank-means-keep
+behavior unchanged.
+
+**Test AI, provider-neutral.** `AiSettingsService.test()` now resolves the adapter via the same
+`LlmProviderRegistry` real classification uses and calls its `testConnection()` — genuinely testing
+whichever provider is currently selected, never a hidden OpenAI-only path.
+
+**Schema.** `AiSettings.provider` was already a plain `VARCHAR(50)` with no enum/CHECK constraint (the
+already-deployed Phase 3.1 migration was never touched, per explicit instruction) — `ANTHROPIC`/
+`GOOGLE_GEMINI` fit without any migration at all.
+
+**A real leftover bug found and fixed along the way**: `AiClassificationService.persistClassification()`
+still read the deprecated `AI_PROVIDER` env var (`this.config.get('AI_PROVIDER') ?? 'mock'`) to
+populate `AiClassification.provider`/`model` evidence fields — a violation of the 2026-09-23
+correction that session's implementation missed. It now records `settings.provider`/`settings.model`
+from the exact `AiRuntimeSettings` snapshot the attempt actually classified through, and the class has
+no `ConfigService` dependency left at all. Fixed the same two live-MariaDB spec files
+(`mariadb-phase3-slice-d-live.spec.ts`, `mariadb-phase3-slice-g-live.spec.ts`) that constructed
+`AiClassificationService` with the now-removed constructor argument.
+
+**UI.** Settings → AI's edit form replaced the disabled "Provider: OpenAI" input with a real
+`<select>` (OpenAI / Anthropic (Claude) / Google Gemini); the Model field's placeholder changes per
+selection but is never a hidden default; switching provider shows "Changing AI provider requires a
+new API key and model for the selected provider" and never prefills the old provider's key. Settings
+→ Integration Health's AI row now shows the actual effective provider/model
+(`IntegrationHealthService.getOverview()` gained an `AiSettingsResolverService` dependency for this),
+never hardcoded OpenAI branding.
+
+**Docs corrected**: `05_AI_LLM_MCP_STRATEGY.md` (provider abstraction section rewritten as
+provider-neutral, with the adapter/registry diagram), `PHASES/PHASE_03_1_ADMIN_SETTINGS.md` (new
+"Provider-neutral correction (2026-09-24)" section, updated schema/AI-settings/acceptance-criteria
+sections), `PROJECT_STATUS.md`.
+
+Verified in `C:\sgv` (never `npm install`/`npm ci` in the cloud-synced repo): API typecheck/lint/build,
+full non-live Jest suite, Web typecheck/lint/build. Implemented, verified, committed, and pushed to
+`origin/main` in one continuous task per the owner's instruction. **Not deployed.**

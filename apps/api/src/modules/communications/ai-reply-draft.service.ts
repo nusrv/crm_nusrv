@@ -131,7 +131,8 @@ export class AiReplyDraftService {
 
     // settings.enabled was already confirmed true above, and DynamicLlmGateway would have thrown
     // LlmPermanentError (caught above) had provider/model/key been anything other than a fully
-    // configured real OpenAI setup — so reaching this line means exactly that ran.
+    // configured, supported provider (OpenAI, Anthropic, or Google Gemini) — so reaching this line
+    // means exactly that ran.
     const provider = settings.provider;
     const model = settings.model ?? 'unknown';
 

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
+import { AiSettingsResolverService } from '../ai/ai-settings-resolver.service';
 import { ImapMailboxReaderFactory } from './imap-mailbox-reader-factory';
 import { IntegrationHealthController } from './integration-health.controller';
 import { IntegrationHealthService } from './integration-health.service';
@@ -45,6 +46,7 @@ import { SmtpMailTransport } from './smtp-mail-transport';
     MicrosoftOAuthTokenProvider,
     MailHealthService,
     MailImapHealthService,
+    AiSettingsResolverService,
     IntegrationHealthService,
   ],
 })

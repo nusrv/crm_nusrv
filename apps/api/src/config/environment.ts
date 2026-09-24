@@ -51,8 +51,9 @@ const environmentSchema = z
     // `ai_settings` DB row) is the sole runtime authority for whether AI is enabled and which
     // provider/model/key it uses. None of AI_ENABLED/AI_PROVIDER/AI_MODEL/AI_API_KEY/
     // AI_CONFIDENCE_THRESHOLD is read anywhere in the classification/routing/drafting pipeline any
-    // more — DynamicLlmGateway (llm-provider.module.ts) resolves the real OpenAiLlmGateway
-    // dynamically from AiSettings, or fails closed (HUMAN_REVIEW), never from these env vars. Kept
+    // more — DynamicLlmGateway (llm-provider.module.ts) resolves the real provider adapter
+    // (OpenAI/Anthropic/Google Gemini, via LlmProviderRegistry) dynamically from AiSettings, or
+    // fails closed (HUMAN_REVIEW), never from these env vars. Kept
     // declared only so an existing `.env` file that still sets them does not fail to parse; no
     // cross-field validation is applied to them any more (see PHASES/PHASE_03_1_ADMIN_SETTINGS.md's
     // env-status table for the complete list).

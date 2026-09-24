@@ -73,11 +73,6 @@ async function reset(connection: Connection) {
   await connection.query('SET FOREIGN_KEY_CHECKS = 1');
 }
 
-function fakeConfigService(overrides: Record<string, string | number> = {}) {
-  const values: Record<string, string | number> = { AI_ENABLED: 'true', AI_PROVIDER: 'mock', NODE_ENV: 'test', ...overrides };
-  return { get: (key: string) => values[key] };
-}
-
 /** Phase 3.1 §J — AiClassificationService/AiClassificationWorker now resolve `enabled`/
  * `confidenceThreshold`/`autoRouteAcceptEnabled`/`autoRouteAcceptCutoverAt` from
  * AiSettingsResolverService (DB-backed) rather than ConfigService. This live spec's own purpose is
@@ -312,7 +307,6 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
     };
     return new AiClassificationService(
       prisma as never,
-      fakeConfigService(configOverrides) as never,
       fakeAiSettingsResolver(configOverrides) as never,
       new AuditService(prisma as never),
       new AiHealthService(prisma as never),

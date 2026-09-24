@@ -75,6 +75,28 @@
   Deployment adapter / Effective), so the two can never disagree. See
   `PHASES/PHASE_03_1_ADMIN_SETTINGS.md`'s "Correction pass" section for full detail and the updated
   legacy-env-var table.
+- **Phase 3.1 correction — made AI provider-neutral (2026-09-24)**: owner flagged that OpenAI had
+  been wrongly hard-coded as the only supported AI provider (Settings UI showed a disabled
+  "Provider: OpenAI" field, `UpdateAiSettingsDto`/`AiSettingsService` only accepted `'OPENAI'`,
+  `DynamicLlmGateway` rejected every other provider). Refactored `DynamicLlmGateway` into a true
+  provider dispatcher: it resolves settings once per call and hands the resolved model/API key to
+  whichever `LlmProviderAdapter` the new `LlmProviderRegistry` maps `AiSettings.provider` to. Added
+  real `AnthropicProviderAdapter` and `GoogleGeminiProviderAdapter` (Node 22 native `fetch`, no new
+  dependency), alongside the renamed `OpenAiProviderAdapter` — all three independently re-validate
+  provider output against the exact same Zod schemas and normalize failures into the same three
+  typed errors, so no provider-specific behavior ever reaches `AiClassificationService`/
+  `AiRoutingService`/`AiReplyDraftService`/RenewalCase services/Communication Center, all of which
+  still depend only on the `LlmGateway` abstraction. `AiSettings.provider` needed no migration (it
+  was already an unconstrained `VARCHAR(50)`). Added a credential-safety rule to
+  `AiSettingsService.update()`: switching provider now requires a new model AND a new API key in the
+  same atomic request, with no partial effect on rejection (an OpenAI key is never sent to
+  Anthropic, or vice versa). "Test AI" now dispatches through the same registry as real runtime
+  classification, for whichever provider is selected. Also found and fixed a leftover bug the
+  2026-09-23 correction missed: `AiClassificationService` still read the deprecated `AI_PROVIDER` env
+  var (falling back to the literal string `'mock'`) for its persisted evidence metadata — it now
+  records the actual `settings.provider`/`settings.model` and has no `ConfigService` dependency left.
+  See `PHASES/PHASE_03_1_ADMIN_SETTINGS.md`'s "Provider-neutral correction (2026-09-24)" section for
+  full detail.
 - Phase 4+: LOCKED
 
 ## Phase 2.1 operational data correction
@@ -769,12 +791,14 @@ claim as scoped to that.
   runtime not independently re-verified from inside a session
 - Mail (SMTP/IMAP): real transport/reader implemented (Slices B/C) with Microsoft 365 OAuth2
   support; no real Outlook tenant has been configured/smoke-tested in any session
-- AI classification/routing: real OpenAI gateway implemented (Slices D/F/G); no real OpenAI
-  credentials have been configured/smoke-tested in any session
-- Administration settings (Phase 3.1, corrected 2026-09-23): DB-backed, admin-managed Mail/AI
-  operational control plane live in code, with no env var able to override or duplicate that DB
-  state; `/dashboard/settings` UI complete, including an Integration Health "Effective Status"
-  breakdown (Configured / Operationally enabled / Deployment adapter / Effective) for SMTP/IMAP
+- AI classification/routing: provider-neutral gateway implemented (Slices D/F/G, corrected
+  2026-09-24 — OpenAI/Anthropic/Google Gemini adapters, admin-selectable); no real provider
+  credentials of any kind have been configured/smoke-tested in any session
+- Administration settings (Phase 3.1, corrected 2026-09-23 and 2026-09-24): DB-backed, admin-managed
+  Mail/AI operational control plane live in code, with no env var able to override or duplicate that
+  DB state; `/dashboard/settings` UI complete, including a real AI provider selector
+  (OpenAI/Anthropic/Google Gemini) and an Integration Health "Effective Status" breakdown
+  (Configured / Operationally enabled / Deployment adapter / Effective) for SMTP/IMAP
 - Technical Connections: secure configuration/mapping only; no external provider calls
 - Phase 4+ integrations (Fawtara, collection, technical suspension, MCP): LOCKED and not started
 

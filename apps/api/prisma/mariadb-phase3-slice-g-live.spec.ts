@@ -61,18 +61,6 @@ async function reset(connection: Connection) {
   await connection.query('SET FOREIGN_KEY_CHECKS = 1');
 }
 
-function fakeConfigService(overrides: Record<string, string | number> = {}) {
-  const values: Record<string, string | number> = {
-    AI_ENABLED: 'true',
-    AI_PROVIDER: 'mock',
-    NODE_ENV: 'test',
-    AI_CONFIDENCE_THRESHOLD: 0.9,
-    AI_AUTO_ROUTE_ACCEPT: 'false',
-    ...overrides,
-  };
-  return { get: (key: string) => values[key] };
-}
-
 /** Phase 3.1 §J — see mariadb-phase3-slice-d-live.spec.ts's identical helper doc comment: this
  * live spec's own purpose is real-Prisma routing/CAS correctness, not AiSettings DB resolution
  * (covered by dedicated unit tests), so a lightweight fake built from the same `configOverrides`
@@ -280,7 +268,6 @@ liveDescribe('Phase 3 Slice G MariaDB AI-routing integration', () => {
     };
     return new AiClassificationService(
       prisma as never,
-      fakeConfigService(configOverrides) as never,
       fakeAiSettingsResolver(configOverrides) as never,
       new AuditService(prisma as never),
       new AiHealthService(prisma as never),

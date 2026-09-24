@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../database/prisma.service';
 import { IntegrationKind } from '../../generated/prisma/enums';
+import { AiSettingsResolverService } from '../ai/ai-settings-resolver.service';
 import { resolveImapAdapterCapability, resolveSmtpAdapterCapability, type MailAdapterCapability } from './deployment-mail-capability';
 
 export interface LatestHealthEvent {
@@ -43,9 +44,13 @@ export interface MailIntegrationHealth {
   imapStatus: MailChannelStatus;
 }
 
+/** §L correction — the effective selected provider/model are always reported (even before any
+ * health check has ever run), never hidden behind a null health event, and never hardcoded to
+ * "OpenAI" — `provider`/`model` always reflect the actual persisted AiSettings row via
+ * AiSettingsResolverService, the same source of truth DynamicLlmGateway uses at runtime. */
 export interface IntegrationHealthOverview {
   mail: MailIntegrationHealth[];
-  ai: LatestHealthEvent | null;
+  ai: { provider: string; model: string | null; health: LatestHealthEvent | null };
 }
 
 function computeEffectiveStatus(configured: boolean, operationallyEnabled: boolean, deploymentAdapter: MailAdapterCapability): MailEffectiveStatus {
@@ -74,6 +79,7 @@ export class IntegrationHealthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly aiSettings: AiSettingsResolverService,
   ) {}
 
   async getOverview(): Promise<IntegrationHealthOverview> {
@@ -132,10 +138,15 @@ export class IntegrationHealthService {
       orderBy: { createdAt: 'desc' },
       select: { status: true, createdAt: true, message: true },
     });
+    const aiSettings = await this.aiSettings.getSettings();
 
     return {
       mail,
-      ai: latestAi ? { status: latestAi.status, checkedAt: latestAi.createdAt, message: latestAi.message } : null,
+      ai: {
+        provider: aiSettings.provider,
+        model: aiSettings.model,
+        health: latestAi ? { status: latestAi.status, checkedAt: latestAi.createdAt, message: latestAi.message } : null,
+      },
     };
   }
 }

@@ -70,7 +70,20 @@ interface HealthOverview {
     smtpStatus: MailChannelStatus;
     imapStatus: MailChannelStatus;
   }>;
-  ai: HealthEntry | null;
+  ai: { provider: string; model: string | null; health: HealthEntry | null };
+}
+
+/** Canonical provider IDs — must match SUPPORTED_AI_PROVIDERS in llm-provider-adapter.ts. Adding a
+ * fourth provider means adding one entry here plus one in the API's registry — nothing else in this
+ * component depends on which providers exist. */
+const AI_PROVIDER_OPTIONS: Array<{ id: string; label: string; modelPlaceholder: string }> = [
+  { id: 'OPENAI', label: 'OpenAI', modelPlaceholder: 'e.g. gpt-4.1' },
+  { id: 'ANTHROPIC', label: 'Anthropic (Claude)', modelPlaceholder: 'e.g. claude-sonnet-4-5' },
+  { id: 'GOOGLE_GEMINI', label: 'Google Gemini', modelPlaceholder: 'e.g. gemini-2.5-pro' },
+];
+
+function aiProviderLabel(id: string): string {
+  return AI_PROVIDER_OPTIONS.find((option) => option.id === id)?.label ?? id;
 }
 
 const EFFECTIVE_STATUS_LABEL: Record<MailChannelStatus['effective'], string> = {
@@ -467,6 +480,7 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
 function AiSettingsSection({ canManage }: { canManage: boolean }) {
   const [settings, setSettings] = useState<AiSettingsView | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState('OPENAI');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [testResult, setTestResult] = useState('');
@@ -478,6 +492,13 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
   useEffect(() => {
     void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'));
   }, []);
+
+  function openEdit() {
+    setSelectedProvider(settings?.provider ?? 'OPENAI');
+    setFormOpen(true);
+  }
+
+  const providerChanged = settings !== null && selectedProvider !== settings.provider;
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -491,6 +512,7 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
     try {
       const body: Record<string, unknown> = {
         enabled: form.get('enabled') === 'on',
+        provider: selectedProvider,
         model: value('model') || undefined,
         confidenceThreshold: value('confidenceThreshold') ? Number(value('confidenceThreshold')) : undefined,
         autoRouteAccept,
@@ -538,17 +560,40 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
             </label>
             <label className="field">
               <span>Provider</span>
-              <input disabled value="OpenAI" />
+              <select onChange={(e) => setSelectedProvider(e.target.value)} value={selectedProvider}>
+                {AI_PROVIDER_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="field">
               <span>Model</span>
-              <input defaultValue={settings.model ?? ''} name="model" placeholder="e.g. gpt-4.1" required />
+              <input
+                defaultValue={providerChanged ? '' : (settings.model ?? '')}
+                key={selectedProvider}
+                name="model"
+                placeholder={AI_PROVIDER_OPTIONS.find((o) => o.id === selectedProvider)?.modelPlaceholder}
+                required
+              />
             </label>
+            {providerChanged && (
+              <p className="field-wide text-sm text-amber-700">
+                Changing AI provider requires a new API key and model for the selected provider.
+              </p>
+            )}
             <label className="field field-wide">
-              <span>{settings.apiKeyConfigured ? 'Replace API Key (leave blank to keep the current one)' : 'API Key'}</span>
-              <input autoComplete="new-password" name="apiKey" type="password" />
+              <span>
+                {providerChanged
+                  ? `New API Key for ${aiProviderLabel(selectedProvider)} (required)`
+                  : settings.apiKeyConfigured
+                    ? 'Replace API Key (leave blank to keep the current one)'
+                    : 'API Key'}
+              </span>
+              <input autoComplete="new-password" key={selectedProvider} name="apiKey" required={providerChanged} type="password" />
             </label>
-            {settings.apiKeyConfigured && (
+            {settings.apiKeyConfigured && !providerChanged && (
               <label className="checkbox field-wide">
                 <input name="clearApiKey" type="checkbox" /> Clear stored API key
               </label>
@@ -594,7 +639,7 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
       )}
       <section className="panel">
         <p>AI Processing: <strong>{settings.enabled ? 'ON' : 'OFF'}</strong></p>
-        <p>Provider: {settings.provider}</p>
+        <p>Provider: {aiProviderLabel(settings.provider)}</p>
         <p>Model: {settings.model ?? 'Not configured'}</p>
         <p>API Key: {settings.apiKeyConfigured ? 'Configured' : 'Not configured'}</p>
         <p>Confidence threshold: {settings.confidenceThreshold ?? '—'}</p>
@@ -606,7 +651,7 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
         {testResult && <p className="muted">Last test: {testResult}</p>}
         {canManage && (
           <div className="mt-4 flex gap-3">
-            <button className="button-primary" onClick={() => setFormOpen(true)} type="button">
+            <button className="button-primary" onClick={openEdit} type="button">
               Edit
             </button>
             <button className="button-secondary" onClick={() => void runTest()} type="button">
@@ -680,10 +725,16 @@ function IntegrationHealthSection() {
           ))}
           <tr>
             <td>AI</td>
-            <td>Global</td>
-            <td>{overview.ai?.status ?? 'Never checked'}</td>
-            <td>{overview.ai ? new Date(overview.ai.checkedAt).toLocaleString() : '—'}</td>
-            <td>{overview.ai?.message ?? '—'}</td>
+            <td>
+              Global
+              <br />
+              <span className="muted">
+                {aiProviderLabel(overview.ai.provider)} · {overview.ai.model ?? 'No model configured'}
+              </span>
+            </td>
+            <td>{overview.ai.health?.status ?? 'Never checked'}</td>
+            <td>{overview.ai.health ? new Date(overview.ai.health.checkedAt).toLocaleString() : '—'}</td>
+            <td>{overview.ai.health?.message ?? '—'}</td>
             <td className="muted">No deployment-capability gate — see Settings → AI.</td>
           </tr>
         </tbody>

@@ -16,14 +16,31 @@ function baseConfigRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function harness(options: { configRow?: Record<string, unknown>; configValues?: Record<string, string> } = {}) {
+function harness(
+  options: {
+    configRow?: Record<string, unknown>;
+    configValues?: Record<string, string>;
+    aiSettings?: { provider: string; model: string | null };
+  } = {},
+) {
   const row = options.configRow ?? baseConfigRow();
   const prisma = {
     mailConfiguration: { findMany: jest.fn(() => Promise.resolve([row])) },
     integrationHealthEvent: { findFirst: jest.fn(() => Promise.resolve(null)) },
   };
   const config = { get: (key: string) => (options.configValues ?? {})[key] };
-  const service = new IntegrationHealthService(prisma as never, config as never);
+  const aiSettings = {
+    getSettings: () =>
+      Promise.resolve({
+        enabled: false,
+        provider: options.aiSettings?.provider ?? 'OPENAI',
+        model: options.aiSettings?.model ?? null,
+        confidenceThreshold: 0.9,
+        autoRouteAcceptEnabled: false,
+        autoRouteAcceptCutoverAt: null,
+      }),
+  };
+  const service = new IntegrationHealthService(prisma as never, config as never, aiSettings as never);
   return { service, prisma };
 }
 
@@ -73,5 +90,20 @@ describe('IntegrationHealthService.getOverview — Phase 3.1 §3 effective statu
     });
     const overview = await service.getOverview();
     expect(overview.mail[0]!.smtpStatus.effective).toBe('NOT_CONFIGURED');
+  });
+});
+
+describe('IntegrationHealthService.getOverview — §L effective AI provider/model display', () => {
+  it('reports the actual selected provider/model, never a hardcoded "OpenAI", even when a health check has never run', async () => {
+    const { service } = harness({ aiSettings: { provider: 'ANTHROPIC', model: 'claude-test-model' } });
+    const overview = await service.getOverview();
+    expect(overview.ai).toEqual({ provider: 'ANTHROPIC', model: 'claude-test-model', health: null });
+  });
+
+  it('defaults to OPENAI/null only because that mirrors AiSettingsResolverService\'s own safe default when no row exists', async () => {
+    const { service } = harness();
+    const overview = await service.getOverview();
+    expect(overview.ai.provider).toBe('OPENAI');
+    expect(overview.ai.model).toBeNull();
   });
 });

@@ -1,5 +1,4 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import OpenAI, { APIError } from 'openai';
 import { AuditService } from '../../audit/audit.service';
 import type { MutationContext } from '../../common/mutation-context';
 import { PrismaService } from '../../database/prisma.service';
@@ -9,7 +8,8 @@ import { SecretEncryptionService } from '../../security/secret-encryption.servic
 import { AiHealthService } from './ai-health.service';
 import { AiSettingsResolverService } from './ai-settings-resolver.service';
 import type { UpdateAiSettingsDto } from './ai-settings.dto';
-import { AI_PROVIDER_TIMEOUT_MS } from './ai-timing.constants';
+import { LlmMalformedOutputError, LlmPermanentError, LlmTransientError } from './llm-errors';
+import { LlmProviderRegistry } from './llm-provider-registry.service';
 
 /** Serialized, browser-safe view of the one AiSettings row — never includes the API key or its
  * ciphertext. `apiKeyConfigured` is the only signal the browser ever gets about the key's presence. */
@@ -39,24 +39,15 @@ interface ApiKeyEnvelope {
   apiKey: string;
 }
 
-interface AiConnectionTestClientOptions {
-  apiKey: string;
-  timeout: number;
-  maxRetries: number;
-}
-
 @Injectable()
 export class AiSettingsService {
-  /** Test seam only — mirrors OpenAiLlmGateway.clientFactory / SmtpMailTransport.transportFactory.
-   * Defaults to the real OpenAI client constructor in production. */
-  clientFactory: (options: AiConnectionTestClientOptions) => OpenAI = (options) => new OpenAI(options);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly encryption: SecretEncryptionService,
     private readonly audit: AuditService,
     private readonly health: AiHealthService,
     private readonly aiSettings: AiSettingsResolverService,
+    private readonly providerRegistry: LlmProviderRegistry,
   ) {}
 
   async get(): Promise<SerializedAiSettings> {
@@ -71,6 +62,14 @@ export class AiSettingsService {
    * mirroring MailSettingsService's `clearCredentials` precedent exactly. §I — the API independently
    * re-validates every enablement precondition; the browser's own warning/confirmation UI is never
    * trusted as the actual safety boundary.
+   *
+   * Provider-neutral correction §G — changing `provider` is a CREDENTIAL-SAFETY boundary, not just
+   * another field: switching providers must never silently reuse the previous provider's model or
+   * API key (an OpenAI key sent to Anthropic, or vice versa, is never even attempted). A provider
+   * change REQUIRES both a new `model` and a new `apiKey` in the SAME request; either missing (or
+   * `clearApiKey` instead of a real new key) rejects the whole update with no partial effect — every
+   * check below runs, and can throw, strictly BEFORE the transaction that actually persists `data`,
+   * so a rejected switch never clears/overwrites the previously valid configuration.
    */
   async update(dto: UpdateAiSettingsDto, context: MutationContext): Promise<SerializedAiSettings> {
     if (dto.apiKey !== undefined && dto.clearApiKey) {
@@ -79,6 +78,20 @@ export class AiSettingsService {
 
     const existing = await this.prisma.aiSettings.findUnique({ where: { singleton: true } });
     const oldState = existing ? this.serialize(existing) : SAFE_DEFAULTS;
+
+    const nextProvider = dto.provider ?? existing?.provider ?? 'OPENAI';
+    const providerChanged = existing !== null && nextProvider !== existing.provider;
+    if (providerChanged) {
+      if (dto.model === undefined) {
+        throw new BadRequestException('Changing AI provider requires a new model for the selected provider.');
+      }
+      if (dto.clearApiKey) {
+        throw new BadRequestException('Changing AI provider requires a new API key, not clearing the existing one.');
+      }
+      if (dto.apiKey === undefined) {
+        throw new BadRequestException('Changing AI provider requires a new API key for the selected provider.');
+      }
+    }
 
     let apiKeyCiphertextUpdate: string | null | undefined;
     let credentialsChanged = false;
@@ -112,7 +125,7 @@ export class AiSettingsService {
     const data: Prisma.AiSettingsUncheckedCreateInput = {
       singleton: true,
       enabled: nextEnabled,
-      provider: 'OPENAI',
+      provider: nextProvider,
       model: nextModel,
       confidenceThreshold: dto.confidenceThreshold ?? (existing?.confidenceThreshold ? Number(existing.confidenceThreshold) : undefined),
       apiKeyCiphertext: apiKeyCiphertextUpdate !== undefined ? apiKeyCiphertextUpdate : existing?.apiKeyCiphertext,
@@ -134,6 +147,7 @@ export class AiSettingsService {
           newState: safe,
           metadata: {
             credentialsChanged,
+            providerChanged,
             autoRouteAcceptChanged: dto.autoRouteAccept !== undefined && dto.autoRouteAccept !== (existing?.autoRouteAccept ?? false),
           },
           ipAddress: context.ipAddress,
@@ -146,16 +160,18 @@ export class AiSettingsService {
   }
 
   /**
-   * Phase 3.1 §K, corrected by §4 — explicit ADMIN action only. Resolves model/API key through the
-   * EXACT SAME `AiSettingsResolverService` DynamicLlmGateway/OpenAiLlmGateway use at real
-   * classification time (never a separate, independently-duplicated read of the row) — a successful
-   * Test AI is therefore a direct proof that "the runtime would use this same OpenAI configuration,"
-   * not merely a coincidentally-similar check. Makes ONE minimal real OpenAI request (a raw SDK
-   * call, deliberately NEVER through LlmGateway/AiClassificationService's classifyIntent()/
-   * draftReply() — those are reserved for the real classification/drafting prompts and schemas).
-   * Creates no AiClassification, no AiRoutingDecision, sends no email, mutates no RenewalCase.
-   * Deliberately does NOT require `enabled: true` — an admin must be able to test a model/key before
-   * ever flipping AI on.
+   * Phase 3.1 §K, corrected by §4 and made provider-neutral by §K — explicit ADMIN action only.
+   * Resolves model/API key through the EXACT SAME `AiSettingsResolverService`, and dispatches to the
+   * EXACT SAME `LlmProviderRegistry` DynamicLlmGateway uses at real classification time (never a
+   * separate, independently-duplicated selection) — a successful Test AI is therefore a direct proof
+   * that "the runtime would use this same provider/model/credential configuration," for whichever
+   * provider is currently selected (OpenAI, Anthropic, or Google Gemini), not merely a
+   * coincidentally-similar check, and never a hidden OpenAI-only implementation. Calls only the
+   * adapter's `testConnection()` — one minimal, harmless request, deliberately NEVER through
+   * LlmGateway/AiClassificationService's classifyIntent()/draftReply() (those are reserved for the
+   * real classification/drafting prompts and schemas). Creates no AiClassification, no
+   * AiRoutingDecision, sends no email, mutates no RenewalCase. Deliberately does NOT require
+   * `enabled: true` — an admin must be able to test a model/key before ever flipping AI on.
    */
   async test(): Promise<{ success: boolean; provider: string; model: string | null; timestamp: Date; latencyMs?: number; message: string }> {
     const settings = await this.aiSettings.getSettings();
@@ -164,12 +180,13 @@ export class AiSettingsService {
     if (!settings.model || !apiKey) {
       return { success: false, provider: settings.provider, model: settings.model, timestamp, message: 'Provider/model/API key are not fully configured.' };
     }
+    const adapter = this.providerRegistry.resolve(settings.provider);
+    if (!adapter) {
+      return { success: false, provider: settings.provider, model: settings.model, timestamp, message: `Unsupported AI provider "${settings.provider}".` };
+    }
 
-    const client = this.clientFactory({ apiKey, timeout: AI_PROVIDER_TIMEOUT_MS, maxRetries: 0 });
-    const startedAt = Date.now();
     try {
-      await client.responses.create({ model: settings.model, input: 'connection test — reply with the single word OK.', max_output_tokens: 16 });
-      const latencyMs = Date.now() - startedAt;
+      const { latencyMs } = await adapter.testConnection({ model: settings.model, apiKey });
       await this.health.record(HealthStatus.HEALTHY, 'Manual AI connection test succeeded.');
       return { success: true, provider: settings.provider, model: settings.model, timestamp, latencyMs, message: 'AI connection succeeded.' };
     } catch (error) {
@@ -192,12 +209,13 @@ export class AiSettingsService {
     };
   }
 
-  /** Never a raw SDK error (may carry request/response headers or an echo of the request) — only a
-   * safe, fixed description plus (for an APIError) the HTTP status, mirroring
-   * OpenAiLlmGateway's toLlmError()/SafeProviderErrorContext discipline exactly. */
+  /** Never a raw provider error (may carry request/response headers or an echo of the request) —
+   * every adapter's testConnection() already normalizes its own failures into one of the three typed
+   * LlmGateway errors (llm-errors.ts) with an already-safe, fixed message before it ever reaches
+   * here, so this only needs to trust that contract, never re-inspect a provider-specific shape. */
   private sanitizeError(error: unknown): string {
-    if (error instanceof APIError) {
-      return `Provider error (status ${String(error.status)}).`;
+    if (error instanceof LlmTransientError || error instanceof LlmPermanentError || error instanceof LlmMalformedOutputError) {
+      return error.message;
     }
     return 'Connection or request error.';
   }

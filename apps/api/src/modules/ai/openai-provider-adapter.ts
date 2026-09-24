@@ -15,10 +15,10 @@ import { rawDraftOutputSchema } from './ai-draft-schema';
 import { buildClassificationPrompt, CLASSIFIER_SYSTEM_INSTRUCTIONS } from './ai-prompt';
 import { buildDraftPrompt, DRAFTER_SYSTEM_INSTRUCTIONS } from './ai-draft-prompt';
 import { AI_DRAFT_MAX_OUTPUT_TOKENS, AI_MAX_OUTPUT_TOKENS, AI_PROVIDER_TIMEOUT_MS } from './ai-timing.constants';
-import { AiSettingsResolverService } from './ai-settings-resolver.service';
 import { LlmMalformedOutputError, LlmPermanentError, LlmTransientError } from './llm-errors';
-import type { ClassificationInput, DraftReplyInput, LlmGateway, NormalizedClassificationResult, NormalizedDraftResult } from './llm-gateway';
+import type { ClassificationInput, DraftReplyInput, NormalizedClassificationResult, NormalizedDraftResult } from './llm-gateway';
 import { DRAFT_RESULT_SCHEMA_VERSION, RESULT_SCHEMA_VERSION } from './llm-gateway';
+import type { LlmProviderAdapter, LlmProviderAdapterConfig } from './llm-provider-adapter';
 
 interface OpenAiClientOptions {
   apiKey: string;
@@ -40,39 +40,36 @@ interface SafeProviderErrorContext {
 }
 
 /**
- * Slice D §4 — the documented direct-provider choice: `05_AI_LLM_MCP_STRATEGY.md` names "OpenAI
- * Responses API" explicitly (§"Provider abstraction", §"Current OpenAI direction") as the initial
- * real-provider implementation. Uses `responses.parse()` with the SDK's Structured Outputs support
- * (`text.format` via `zodTextFormat`) so the provider is asked for an actual strict JSON Schema
- * (additional properties forbidden) — but this NEVER replaces our own validation boundary: the
- * already-parsed `output_parsed` is independently re-validated against the exact same Zod schema
- * before anything leaves this class (§6).
+ * Provider-neutral correction — one of three real `LlmProviderAdapter` implementations selected by
+ * LlmProviderRegistry purely from `AiSettings.provider` (see dynamic-llm-gateway.ts). Deliberately
+ * stateless and CREDENTIAL-FREE: it has no dependency on AiSettingsResolverService or ConfigService
+ * at all, and never reads a provider/model/key on its own — every call is handed a fully resolved
+ * `LlmProviderAdapterConfig` by its caller, resolved ONCE per request. This is what makes "the DB
+ * settings are resolved once and passed down" structurally true rather than a convention.
+ *
+ * Uses `responses.parse()` with the SDK's Structured Outputs support (`text.format` via
+ * `zodTextFormat`) so the provider is asked for an actual strict JSON Schema (additional properties
+ * forbidden) — but this NEVER replaces our own validation boundary: the already-parsed
+ * `output_parsed` is independently re-validated against the exact same Zod schema before anything
+ * leaves this class (§6).
  *
  * `maxRetries: 0` on the client is deliberate: retry policy is owned entirely by the BullMQ
  * worker/queue layer (§12/hardening-pass §3/§12), never duplicated inside the SDK's own retry
  * logic — one BullMQ attempt performs at most one OpenAI HTTP request.
  */
 @Injectable()
-export class OpenAiLlmGateway implements LlmGateway {
+export class OpenAiProviderAdapter implements LlmProviderAdapter {
   /** Test seam only — mirrors SmtpMailTransport.transportFactory / ImapMailboxReader.clientFactory.
    * Defaults to the real OpenAI client constructor in production. */
   clientFactory: (options: OpenAiClientOptions) => OpenAI = (options) => new OpenAI(options);
 
-  // Phase 3.1 §J — deliberately NEVER cached across calls (unlike the pre-Phase-3.1 version of this
-  // class): the API key/model now come from the admin-managed AiSettings row, which can change at
-  // runtime with no restart. A stale cached client would keep using a revoked/replaced key or the
-  // wrong model until the process happened to restart, silently defeating that requirement. The SDK
-  // client constructor performs no network I/O, so reconstructing it per call costs nothing
-  // meaningful given classification/draft volume.
-  constructor(private readonly aiSettings: AiSettingsResolverService) {}
-
-  async classifyIntent(input: ClassificationInput): Promise<NormalizedClassificationResult> {
-    const { client, model } = await this.ensureClient();
+  async classifyIntent(input: ClassificationInput, config: LlmProviderAdapterConfig): Promise<NormalizedClassificationResult> {
+    const client = this.buildClient(config);
 
     let response: Awaited<ReturnType<OpenAI['responses']['parse']>>;
     try {
       response = await client.responses.parse({
-        model,
+        model: config.model,
         instructions: CLASSIFIER_SYSTEM_INSTRUCTIONS,
         input: buildClassificationPrompt(input),
         text: { format: zodTextFormat(rawClassificationOutputSchema, 'intent_classification') },
@@ -114,19 +111,19 @@ export class OpenAiLlmGateway implements LlmGateway {
   }
 
   /**
-   * Slice F — an entirely independent second operation on the same gateway. Reuses `ensureClient()`
-   * (same lazy, per-call credential/model resolution from AiSettingsResolverService) and the
-   * identical `toLlmError`/refusal/incomplete/re-validation discipline as classifyIntent above, but
-   * never shares its prompt, schema, or output with it. Adding this method does not modify
-   * classifyIntent's code or behavior at all.
+   * An entirely independent second operation on the same adapter. Reuses `buildClient()` (the
+   * identical per-call, credential-free client construction as classifyIntent above) and the
+   * identical `toLlmError`/refusal/incomplete/re-validation discipline, but never shares its
+   * prompt, schema, or output with it. Adding this method does not modify classifyIntent's code or
+   * behavior at all.
    */
-  async draftReply(input: DraftReplyInput): Promise<NormalizedDraftResult> {
-    const { client, model } = await this.ensureClient();
+  async draftReply(input: DraftReplyInput, config: LlmProviderAdapterConfig): Promise<NormalizedDraftResult> {
+    const client = this.buildClient(config);
 
     let response: Awaited<ReturnType<OpenAI['responses']['parse']>>;
     try {
       response = await client.responses.parse({
-        model,
+        model: config.model,
         instructions: DRAFTER_SYSTEM_INSTRUCTIONS,
         input: buildDraftPrompt(input),
         text: { format: zodTextFormat(rawDraftOutputSchema, 'suggested_reply_draft') },
@@ -161,21 +158,30 @@ export class OpenAiLlmGateway implements LlmGateway {
     return { schemaVersion: DRAFT_RESULT_SCHEMA_VERSION, ...validated.data };
   }
 
-  /** Credential/model resolution is lazy AND dynamic — read fresh from AiSettingsResolverService on
-   * every call, never cached (see the constructor's doc comment for why). Never reached at all in
-   * mock mode (MockLlmGateway is wired instead — see llm-provider.module.ts) and never merely
-   * because this class was constructed/injected. */
-  private async ensureClient(): Promise<{ client: OpenAI; model: string }> {
-    const settings = await this.aiSettings.getSettings();
-    if (!settings.model) {
-      throw new LlmPermanentError('AI model is not configured.');
+  /**
+   * §K correction — the exact request Test AI makes: a single minimal, harmless round trip proving
+   * the model/API key combination is usable. Never classifies, never drafts, never touches
+   * AiClassification/AiRoutingDecision/RenewalCase/email.
+   */
+  async testConnection(config: LlmProviderAdapterConfig): Promise<{ latencyMs: number }> {
+    const client = this.buildClient(config);
+    const startedAt = Date.now();
+    try {
+      await client.responses.create({
+        model: config.model,
+        input: 'connection test — reply with the single word OK.',
+        max_output_tokens: 16,
+      });
+    } catch (error) {
+      throw toLlmError(error);
     }
-    const apiKey = await this.aiSettings.getApiKey();
-    if (!apiKey) {
-      throw new LlmPermanentError('AI API key is not configured.');
-    }
-    const client = this.clientFactory({ apiKey, timeout: AI_PROVIDER_TIMEOUT_MS, maxRetries: 0 });
-    return { client, model: settings.model };
+    return { latencyMs: Date.now() - startedAt };
+  }
+
+  /** Credential-free construction — the client is built fresh from the config this call was handed,
+   * never cached and never independently resolved from settings (see the class doc comment). */
+  private buildClient(config: LlmProviderAdapterConfig): OpenAI {
+    return this.clientFactory({ apiKey: config.apiKey, timeout: AI_PROVIDER_TIMEOUT_MS, maxRetries: 0 });
   }
 }
 

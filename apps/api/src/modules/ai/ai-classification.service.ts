@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../database/prisma.service';
 import { AuditService } from '../../audit/audit.service';
 import { ClockService } from '../../time/clock.service';
@@ -47,12 +46,6 @@ export type ClassifyMessageOutcome =
 export class AiClassificationService {
   constructor(
     private readonly prisma: PrismaService,
-    // §D — deliberately NOT part of the dynamic AiSettings runtime config: AI_PROVIDER decides which
-    // LlmGateway IMPLEMENTATION is wired into the DI container at boot (mock vs. real — see
-    // llm-provider.module.ts), an infrastructure/deployment-level decision analogous to SMTP_MODE/
-    // IMAP_MODE, never an admin-managed operational setting. Read here only to record which adapter
-    // actually executed this one classification, as evidence metadata.
-    private readonly config: ConfigService,
     private readonly aiSettings: AiSettingsResolverService,
     private readonly audit: AuditService,
     private readonly health: AiHealthService,
@@ -223,11 +216,14 @@ export class AiClassificationService {
     finalStatus: ClassificationStatus,
     settings: AiRuntimeSettings,
   ): Promise<{ routingDecisionId: string } | null> {
-    const provider = this.config.get<string>('AI_PROVIDER') ?? 'mock';
-    // The mock gateway never reads AiSettings.model at all, so when provider === 'mock' this
-    // evidence field is fixed to 'mock' regardless of whatever model happens to be configured —
-    // exactly mirroring this method's pre-Phase-3.1 behavior for the mock path.
-    const model = provider === 'mock' ? 'mock' : (settings.model ?? 'unknown');
+    // Provider-neutral correction — this evidence metadata must reflect the ACTUAL settings this
+    // very attempt classified through (the same `settings` snapshot threaded in from
+    // classifyMessage() above), never a separate env-var read. There is no more AI_PROVIDER
+    // adapter-selection concept at all: DynamicLlmGateway/LlmProviderRegistry select the real
+    // adapter purely from `settings.provider` (see dynamic-llm-gateway.ts), so recording that same
+    // field here can never disagree with which adapter actually ran.
+    const provider = settings.provider;
+    const model = settings.model ?? 'unknown';
     const now = this.clock.now();
 
     const result = await this.prisma.$transaction(async (tx) => {
