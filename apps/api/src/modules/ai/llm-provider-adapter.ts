@@ -16,6 +16,14 @@ export function isSupportedAiProvider(value: string): value is AiProviderId {
   return (SUPPORTED_AI_PROVIDERS as readonly string[]).includes(value);
 }
 
+/** Human-readable provider names for safe, specific error messages (e.g. model-discovery
+ * validation) — never used for any routing/business decision, purely display text. */
+export const AI_PROVIDER_LABELS: Record<AiProviderId, string> = {
+  OPENAI: 'OpenAI',
+  ANTHROPIC: 'Anthropic',
+  GOOGLE_GEMINI: 'Google Gemini',
+};
+
 /**
  * The exact runtime configuration a provider adapter needs for one call — resolved ONCE per request
  * by the caller (DynamicLlmGateway, or AiSettingsService.test()) from AiSettingsResolverService, and
@@ -27,6 +35,33 @@ export function isSupportedAiProvider(value: string): value is AiProviderId {
 export interface LlmProviderAdapterConfig {
   model: string;
   apiKey: string;
+}
+
+/**
+ * Dynamic model discovery ("n8n-style" UX correction) — the provider-neutral normalized shape every
+ * adapter's `listModels()` must return. Deliberately the smallest useful metadata set: no provider
+ * raw payloads, no account identifiers beyond what a human needs to recognize a model, no
+ * authorization headers, no API keys, no internal HTTP response objects. The frontend operates only
+ * on this shape.
+ *
+ * `compatibility` is never guessed from a naming convention (e.g. `startsWith('gpt-')`) — it is only
+ * ever `'COMPATIBLE'` when the provider's OWN metadata proves the model supports the plain
+ * text-generation call our adapters make (e.g. Gemini's `supportedGenerationMethods` including
+ * `generateContent`), and `'UNKNOWN'` otherwise (e.g. OpenAI's model-list endpoint exposes no such
+ * capability metadata at all). `'UNKNOWN'` still means "shown to the admin as available" — Test AI,
+ * never a client-side guess, is the final compatibility check.
+ */
+export interface DiscoveredAiModel {
+  id: string;
+  displayName: string;
+  provider: AiProviderId;
+  compatibility: 'COMPATIBLE' | 'UNKNOWN';
+  metadata?: {
+    ownedBy?: string;
+    description?: string;
+    inputTokenLimit?: number;
+    outputTokenLimit?: number;
+  };
 }
 
 /**
@@ -43,7 +78,8 @@ export interface LlmProviderAdapterConfig {
  *   - has no tools, no web/file access, no function/business-action calling, and stores no
  *     chain-of-thought;
  *   - has NO dependency on AiSettingsResolverService or ConfigService — it is handed a fully
- *     resolved LlmProviderAdapterConfig by its caller and never reads settings itself.
+ *     resolved LlmProviderAdapterConfig (or, for discovery, a bare API key — see `listModels`) by its
+ *     caller and never reads settings itself.
  */
 export interface LlmProviderAdapter {
   classifyIntent(input: ClassificationInput, config: LlmProviderAdapterConfig): Promise<NormalizedClassificationResult>;
@@ -55,4 +91,12 @@ export interface LlmProviderAdapter {
    * business flows.
    */
   testConnection(config: LlmProviderAdapterConfig): Promise<{ latencyMs: number }>;
+  /**
+   * Model discovery happens BEFORE a model has necessarily been selected, so this deliberately takes
+   * only what discovery actually needs — a bare API key — never a full `LlmProviderAdapterConfig`
+   * (which would wrongly require a model ID that doesn't exist yet). Must retrieve the full practical
+   * list (bounded pagination, never silently just the first page) and must never call
+   * classifyIntent()/draftReply()/testConnection() itself.
+   */
+  listModels(apiKey: string): Promise<DiscoveredAiModel[]>;
 }

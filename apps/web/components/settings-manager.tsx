@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
+import { AiModelCombobox, type AiModelOption } from './ai-model-combobox';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
 import { Notice } from './notice';
@@ -481,6 +482,13 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
   const [settings, setSettings] = useState<AiSettingsView | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState('OPENAI');
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [discoveredModels, setDiscoveredModels] = useState<AiModelOption[]>([]);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState('');
+  const [customModelMode, setCustomModelMode] = useState(true);
+  const [customModelId, setCustomModelId] = useState('');
+  const [selectedModelId, setSelectedModelId] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [testResult, setTestResult] = useState('');
@@ -495,10 +503,68 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
 
   function openEdit() {
     setSelectedProvider(settings?.provider ?? 'OPENAI');
+    setApiKeyInput('');
+    setDiscoveredModels([]);
+    setDiscoveryError('');
+    // No discovery has happened yet at open time — default to custom mode pre-filled with the
+    // currently saved model, so Save works unchanged even if the admin never clicks "Load Models".
+    setCustomModelMode(true);
+    setCustomModelId(settings?.model ?? '');
+    setSelectedModelId('');
     setFormOpen(true);
   }
 
   const providerChanged = settings !== null && selectedProvider !== settings.provider;
+
+  // Requirement: changing provider clears the previous selected model — a model ID from one
+  // provider is never meaningful for another. Switching back to the currently-saved provider
+  // restores that provider's saved model instead of leaving the field empty.
+  function handleProviderChange(nextProvider: string) {
+    setSelectedProvider(nextProvider);
+    setApiKeyInput('');
+    setDiscoveredModels([]);
+    setDiscoveryError('');
+    setSelectedModelId('');
+    setCustomModelMode(true);
+    setCustomModelId(nextProvider === settings?.provider ? (settings?.model ?? '') : '');
+  }
+
+  async function loadModels() {
+    setDiscoveryLoading(true);
+    setDiscoveryError('');
+    try {
+      const body: Record<string, unknown> = { provider: selectedProvider };
+      if (apiKeyInput.trim()) body.apiKey = apiKeyInput.trim();
+      const result = await apiRequest<{ success: boolean; models: AiModelOption[]; message?: string }>('/settings/ai/discover-models', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      if (!result.success) {
+        setDiscoveryError(result.message || 'Model discovery is temporarily unavailable.');
+        setDiscoveredModels([]);
+        return;
+      }
+      setDiscoveredModels(result.models);
+      if (!result.models.length) {
+        setDiscoveryError('The provider returned no models for this credential.');
+        return;
+      }
+      // If the model already active (custom or previously selected) is present in the fresh list,
+      // switch into list mode with it pre-selected; otherwise leave the admin's current choice alone
+      // — never force a selection, never silently overwrite a deliberate custom entry.
+      const currentId = customModelMode ? customModelId : selectedModelId;
+      const match = result.models.find((candidate) => candidate.id === currentId);
+      if (match) {
+        setCustomModelMode(false);
+        setSelectedModelId(match.id);
+      }
+    } catch (cause) {
+      setDiscoveryError(cause instanceof Error ? cause.message : 'Model discovery is temporarily unavailable.');
+      setDiscoveredModels([]);
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -509,16 +575,21 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
       setError('Please confirm the automatic-acceptance warning checkbox before enabling it.');
       return;
     }
+    const model = customModelMode ? customModelId.trim() : selectedModelId;
+    if (!model) {
+      setError(customModelMode ? 'Enter a Model ID.' : 'Select a model, or switch to "Use custom model ID".');
+      return;
+    }
     try {
       const body: Record<string, unknown> = {
         enabled: form.get('enabled') === 'on',
         provider: selectedProvider,
-        model: value('model') || undefined,
+        model,
         confidenceThreshold: value('confidenceThreshold') ? Number(value('confidenceThreshold')) : undefined,
         autoRouteAccept,
         autoRouteAcceptCutoverAt: value('autoRouteAcceptCutoverAt') ? new Date(value('autoRouteAcceptCutoverAt')).toISOString() : undefined,
       };
-      if (value('apiKey')) body.apiKey = value('apiKey');
+      if (apiKeyInput.trim()) body.apiKey = apiKeyInput.trim();
       if (form.get('clearApiKey') === 'on') body.clearApiKey = true;
 
       await apiRequest('/settings/ai', { method: 'PATCH', body: JSON.stringify(body) });
@@ -543,6 +614,13 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
 
   if (!settings) return <Notice message={error} />;
 
+  const loadModelsDisabled = discoveryLoading || (providerChanged && !apiKeyInput.trim());
+  const loadModelsLabel = discoveryLoading
+    ? 'Loading models…'
+    : providerChanged || !settings.apiKeyConfigured
+      ? 'Verify & Load Models'
+      : 'Refresh Models';
+
   return (
     <>
       {!formOpen && (
@@ -560,23 +638,13 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
             </label>
             <label className="field">
               <span>Provider</span>
-              <select onChange={(e) => setSelectedProvider(e.target.value)} value={selectedProvider}>
+              <select onChange={(e) => handleProviderChange(e.target.value)} value={selectedProvider}>
                 {AI_PROVIDER_OPTIONS.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.label}
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="field">
-              <span>Model</span>
-              <input
-                defaultValue={providerChanged ? '' : (settings.model ?? '')}
-                key={selectedProvider}
-                name="model"
-                placeholder={AI_PROVIDER_OPTIONS.find((o) => o.id === selectedProvider)?.modelPlaceholder}
-                required
-              />
             </label>
             {providerChanged && (
               <p className="field-wide text-sm text-amber-700">
@@ -588,16 +656,54 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
                 {providerChanged
                   ? `New API Key for ${aiProviderLabel(selectedProvider)} (required)`
                   : settings.apiKeyConfigured
-                    ? 'Replace API Key (leave blank to keep the current one)'
+                    ? 'Replace API Key (leave blank to keep the current one, or to Refresh Models with it)'
                     : 'API Key'}
               </span>
-              <input autoComplete="new-password" key={selectedProvider} name="apiKey" required={providerChanged} type="password" />
+              <input
+                autoComplete="new-password"
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                required={providerChanged}
+                type="password"
+                value={apiKeyInput}
+              />
             </label>
             {settings.apiKeyConfigured && !providerChanged && (
               <label className="checkbox field-wide">
                 <input name="clearApiKey" type="checkbox" /> Clear stored API key
               </label>
             )}
+            <div className="field-wide">
+              <button className="button-secondary" disabled={loadModelsDisabled} onClick={() => void loadModels()} type="button">
+                {loadModelsLabel}
+              </button>
+            </div>
+            <Notice message={discoveryError} />
+            {customModelMode ? (
+              <label className="field field-wide">
+                <span>Custom Model ID</span>
+                <input
+                  onChange={(e) => setCustomModelId(e.target.value)}
+                  placeholder={AI_PROVIDER_OPTIONS.find((o) => o.id === selectedProvider)?.modelPlaceholder}
+                  required
+                  value={customModelId}
+                />
+              </label>
+            ) : (
+              <AiModelCombobox onSelect={setSelectedModelId} options={discoveredModels} value={selectedModelId} />
+            )}
+            <div className="field-wide">
+              {customModelMode ? (
+                discoveredModels.length > 0 && (
+                  <button className="button-small" onClick={() => setCustomModelMode(false)} type="button">
+                    Use discovered models list
+                  </button>
+                )
+              ) : (
+                <button className="button-small" onClick={() => setCustomModelMode(true)} type="button">
+                  Use custom model ID
+                </button>
+              )}
+            </div>
             <label className="field">
               <span>Confidence threshold (0–1)</span>
               <input defaultValue={settings.confidenceThreshold ?? 0.9} max={1} min={0} name="confidenceThreshold" step={0.01} type="number" />

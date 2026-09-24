@@ -18,7 +18,8 @@ import { AI_DRAFT_MAX_OUTPUT_TOKENS, AI_MAX_OUTPUT_TOKENS, AI_PROVIDER_TIMEOUT_M
 import { LlmMalformedOutputError, LlmPermanentError, LlmTransientError } from './llm-errors';
 import type { ClassificationInput, DraftReplyInput, NormalizedClassificationResult, NormalizedDraftResult } from './llm-gateway';
 import { DRAFT_RESULT_SCHEMA_VERSION, RESULT_SCHEMA_VERSION } from './llm-gateway';
-import type { LlmProviderAdapter, LlmProviderAdapterConfig } from './llm-provider-adapter';
+import type { DiscoveredAiModel, LlmProviderAdapter, LlmProviderAdapterConfig } from './llm-provider-adapter';
+import { AI_MODEL_DISCOVERY_HARD_CAP } from './ai-model-discovery.constants';
 
 interface OpenAiClientOptions {
   apiKey: string;
@@ -64,7 +65,7 @@ export class OpenAiProviderAdapter implements LlmProviderAdapter {
   clientFactory: (options: OpenAiClientOptions) => OpenAI = (options) => new OpenAI(options);
 
   async classifyIntent(input: ClassificationInput, config: LlmProviderAdapterConfig): Promise<NormalizedClassificationResult> {
-    const client = this.buildClient(config);
+    const client = this.buildClient(config.apiKey);
 
     let response: Awaited<ReturnType<OpenAI['responses']['parse']>>;
     try {
@@ -118,7 +119,7 @@ export class OpenAiProviderAdapter implements LlmProviderAdapter {
    * behavior at all.
    */
   async draftReply(input: DraftReplyInput, config: LlmProviderAdapterConfig): Promise<NormalizedDraftResult> {
-    const client = this.buildClient(config);
+    const client = this.buildClient(config.apiKey);
 
     let response: Awaited<ReturnType<OpenAI['responses']['parse']>>;
     try {
@@ -164,7 +165,7 @@ export class OpenAiProviderAdapter implements LlmProviderAdapter {
    * AiClassification/AiRoutingDecision/RenewalCase/email.
    */
   async testConnection(config: LlmProviderAdapterConfig): Promise<{ latencyMs: number }> {
-    const client = this.buildClient(config);
+    const client = this.buildClient(config.apiKey);
     const startedAt = Date.now();
     try {
       await client.responses.create({
@@ -178,10 +179,44 @@ export class OpenAiProviderAdapter implements LlmProviderAdapter {
     return { latencyMs: Date.now() - startedAt };
   }
 
-  /** Credential-free construction — the client is built fresh from the config this call was handed,
+  /**
+   * Dynamic model discovery — uses the official OpenAI Models List endpoint (`GET /v1/models` via
+   * the SDK's `models.list()`), which requires only the API key, never a model ID (discovery happens
+   * BEFORE a model is selected). The SDK's `Page` abstraction is used with `for await` so any future
+   * real pagination is followed automatically; today's API returns everything in one page, per the
+   * SDK's own documentation. Bounded by AI_MODEL_DISCOVERY_HARD_CAP regardless.
+   *
+   * OpenAI's model list exposes NO capability metadata (no field distinguishing a text-generation
+   * model from an embeddings/image/audio/moderation model) — see `Model` in the SDK's own type
+   * definitions. Per the explicit instruction never to filter on brittle name-prefix heuristics
+   * (`startsWith('gpt-')` or similar), every returned model is reported with `compatibility:
+   * 'UNKNOWN'`: shown as available, with Test AI as the actual, final compatibility check.
+   */
+  async listModels(apiKey: string): Promise<DiscoveredAiModel[]> {
+    const client = this.buildClient(apiKey);
+    const models: DiscoveredAiModel[] = [];
+    try {
+      const page = await client.models.list();
+      for await (const model of page) {
+        models.push({
+          id: model.id,
+          displayName: model.id,
+          provider: 'OPENAI',
+          compatibility: 'UNKNOWN',
+          metadata: { ownedBy: model.owned_by },
+        });
+        if (models.length >= AI_MODEL_DISCOVERY_HARD_CAP) break;
+      }
+    } catch (error) {
+      throw toLlmError(error);
+    }
+    return models;
+  }
+
+  /** Credential-free construction — the client is built fresh from the API key this call was handed,
    * never cached and never independently resolved from settings (see the class doc comment). */
-  private buildClient(config: LlmProviderAdapterConfig): OpenAI {
-    return this.clientFactory({ apiKey: config.apiKey, timeout: AI_PROVIDER_TIMEOUT_MS, maxRetries: 0 });
+  private buildClient(apiKey: string): OpenAI {
+    return this.clientFactory({ apiKey, timeout: AI_PROVIDER_TIMEOUT_MS, maxRetries: 0 });
   }
 }
 

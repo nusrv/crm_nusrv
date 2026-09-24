@@ -78,6 +78,49 @@ The Model field is never hard-coded anywhere in business logic or an adapter —
 admin-configured string from `AiSettings.model`, entered through Settings → AI. An ADMIN can enter
 any model ID the selected provider supports (e.g. a newer model release) without a code deployment.
 
+### Dynamic model discovery (2026-09-24 — "n8n-style" correction)
+
+The Model field's primary UX is an n8n-style flow, not a free-text box: Provider -> API key ->
+"Verify & Load Models" / "Refresh Models" -> a searchable list of the provider's OWN currently
+available models -> select -> Test AI -> Save. **No provider model catalog is hard-coded anywhere in
+source** (frontend or backend) — every adapter's `listModels(apiKey)` calls that provider's official
+model-list API live, on demand:
+- OpenAI: the official Models List endpoint (`models.list()` via the SDK). No capability metadata
+  exists in this response at all, so every result is reported `compatibility: 'UNKNOWN'` — never
+  guessed from a name prefix like `gpt-`. Test AI remains the actual, final compatibility check.
+- Anthropic: the official Models List API (`/v1/models`), paginated via its documented
+  `after_id`/`has_more`/`last_id` cursor. This endpoint exclusively lists Claude models usable
+  through the Messages API our adapter already calls, so results are reported `'COMPATIBLE'` — a
+  fact of the endpoint's own scope, never a naming guess.
+- Google Gemini: the official `models.list` endpoint, paginated via `pageToken`/`nextPageToken`.
+  Only models whose `supportedGenerationMethods` metadata explicitly includes `generateContent` are
+  reported `'COMPATIBLE'`; a model whose metadata explicitly excludes it (an embeddings/TTS/image
+  model) is excluded entirely; a model with no such metadata is still shown, marked `'UNKNOWN'`.
+
+Every adapter returns the same normalized `DiscoveredAiModel` shape (`id`, `displayName`, `provider`,
+`compatibility`, a small `metadata` set) — no raw provider payload, account identifier, header, or
+API key ever reaches the frontend. Discovery is bounded (`AI_MODEL_DISCOVERY_HARD_CAP`, 1000 models,
+plus a hard per-provider page-count ceiling so a misbehaving cursor can never loop forever) and
+deduplicated/sorted deterministically (`AiModelDiscoveryService`) — it never picks a "best" model;
+the ADMIN always chooses.
+
+**Discovery is not Save.** `POST /settings/ai/discover-models` (ADMIN-only) writes nothing: no
+provider, model, API key, or enablement change, no audit event, no IntegrationHealthEvent. A
+supplied `apiKey` is used only for that one request, held in memory for the duration of the call, and
+never saved/encrypted/logged/audited/returned/cached — it becomes persisted only if the ADMIN
+separately presses Save. Refreshing the currently-saved provider's models may omit `apiKey` (the
+backend decrypts the stored key server-side); switching to a different provider always requires a
+new key in the request — the previous provider's key is never reused for discovery, mirroring
+`AiSettingsService.update()`'s own provider-switch credential-safety rule.
+
+A **"Use custom model ID"** free-text fallback is always available, required so the CRM never becomes
+unusable because a model-list API is temporarily down, a brand-new model isn't listed yet, or the
+ADMIN has snapshot/alias access to a model the list endpoint doesn't surface.
+
+Test AI remains the sole authoritative functional validation of "does this saved provider + model +
+key combination actually work for our adapter" — Integration Health's AI status continues to reflect
+Test AI/runtime health, never mere model-list discovery success.
+
 Do not hard-code the model name in business logic.
 Use the DB-backed operational settings (Settings → AI, Phase 3.1):
 - `AiSettings.enabled`

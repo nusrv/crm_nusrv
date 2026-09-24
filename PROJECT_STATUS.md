@@ -97,6 +97,25 @@
   records the actual `settings.provider`/`settings.model` and has no `ConfigService` dependency left.
   See `PHASES/PHASE_03_1_ADMIN_SETTINGS.md`'s "Provider-neutral correction (2026-09-24)" section for
   full detail.
+- **Dynamic AI model discovery ("n8n-style" UX, 2026-09-24)**: owner required the Model field's
+  primary UX to become Provider -> API key -> load models from that provider's own account ->
+  searchable select -> Test AI -> Save, with **no hard-coded model catalog anywhere in source**.
+  Added `listModels(apiKey)` to `LlmProviderAdapter`, implemented against each provider's official,
+  live model-list API (OpenAI SDK `models.list()`; Anthropic `/v1/models` with documented
+  `after_id`/`has_more` pagination; Google `models.list` with `pageToken` pagination, filtering to
+  models whose `supportedGenerationMethods` includes `generateContent`) — bounded pagination
+  (hard cap + max-page-count) and NO brittle name-prefix filtering (OpenAI's response carries no
+  capability metadata at all, so every result there is marked `compatibility: 'UNKNOWN'`; Test AI
+  remains the actual, final check). New `AiModelDiscoveryService` +
+  `POST /settings/ai/discover-models` (ADMIN-only, IT denied) is a deliberately separate operation
+  from Save: it writes zero `AiSettings` data, creates zero audit/health events, and a supplied
+  temporary API key (required when switching provider — the old provider's key is never reused; may
+  be omitted to refresh the currently-saved provider using its decrypted-server-side stored key) is
+  never saved/logged/audited/returned/cached, only used for that one call. Frontend gained a new
+  searchable `AiModelCombobox` plus a required "Use custom model ID" free-text fallback, so the CRM
+  never becomes unusable if a provider's model-list API is down or a brand-new model isn't listed
+  yet. No schema migration (nothing is persisted by discovery). See
+  `PHASES/PHASE_03_1_ADMIN_SETTINGS.md`'s "Dynamic model discovery correction (2026-09-24)" section.
 - Phase 4+: LOCKED
 
 ## Phase 2.1 operational data correction

@@ -55,8 +55,8 @@ describe('Phase 3.1 §N — Mail/AI Settings RBAC', () => {
       for (const role of NON_ADMIN_ROLES) expect(allowed(roles, role)).toBe(false);
     });
 
-    it('only ADMIN may update/test — IT and every other role are denied', () => {
-      for (const method of ['update', 'test']) {
+    it('only ADMIN may update/test/discover-models — IT and every other role are denied', () => {
+      for (const method of ['update', 'test', 'discoverModels']) {
         const roles = methodRoles(AiSettingsController, method);
         expect(roles).toEqual(['ADMIN']);
         expect(allowed(roles, 'ADMIN')).toBe(true);

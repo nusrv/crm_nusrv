@@ -587,3 +587,78 @@ describe('OpenAiProviderAdapter.testConnection (§K — Test AI)', () => {
     await expect(gateway.testConnection(config())).rejects.toBeInstanceOf(LlmPermanentError);
   });
 });
+
+/** A minimal fake of the SDK's `Page<Model>` — real usage is `for await (const model of page)`, so
+ * only `[Symbol.asyncIterator]` needs to work for these tests. */
+function fakeModelsPage(models: Array<{ id: string; owned_by: string }>) {
+  return {
+    // `for await...of` accepts a plain (non-async) generator assigned to Symbol.asyncIterator just
+    // fine — each yielded value is wrapped in Promise.resolve() automatically — so no `await` is
+    // needed inside this generator.
+    [Symbol.asyncIterator]: function* () {
+      for (const model of models) yield model;
+    },
+  };
+}
+
+describe('OpenAiProviderAdapter.listModels (dynamic model discovery)', () => {
+  it('P11 — normalizes the model-list response correctly: id, displayName, provider, and ownedBy metadata', async () => {
+    const list = jest.fn(() => Promise.resolve(fakeModelsPage([{ id: 'gpt-5', owned_by: 'openai' }])));
+    const gateway = new OpenAiProviderAdapter();
+    gateway.clientFactory = () => ({ models: { list } }) as never;
+
+    const models = await gateway.listModels(REAL_API_KEY);
+
+    expect(models).toEqual([
+      { id: 'gpt-5', displayName: 'gpt-5', provider: 'OPENAI', compatibility: 'UNKNOWN', metadata: { ownedBy: 'openai' } },
+    ]);
+  });
+
+  it('P12 — never filters by name prefix: a model not named like a chat model is still returned, marked UNKNOWN rather than guessed', async () => {
+    const list = jest.fn(() =>
+      Promise.resolve(fakeModelsPage([{ id: 'text-embedding-3-large', owned_by: 'openai' }, { id: 'whisper-1', owned_by: 'openai' }])),
+    );
+    const gateway = new OpenAiProviderAdapter();
+    gateway.clientFactory = () => ({ models: { list } }) as never;
+
+    const models = await gateway.listModels(REAL_API_KEY);
+
+    expect(models.map((m) => m.id)).toEqual(['text-embedding-3-large', 'whisper-1']);
+    expect(models.every((m) => m.compatibility === 'UNKNOWN')).toBe(true);
+  });
+
+  it('constructs the client with only the supplied API key — no model ID is required to discover models', async () => {
+    const list = jest.fn(() => Promise.resolve(fakeModelsPage([])));
+    const gateway = new OpenAiProviderAdapter();
+    let capturedOptions: { apiKey: string } | undefined;
+    gateway.clientFactory = (options) => {
+      capturedOptions = options;
+      return { models: { list } } as never;
+    };
+
+    await gateway.listModels(REAL_API_KEY);
+
+    expect(capturedOptions?.apiKey).toBe(REAL_API_KEY);
+  });
+
+  it('P14 — provider errors are sanitized identically to classifyIntent/draftReply/testConnection', async () => {
+    const list = jest.fn(() =>
+      Promise.reject(new AuthenticationError(401, { error: { message: 'invalid api key' } }, 'invalid api key', new Headers())),
+    );
+    const gateway = new OpenAiProviderAdapter();
+    gateway.clientFactory = () => ({ models: { list } }) as never;
+
+    await expect(gateway.listModels(REAL_API_KEY)).rejects.toBeInstanceOf(LlmPermanentError);
+  });
+
+  it('bounds collection at AI_MODEL_DISCOVERY_HARD_CAP even if the provider returns more', async () => {
+    const many = Array.from({ length: 1500 }, (_, i) => ({ id: `model-${i}`, owned_by: 'openai' }));
+    const list = jest.fn(() => Promise.resolve(fakeModelsPage(many)));
+    const gateway = new OpenAiProviderAdapter();
+    gateway.clientFactory = () => ({ models: { list } }) as never;
+
+    const models = await gateway.listModels(REAL_API_KEY);
+
+    expect(models.length).toBe(1000);
+  });
+});

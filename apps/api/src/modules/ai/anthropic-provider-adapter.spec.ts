@@ -216,3 +216,77 @@ describe('AnthropicProviderAdapter (native fetch boundary)', () => {
     });
   });
 });
+
+describe('AnthropicProviderAdapter.listModels (dynamic model discovery)', () => {
+  it('normalizes the model-list response: id, display_name, provider, and marks every result COMPATIBLE (the endpoint only lists Messages-API models)', async () => {
+    const fetchImpl = jest.fn<typeof fetch>(() =>
+      Promise.resolve(
+        fakeOkResponse({ data: [{ id: 'claude-sonnet-test', display_name: 'Claude Sonnet (Test)', type: 'model' }], has_more: false }),
+      ),
+    );
+    const adapter = new AnthropicProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const models = await adapter.listModels(REAL_API_KEY);
+
+    expect(models).toEqual([
+      { id: 'claude-sonnet-test', displayName: 'Claude Sonnet (Test)', provider: 'ANTHROPIC', compatibility: 'COMPATIBLE' },
+    ]);
+  });
+
+  it('calls the official Models List endpoint with x-api-key/anthropic-version headers and no model ID required', async () => {
+    const fetchImpl = jest.fn<typeof fetch>(() => Promise.resolve(fakeOkResponse({ data: [], has_more: false })));
+    const adapter = new AnthropicProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await adapter.listModels(REAL_API_KEY);
+
+    const [url, init] = fetchImpl.mock.calls[0]! as [string, RequestInit];
+    expect(url).toContain('https://api.anthropic.com/v1/models');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['x-api-key']).toBe(REAL_API_KEY);
+    expect(headers['anthropic-version']).toBeTruthy();
+  });
+
+  it('follows documented has_more/last_id pagination across multiple pages', async () => {
+    const fetchImpl = jest.fn<(url: string, init?: RequestInit) => Promise<Response>>((url) => {
+      const hasAfter = url.includes('after_id=page-1-last');
+      if (!hasAfter) {
+        return Promise.resolve(
+          fakeOkResponse({ data: [{ id: 'model-a', type: 'model' }], has_more: true, last_id: 'page-1-last' }),
+        );
+      }
+      return Promise.resolve(fakeOkResponse({ data: [{ id: 'model-b', type: 'model' }], has_more: false, last_id: 'page-2-last' }));
+    });
+    const adapter = new AnthropicProviderAdapter();
+    adapter.fetchImpl = fetchImpl as never;
+
+    const models = await adapter.listModels(REAL_API_KEY);
+
+    expect(models.map((m) => m.id)).toEqual(['model-a', 'model-b']);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('never loops forever when has_more stays true without last_id advancing', async () => {
+    const fetchImpl = jest.fn<typeof fetch>(() =>
+      Promise.resolve(fakeOkResponse({ data: [{ id: 'stuck-model', type: 'model' }], has_more: true, last_id: 'same-id' })),
+    );
+    const adapter = new AnthropicProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const models = await adapter.listModels(REAL_API_KEY);
+
+    // Bounded by ANTHROPIC_MODELS_MAX_PAGES (10) — never an infinite loop — and the same last_id
+    // never advancing also breaks the loop one iteration after the first, whichever comes first.
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(10);
+    expect(models.length).toBeGreaterThan(0);
+  });
+
+  it('provider errors are sanitized identically to classifyIntent/draftReply/testConnection', async () => {
+    const fetchImpl = jest.fn<typeof fetch>(() => Promise.resolve(fakeErrorResponse(401)));
+    const adapter = new AnthropicProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await expect(adapter.listModels(REAL_API_KEY)).rejects.toBeInstanceOf(LlmPermanentError);
+  });
+});

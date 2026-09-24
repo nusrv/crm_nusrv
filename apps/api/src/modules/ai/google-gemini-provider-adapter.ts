@@ -9,9 +9,15 @@ import { toHttpLlmError, toNetworkLlmError } from './llm-http-error.util';
 import { LlmMalformedOutputError } from './llm-errors';
 import type { ClassificationInput, DraftReplyInput, NormalizedClassificationResult, NormalizedDraftResult } from './llm-gateway';
 import { DRAFT_RESULT_SCHEMA_VERSION, RESULT_SCHEMA_VERSION } from './llm-gateway';
-import type { LlmProviderAdapter, LlmProviderAdapterConfig } from './llm-provider-adapter';
+import type { DiscoveredAiModel, LlmProviderAdapter, LlmProviderAdapterConfig } from './llm-provider-adapter';
+import { AI_MODEL_DISCOVERY_HARD_CAP } from './ai-model-discovery.constants';
 
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI_MODELS_PAGE_SIZE = 1000;
+/** Defense-in-depth against a provider that never stops returning a `nextPageToken` — bounds the
+ * number of HTTP requests a single listModels() call can make, independently of
+ * AI_MODEL_DISCOVERY_HARD_CAP (which bounds the number of MODELS, not requests). */
+const GEMINI_MODELS_MAX_PAGES = 10;
 
 interface GeminiCandidate {
   content?: { parts?: Array<{ text?: string }> };
@@ -21,6 +27,20 @@ interface GeminiCandidate {
 interface GeminiGenerateContentResponse {
   candidates?: GeminiCandidate[];
   promptFeedback?: { blockReason?: string };
+}
+
+interface GeminiModel {
+  name: string;
+  displayName?: string;
+  description?: string;
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+  supportedGenerationMethods?: string[];
+}
+
+interface GeminiModelsListResponse {
+  models?: GeminiModel[];
+  nextPageToken?: string;
 }
 
 /**
@@ -74,6 +94,74 @@ export class GoogleGeminiProviderAdapter implements LlmProviderAdapter {
       false,
     );
     return { latencyMs: Date.now() - startedAt };
+  }
+
+  /**
+   * Dynamic model discovery — uses Google's official `models.list` endpoint, which requires only the
+   * API key, never a model ID. Paginates via the documented `pageToken`/`nextPageToken` cursor
+   * contract, bounded both by AI_MODEL_DISCOVERY_HARD_CAP (total models) and
+   * GEMINI_MODELS_MAX_PAGES (total requests). Only models whose `supportedGenerationMethods`
+   * explicitly includes `generateContent` — the exact call this adapter's classifyIntent/draftReply/
+   * testConnection make — are returned as `'COMPATIBLE'`; a model missing that metadata entirely is
+   * still included as `'UNKNOWN'` rather than guessed at, but a model whose metadata explicitly lists
+   * OTHER methods and NOT `generateContent` (e.g. an embeddings-only model) is excluded entirely, per
+   * the explicit instruction not to present embeddings/TTS/image-only models as normal generation
+   * choices when the provider's own metadata makes that safely determinable.
+   *
+   * The stored `id` strips the API's `models/` name prefix so it matches exactly what
+   * `request()` above concatenates back onto `GEMINI_API_BASE_URL`.
+   */
+  async listModels(apiKey: string): Promise<DiscoveredAiModel[]> {
+    const models: DiscoveredAiModel[] = [];
+    let pageToken: string | undefined;
+    for (let page = 0; page < GEMINI_MODELS_MAX_PAGES; page += 1) {
+      const url = new URL(GEMINI_API_BASE_URL);
+      url.searchParams.set('pageSize', String(GEMINI_MODELS_PAGE_SIZE));
+      url.searchParams.set('key', apiKey);
+      if (pageToken) url.searchParams.set('pageToken', pageToken);
+
+      let response: Response;
+      try {
+        response = await this.fetchImpl(url.toString(), {
+          method: 'GET',
+          signal: AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS),
+        });
+      } catch (error) {
+        throw toNetworkLlmError(error);
+      }
+      if (!response.ok) {
+        throw toHttpLlmError(response.status);
+      }
+      let data: GeminiModelsListResponse;
+      try {
+        data = (await response.json()) as GeminiModelsListResponse;
+      } catch {
+        throw new LlmMalformedOutputError('Provider response was not valid JSON.');
+      }
+
+      for (const model of data.models ?? []) {
+        const methods = model.supportedGenerationMethods;
+        // Explicit metadata present and generateContent NOT listed -> a known-incompatible model
+        // (embeddings/TTS/image-only/etc.) — excluded entirely, never shown as a normal choice.
+        if (Array.isArray(methods) && !methods.includes('generateContent')) continue;
+        models.push({
+          id: model.name.replace(/^models\//, ''),
+          displayName: model.displayName ?? model.name,
+          provider: 'GOOGLE_GEMINI',
+          compatibility: Array.isArray(methods) && methods.includes('generateContent') ? 'COMPATIBLE' : 'UNKNOWN',
+          metadata: {
+            description: model.description,
+            inputTokenLimit: model.inputTokenLimit,
+            outputTokenLimit: model.outputTokenLimit,
+          },
+        });
+        if (models.length >= AI_MODEL_DISCOVERY_HARD_CAP) return models;
+      }
+
+      if (!data.nextPageToken || data.nextPageToken === pageToken) break;
+      pageToken = data.nextPageToken;
+    }
+    return models;
   }
 
   /** One request/response round trip, shared by all three operations above. Never retries itself

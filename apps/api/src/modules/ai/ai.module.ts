@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { AI_QUEUE } from './ai-queue.constants';
 import { AiClassificationEnqueueService } from './ai-classification-enqueue.service';
 import { AiHealthService } from './ai-health.service';
+import { AiModelDiscoveryService } from './ai-model-discovery.service';
 import { AiQueueService } from './ai-queue.service';
 import { AiSettingsController } from './ai-settings.controller';
 import { AiSettingsService } from './ai-settings.service';
@@ -37,6 +38,7 @@ import { LlmProviderModule } from './llm-provider.module';
     ClassificationReviewService,
     AiHealthService,
     AiSettingsService,
+    AiModelDiscoveryService,
   ],
   // EffectiveClassificationService is also exported for Slice E's CommunicationThreadsService,
   // which surfaces the same effective-classification read model in the thread detail view (§6) —

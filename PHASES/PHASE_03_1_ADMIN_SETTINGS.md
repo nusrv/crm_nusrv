@@ -162,6 +162,8 @@ is now the ONLY thing `MAIL_SEND_ENABLED` used to also (wrongly) gate.
   same provider/model/credential configuration" — for whichever provider is selected, never a hidden
   OpenAI-only implementation. See the 2026-09-24 provider-neutral correction below for the full
   adapter architecture.
+- `POST /settings/ai/discover-models` (ADMIN-only) — dynamic model discovery; see the "Dynamic model
+  discovery correction (2026-09-24)" section below for the full contract. Writes nothing.
 
 ## Dynamic AI runtime (§J)
 
@@ -236,6 +238,73 @@ must be one supported provider, never hard-coded as the only one. Corrected:
   correction pass missed. It now records `settings.provider`/`settings.model` from the same
   `AiRuntimeSettings` snapshot the attempt actually classified through, and has no `ConfigService`
   dependency left at all.
+
+## Dynamic model discovery correction (2026-09-24)
+
+The owner required the Model field's primary UX to become n8n-style (Provider -> API key -> load
+models from that provider's own account -> searchable select -> Test AI -> Save) while explicitly
+forbidding a hard-coded model catalog anywhere in source, since catalogs go stale.
+
+- `DiscoveredAiModel` (`llm-provider-adapter.ts`) is the new provider-neutral normalized shape:
+  `id`, `displayName`, `provider`, `compatibility: 'COMPATIBLE' | 'UNKNOWN'`, and a small optional
+  `metadata` set (`ownedBy`/`description`/`inputTokenLimit`/`outputTokenLimit`). No provider raw
+  payload, account identifier, header, or API key ever appears in it.
+- `LlmProviderAdapter` gained one more method, `listModels(apiKey: string): Promise<DiscoveredAiModel[]>`
+  — deliberately takes ONLY an API key, never a full `LlmProviderAdapterConfig` (which would wrongly
+  require a model ID that doesn't exist yet at discovery time). All three adapters implement it
+  against their provider's OWN official model-list API, live, on every call — no static list in
+  frontend or backend source:
+  - **OpenAI** (`OpenAiProviderAdapter.listModels`) — the SDK's `models.list()` (official Models List
+    endpoint), iterated via `for await` so any real pagination is followed automatically. The
+    response carries NO capability metadata at all, so every result is `compatibility: 'UNKNOWN'` —
+    explicitly NOT filtered by name prefix (`gpt-` or similar), per the owner's explicit instruction;
+    Test AI remains the actual, final compatibility check.
+  - **Anthropic** (`AnthropicProviderAdapter.listModels`) — the official Models List API
+    (`GET /v1/models`), paginated via its documented `after_id`/`has_more`/`last_id` cursor (bounded
+    by `AI_MODEL_DISCOVERY_HARD_CAP` models and a fixed max-page-count so a non-advancing cursor can
+    never loop forever). This endpoint exclusively lists Claude Messages-API models, so every result
+    is `compatibility: 'COMPATIBLE'` — a fact of the endpoint's documented scope, never a naming
+    guess.
+  - **Google Gemini** (`GoogleGeminiProviderAdapter.listModels`) — the official `models.list`
+    endpoint, paginated via `pageToken`/`nextPageToken` (same dual bounding). The stored `id` strips
+    the API's `models/` name prefix so it matches exactly what `GoogleGeminiProviderAdapter`'s own
+    request-building code expects. Only models whose `supportedGenerationMethods` metadata explicitly
+    includes `generateContent` are `'COMPATIBLE'`; a model whose metadata explicitly excludes it
+    (embeddings/TTS/image-only) is excluded entirely; a model with no such metadata is still returned,
+    marked `'UNKNOWN'` rather than guessed.
+- `AiModelDiscoveryService` (new) is the ONE place `AiSettings.provider`/`AiSettingsResolverService`/
+  `LlmProviderRegistry` are used for discovery — no second provider-selection switch was created
+  inside the Settings service. It normalizes/dedupes-by-id/sorts deterministically (never a "best
+  model" ranking, never an auto-selected default) and enforces the exact case rules the owner
+  specified:
+  1. Same provider already saved, request omits `apiKey` -> the backend decrypts and uses the SAVED
+     key server-side (powers "Refresh Models") — never returned, never logged.
+  2. Switching provider -> `apiKey` is REQUIRED; the previous provider's key is never reused. Missing
+     it rejects with a safe, specific message (`"Enter an API key for <Provider> before loading
+     models."`), never a cryptic one.
+  3. No configuration saved yet -> `apiKey` is REQUIRED.
+- **Temporary key safety** — a supplied `apiKey` is used only for that one discovery call (a local
+  variable for the duration of the method) and is never saved, encrypted, persisted, audited, logged,
+  included in a thrown exception, returned, or cached. `AiModelDiscoveryService` has no
+  `AuditService`/`AiHealthService` dependency at all, so discovery structurally cannot write an audit
+  event or an `IntegrationHealthEvent` — it becomes persisted only if the ADMIN separately presses
+  Save on the real AI settings form (`AiSettingsService.update()`), which re-validates everything
+  independently and unchanged.
+- `POST /settings/ai/discover-models` (`AiSettingsController`) is ADMIN-only, not IT — unlike the
+  read-only `GET`, discovery can consume a stored secret. No schema/migration change: nothing is
+  persisted, so there is nothing to migrate. No scheduled sync job, no `models` table.
+- Frontend (`settings-manager.tsx`, new `AiModelCombobox` component): Provider select -> API key
+  field -> "Verify & Load Models" / "Refresh Models" button (disabled until a new key is entered when
+  switching provider) -> a searchable, client-side-filtered model list (no artificial result cap) ->
+  select. A "Use custom model ID" free-text fallback is always available and required — the CRM must
+  never become unusable because a model-list API is temporarily down, a brand-new model isn't listed
+  yet, or the ADMIN needs an alias/snapshot model the list endpoint doesn't surface. Changing provider
+  clears the previously selected/custom model; switching back to the currently-saved provider
+  restores its saved model. Save sends whichever of (selected list model) or (custom model ID) is
+  active — Test AI (unchanged) remains the sole functional validation of the SAVED configuration.
+- Integration Health's AI status is untouched by discovery — it continues to reflect only Test AI /
+  real runtime health (§L/§P), since discovery proves a credential can list models, never that the
+  selected model actually satisfies the CRM's classification/draft contract.
 
 ## Security
 
@@ -317,6 +386,15 @@ no effect), `settings-rbac.spec.ts` (both controllers), plus `mail-configuration
 authority. All pre-existing AI/mail unit and RBAC suites continue to pass unmodified in behavior
 (only their fake collaborators were updated to the new constructor shapes).
 
+Dynamic model discovery (2026-09-24): `ai-model-discovery.service.spec.ts` (all three case rules,
+temporary-key never persisted/logged/returned, dedup/sort, writes-nothing), plus `listModels()`
+coverage added to each provider adapter's own spec (`openai-provider-adapter.spec.ts` — no
+name-prefix filtering, UNKNOWN compatibility, hard-cap bounding; `anthropic-provider-adapter.spec.ts`
+— pagination via `after_id`/`has_more`, non-advancing-cursor safety, COMPATIBLE marking;
+`google-gemini-provider-adapter.spec.ts` — pagination via `pageToken`, `generateContent` filtering,
+`models/` prefix stripping), and an extended `settings-rbac.spec.ts` case proving `discover-models`
+is ADMIN-only (IT and every other role denied, identically to `update`/`test`).
+
 ## Acceptance criteria
 
 - [x] Mail and AI operational settings are fully manageable from the CRM UI (`/dashboard/settings`).
@@ -350,6 +428,19 @@ authority. All pre-existing AI/mail unit and RBAC suites continue to pass unmodi
 - [x] Business services (AiClassificationService, AiClassificationWorker, AiRoutingService,
       AiReplyDraftService, RenewalCase services, Communication Center) depend only on the
       provider-neutral `LlmGateway` interface — none of them contains provider-specific logic.
+- [x] The Model field's primary UX is dynamic discovery from the selected provider's own API, never a
+      hard-coded catalog in frontend or backend source.
+- [x] An ADMIN can load models with a new, unsaved API key (including when switching provider)
+      without that key ever being saved unless Save is pressed separately.
+- [x] An ADMIN can refresh models for the currently saved provider without re-entering the stored key.
+- [x] Switching provider makes the previous provider's key impossible to reuse for discovery — a new
+      key is required in the same discovery request.
+- [x] The model selector is searchable, with a required "Use custom model ID" fallback that keeps the
+      CRM usable when discovery is unavailable or a model isn't listed yet.
+- [x] Model discovery writes zero `AiSettings` data and creates zero audit/health events — Save
+      remains the only place any AI configuration is persisted.
+- [x] Test AI remains the sole, unchanged, authoritative functional compatibility check for the SAVED
+      provider/model/key combination.
 - [x] API/Web typecheck, lint, build, and full non-live Jest suite green.
 - [ ] MariaDB live-suite re-run against this exact code: **deferred pre-production verification** —
       no disposable MariaDB credentials were available in the verification session; see the final

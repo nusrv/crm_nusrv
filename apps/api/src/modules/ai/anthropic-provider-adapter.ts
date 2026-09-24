@@ -9,10 +9,17 @@ import { toHttpLlmError, toNetworkLlmError } from './llm-http-error.util';
 import { LlmMalformedOutputError } from './llm-errors';
 import type { ClassificationInput, DraftReplyInput, NormalizedClassificationResult, NormalizedDraftResult } from './llm-gateway';
 import { DRAFT_RESULT_SCHEMA_VERSION, RESULT_SCHEMA_VERSION } from './llm-gateway';
-import type { LlmProviderAdapter, LlmProviderAdapterConfig } from './llm-provider-adapter';
+import type { DiscoveredAiModel, LlmProviderAdapter, LlmProviderAdapterConfig } from './llm-provider-adapter';
+import { AI_MODEL_DISCOVERY_HARD_CAP } from './ai-model-discovery.constants';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_MODELS_URL = 'https://api.anthropic.com/v1/models';
 const ANTHROPIC_API_VERSION = '2023-06-01';
+const ANTHROPIC_MODELS_PAGE_SIZE = 1000;
+/** Defense-in-depth against a provider that never advances `last_id` — bounds the number of HTTP
+ * requests a single listModels() call can make, independently of AI_MODEL_DISCOVERY_HARD_CAP (which
+ * bounds the number of MODELS, not requests). */
+const ANTHROPIC_MODELS_MAX_PAGES = 10;
 
 interface AnthropicTextBlock {
   type: 'text';
@@ -22,6 +29,18 @@ interface AnthropicTextBlock {
 interface AnthropicMessagesResponse {
   content?: unknown;
   stop_reason?: string | null;
+}
+
+interface AnthropicModel {
+  id: string;
+  display_name?: string;
+  type?: string;
+}
+
+interface AnthropicModelsListResponse {
+  data?: AnthropicModel[];
+  has_more?: boolean;
+  last_id?: string | null;
 }
 
 /**
@@ -86,6 +105,60 @@ export class AnthropicProviderAdapter implements LlmProviderAdapter {
       16,
     );
     return { latencyMs: Date.now() - startedAt };
+  }
+
+  /**
+   * Dynamic model discovery — uses Anthropic's official Models List API (`GET /v1/models`), which
+   * requires only the API key, never a model ID. Paginates via the documented `after_id`/`has_more`/
+   * `last_id` cursor contract, bounded both by AI_MODEL_DISCOVERY_HARD_CAP (total models) and
+   * ANTHROPIC_MODELS_MAX_PAGES (total requests, so a provider that never advances `last_id` can never
+   * loop forever). This endpoint exclusively lists Claude models usable through the Messages API —
+   * the same API this adapter's classifyIntent/draftReply/testConnection already call — so marking
+   * every result `compatibility: 'COMPATIBLE'` reflects the endpoint's own documented scope, never a
+   * naming-convention guess.
+   */
+  async listModels(apiKey: string): Promise<DiscoveredAiModel[]> {
+    const models: DiscoveredAiModel[] = [];
+    let afterId: string | undefined;
+    for (let page = 0; page < ANTHROPIC_MODELS_MAX_PAGES; page += 1) {
+      const url = new URL(ANTHROPIC_MODELS_URL);
+      url.searchParams.set('limit', String(ANTHROPIC_MODELS_PAGE_SIZE));
+      if (afterId) url.searchParams.set('after_id', afterId);
+
+      let response: Response;
+      try {
+        response = await this.fetchImpl(url.toString(), {
+          method: 'GET',
+          headers: { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_API_VERSION },
+          signal: AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS),
+        });
+      } catch (error) {
+        throw toNetworkLlmError(error);
+      }
+      if (!response.ok) {
+        throw toHttpLlmError(response.status);
+      }
+      let data: AnthropicModelsListResponse;
+      try {
+        data = (await response.json()) as AnthropicModelsListResponse;
+      } catch {
+        throw new LlmMalformedOutputError('Provider response was not valid JSON.');
+      }
+
+      for (const model of data.data ?? []) {
+        models.push({
+          id: model.id,
+          displayName: model.display_name ?? model.id,
+          provider: 'ANTHROPIC',
+          compatibility: 'COMPATIBLE',
+        });
+        if (models.length >= AI_MODEL_DISCOVERY_HARD_CAP) return models;
+      }
+
+      if (!data.has_more || !data.last_id || data.last_id === afterId) break;
+      afterId = data.last_id;
+    }
+    return models;
   }
 
   /** One request/response round trip, shared by all three operations above. Never retries itself

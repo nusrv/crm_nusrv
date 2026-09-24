@@ -218,3 +218,109 @@ describe('GoogleGeminiProviderAdapter (native fetch boundary)', () => {
     });
   });
 });
+
+describe('GoogleGeminiProviderAdapter.listModels (dynamic model discovery)', () => {
+  it('normalizes the model-list response and strips the "models/" name prefix to match request()\'s expected ID form', async () => {
+    const fetchImpl = jest.fn<typeof fetch>(() =>
+      Promise.resolve(
+        fakeOkResponse({
+          models: [
+            {
+              name: 'models/gemini-test-pro',
+              displayName: 'Gemini Test Pro',
+              description: 'A test model.',
+              inputTokenLimit: 1000,
+              outputTokenLimit: 500,
+              supportedGenerationMethods: ['generateContent'],
+            },
+          ],
+        }),
+      ),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const models = await adapter.listModels(REAL_API_KEY);
+
+    expect(models).toEqual([
+      {
+        id: 'gemini-test-pro',
+        displayName: 'Gemini Test Pro',
+        provider: 'GOOGLE_GEMINI',
+        compatibility: 'COMPATIBLE',
+        metadata: { description: 'A test model.', inputTokenLimit: 1000, outputTokenLimit: 500 },
+      },
+    ]);
+  });
+
+  it('excludes a model whose metadata explicitly does not list generateContent (e.g. an embeddings-only model)', async () => {
+    const fetchImpl = jest.fn<typeof fetch>(() =>
+      Promise.resolve(
+        fakeOkResponse({
+          models: [
+            { name: 'models/gemini-test-pro', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/text-embedding-test', supportedGenerationMethods: ['embedContent'] },
+          ],
+        }),
+      ),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const models = await adapter.listModels(REAL_API_KEY);
+
+    expect(models.map((m) => m.id)).toEqual(['gemini-test-pro']);
+  });
+
+  it('includes a model with no supportedGenerationMethods metadata at all as UNKNOWN, never guessed/excluded', async () => {
+    const fetchImpl = jest.fn<typeof fetch>(() =>
+      Promise.resolve(fakeOkResponse({ models: [{ name: 'models/gemini-mystery' }] })),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const models = await adapter.listModels(REAL_API_KEY);
+
+    expect(models).toEqual([{ id: 'gemini-mystery', displayName: 'models/gemini-mystery', provider: 'GOOGLE_GEMINI', compatibility: 'UNKNOWN', metadata: { description: undefined, inputTokenLimit: undefined, outputTokenLimit: undefined } }]);
+  });
+
+  it('follows documented pageToken/nextPageToken pagination across multiple pages', async () => {
+    const fetchImpl = jest.fn<(url: string, init?: RequestInit) => Promise<Response>>((url) => {
+      const hasToken = url.includes('pageToken=page-2');
+      if (!hasToken) {
+        return Promise.resolve(
+          fakeOkResponse({ models: [{ name: 'models/model-a', supportedGenerationMethods: ['generateContent'] }], nextPageToken: 'page-2' }),
+        );
+      }
+      return Promise.resolve(fakeOkResponse({ models: [{ name: 'models/model-b', supportedGenerationMethods: ['generateContent'] }] }));
+    });
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl as never;
+
+    const models = await adapter.listModels(REAL_API_KEY);
+
+    expect(models.map((m) => m.id)).toEqual(['model-a', 'model-b']);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('never loops forever when nextPageToken keeps repeating the same value', async () => {
+    const fetchImpl = jest.fn<typeof fetch>(() =>
+      Promise.resolve(fakeOkResponse({ models: [{ name: 'models/stuck', supportedGenerationMethods: ['generateContent'] }], nextPageToken: 'same-token' })),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const models = await adapter.listModels(REAL_API_KEY);
+
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(10);
+    expect(models.length).toBeGreaterThan(0);
+  });
+
+  it('provider errors are sanitized identically to classifyIntent/draftReply/testConnection', async () => {
+    const fetchImpl = jest.fn<typeof fetch>(() => Promise.resolve(fakeErrorResponse(401)));
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await expect(adapter.listModels(REAL_API_KEY)).rejects.toBeInstanceOf(LlmPermanentError);
+  });
+});
