@@ -1798,3 +1798,90 @@ sections), `PROJECT_STATUS.md`.
 Verified in `C:\sgv` (never `npm install`/`npm ci` in the cloud-synced repo): API typecheck/lint/build,
 full non-live Jest suite, Web typecheck/lint/build. Implemented, verified, committed, and pushed to
 `origin/main` in one continuous task per the owner's instruction. **Not deployed.**
+
+## 2026-09-24 (later same day) — Added dynamic AI model discovery ("n8n-style" UX), catch-up note
+
+This entry exists to close a gap: commit `07e2e5f` ("Add dynamic AI model discovery to provider
+settings") shipped the same day as the provider-neutral correction above but was not logged here at
+the time. Summary: replaced the free-text Model field's primary UX with Provider -> API key ->
+"Verify & Load Models"/"Refresh Models" -> searchable select -> Test AI -> Save, with **no hard-coded
+model catalog anywhere in source**. Added `listModels(apiKey)` to `LlmProviderAdapter`, implemented
+against each provider's official live model-list API (OpenAI `models.list()`; Anthropic `/v1/models`
+paginated via `after_id`/`has_more`; Google `models.list` paginated via `pageToken`, filtered to
+`supportedGenerationMethods` including `generateContent`) — no name-prefix filtering, bounded
+pagination (hard cap + max-page-count). New `AiModelDiscoveryService` + `POST
+/settings/ai/discover-models` (ADMIN-only) is a deliberately separate operation from Save: writes
+zero `AiSettings` data, creates zero audit/health events; a supplied temporary API key is used only
+for that one call, never saved/logged/audited/returned/cached. New `AiModelCombobox` frontend
+component plus a required "Use custom model ID" fallback. No schema/migration change. See
+`PHASES/PHASE_03_1_ADMIN_SETTINGS.md`'s "Dynamic model discovery correction (2026-09-24)" section for
+full detail.
+
+## 2026-09-27 — Fixed a real live-production Gemini failure (thinking/visible-output) + cross-provider audit
+
+Owner reported a genuine production issue: with Gemini configured (`gemini-flash-latest`, a real API
+key, AI Processing left OFF throughout), Settings → AI → Test AI failed with "Provider response did
+not include any text content." Explicit constraints: don't touch the saved provider/model/API key,
+don't enable AI Processing, don't deploy.
+
+**Root cause** (confirmed against current official Gemini API documentation via web search, not
+assumed from prior knowledge): `gemini-flash-latest` resolves to a "thinking"-capable Gemini model
+(the 2.5/3 families think by default with a dynamic budget). Google's documented behavior:
+`generationConfig.maxOutputTokens` bounds thinking tokens AND the final visible answer COMBINED. The
+adapter's Test AI request used only a 16-token budget — small enough that thinking alone fully
+consumed it, producing `finishReason: 'MAX_TOKENS'` with zero visible content. The old extraction
+(`candidate.content?.parts?.[0]?.text`) then correctly, but unhelpfully, reported "no text content"
+instead of anything diagnosable.
+
+**Fix** (`google-gemini-provider-adapter.ts`):
+- New provider-LOCAL token budgets: `GEMINI_TEST_CONNECTION_MAX_OUTPUT_TOKENS` (1024),
+  `GEMINI_CLASSIFICATION_MAX_OUTPUT_TOKENS` (4096), `GEMINI_DRAFT_MAX_OUTPUT_TOKENS` (5120) — the
+  shared cross-provider `AI_MAX_OUTPUT_TOKENS`/`AI_DRAFT_MAX_OUTPUT_TOKENS` constants OpenAI/
+  Anthropic use were deliberately left untouched, per explicit instruction.
+- New `extractVisibleText()` — inspects every `content.parts` entry (not just index 0), explicitly
+  excludes any part marked `thought: true`, concatenates only the visible parts. Chain-of-thought can
+  never reach classification/draft JSON, Test AI's result, a log line, or an audit record.
+- A candidate that finishes with `MAX_TOKENS` and produces no visible text now throws a specific,
+  diagnosable message ("Provider exhausted the generation budget before producing usable output.")
+  instead of being collapsed into the generic "no text content" message. SAFETY/RECITATION/
+  PROHIBITED_CONTENT handling untouched.
+- Deliberately did NOT set `generationConfig.thinkingConfig`: confirmed via research that the field
+  which actually controls/disables thinking differs by Gemini model generation (`thinkingBudget` for
+  pre-3 models vs. `thinkingLevel` for Gemini 3), and the API documents sending both to a Gemini 3
+  model as an error — reliably picking the right one would require exactly the brittle
+  model-name-family branching the owner's instructions explicitly said to avoid unless unavoidable.
+  Budgeting generously and extracting robustly works uniformly across every model generation,
+  including future moving aliases, with no such branching.
+
+**Cross-provider audit** (same failure class, each provider's own real API semantics — researched,
+not assumed):
+- **OpenAI**: found and fixed one real gap. `testConnection()` previously verified only that the SDK
+  call didn't throw — it never inspected the response body at all. A reasoning-capable OpenAI model
+  (selectable via the same unfiltered dynamic discovery) that spent its whole budget on invisible
+  reasoning returns `status: 'incomplete'` with a `type: 'reasoning'` output item and no `type:
+  'message'` item — this would have been silently reported as a SUCCESSFUL test. Fixed to require the
+  same `status`/`incomplete_details` proof `classifyIntent`/`draftReply` already enforce via
+  `.parse()`, using the plain `create()` response's own `output_text` field; bumped the test's token
+  budget from 16 to a new local `OPENAI_TEST_CONNECTION_MAX_OUTPUT_TOKENS = 256`. classifyIntent/
+  draftReply needed no change — their existing `status === 'incomplete'` check already catches this
+  unconditionally.
+- **Anthropic**: audited, found already safe, no code change. Extended thinking is opt-in via an
+  explicit `thinking` request parameter this adapter never sends, so `max_tokens` bounds only the
+  visible answer here; Anthropic's documented response shape places any `thinking`-type block before
+  the final `text`-type block in the same array, and this adapter already extracts by scanning for
+  `type === 'text'` (never by array index), so a thinking block was already correctly skipped. Added
+  regression tests to lock this finding in as proof, not as a behavior change.
+
+**Tests**: ~20 new Gemini tests (every thinking/multipart scenario the owner's spec listed, plus
+MAX_TOKENS-specific budget-exhaustion wording, thought-content-never-leaks assertions), new OpenAI
+`testConnection()` audit-fix tests (existing "returns success" test's fake response updated to
+include real `status`/`output_text` fields, since it previously faked an unrealistic empty object),
+new Anthropic "cross-provider audit — already safe" test suite. Full API suite: 1096 passed, 120
+skipped (live-DB only), 0 failed. Web typecheck/lint/build green. No schema/migration change; no new
+dependency; nothing touched in Mail/Outlook, renewal workflow, invoice/payment, or Slice G Auto
+Accept business rules; provider-neutral architecture and model discovery (both prior corrections)
+re-verified intact via their own existing test suites, all still green.
+
+Implemented, verified, committed, and pushed to `origin/main` in one continuous task per the owner's
+instruction. **Not deployed. Production API key, saved provider/model, and AI enablement state were
+never touched.**

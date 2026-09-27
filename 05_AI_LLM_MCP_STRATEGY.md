@@ -134,6 +134,46 @@ The legacy `AI_PROVIDER`/`AI_MODEL`/`AI_CONFIDENCE_THRESHOLD`/`AI_ENABLED`/
 `PHASES/PHASE_03_1_ADMIN_SETTINGS.md`) — no environment variable can override or duplicate the
 DB-selected provider, and there is no AI adapter-selection env var of any kind.
 
+### Visible-output-only policy and per-provider "thinking"/reasoning handling (2026-09-27 correction)
+
+A live production failure ("Provider response did not include any text content" for
+`gemini-flash-latest`, with AI Processing left OFF throughout diagnosis) surfaced a real
+provider-integration bug and triggered a cross-provider audit. Root cause and fix, by provider:
+
+- **Google Gemini** — "thinking"-capable Gemini models (the 2.5 and 3 families think by default with
+  a dynamic budget) spend `generationConfig.maxOutputTokens` on internal reasoning BEFORE the visible
+  answer; a tiny budget (the previous Test AI request used 16 tokens) can be entirely consumed by
+  thinking, producing `finishReason: 'MAX_TOKENS'` with no visible text at all. Fixed by (1) using
+  provider-local, deliberately larger-than-shared token budgets for Gemini only
+  (`GEMINI_TEST_CONNECTION_MAX_OUTPUT_TOKENS`/`GEMINI_CLASSIFICATION_MAX_OUTPUT_TOKENS`/
+  `GEMINI_DRAFT_MAX_OUTPUT_TOKENS` in `google-gemini-provider-adapter.ts` — the shared
+  `AI_MAX_OUTPUT_TOKENS`/`AI_DRAFT_MAX_OUTPUT_TOKENS` constants used by OpenAI/Anthropic were left
+  untouched), and (2) a robust visible-text extractor that inspects every `content.parts` entry,
+  explicitly excludes any part marked `thought: true`, and concatenates only the visible parts — no
+  provider-specific object, and no chain-of-thought, ever reaches classification/draft output, logs,
+  audit records, or Test AI's result. A `MAX_TOKENS` finish with no visible text produces its own
+  specific, safe message ("Provider exhausted the generation budget before producing usable output.")
+  rather than being collapsed into the generic "no text content" message. Deliberately does NOT set
+  `generationConfig.thinkingConfig`: the field that actually controls thinking differs by Gemini model
+  generation (`thinkingBudget` pre-3, `thinkingLevel` for Gemini 3, and sending both to a Gemini 3
+  model is a documented error) — budgeting generously and extracting robustly works uniformly across
+  every model generation without that brittle, model-family-specific branching.
+- **OpenAI** — audit found ONE real gap: `testConnection()` ("Test AI") checked only that the HTTP
+  call succeeded and never inspected the response body, so a reasoning-capable model that spent its
+  entire budget on invisible reasoning (`status: 'incomplete'`, only a `type: 'reasoning'` output
+  item, no `type: 'message'` item) would have been silently reported as a successful test. Fixed to
+  require the same `status`/`incomplete_details` proof classifyIntent/draftReply already enforced via
+  `.parse()`, using the plain `create()` response's own `output_text` aggregation. classifyIntent/
+  draftReply needed no change — already safe.
+- **Anthropic** — audited, already safe, no change required. Extended thinking is opt-in via an
+  explicit `thinking` request parameter this adapter never sends, so `max_tokens` here bounds only
+  the visible answer; the documented response shape places any `thinking`-type content block before
+  the final `text`-type block in the same array, and this adapter already extracts by scanning for
+  `type === 'text'` (never by index), so a thinking block was already correctly skipped.
+
+Test AI remains, unchanged, the sole authoritative proof that a saved provider/model/key combination
+actually produces usable visible output for the CRM's adapter — for all three providers.
+
 ## Structured output contract
 
 Example logical schema:

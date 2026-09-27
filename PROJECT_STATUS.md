@@ -116,6 +116,31 @@
   never becomes unusable if a provider's model-list API is down or a brand-new model isn't listed
   yet. No schema migration (nothing is persisted by discovery). See
   `PHASES/PHASE_03_1_ADMIN_SETTINGS.md`'s "Dynamic model discovery correction (2026-09-24)" section.
+- **Live production fix — Gemini thinking/visible-output correction + cross-provider audit
+  (2026-09-27)**: the owner's real (non-production-secret) configuration — Gemini,
+  `gemini-flash-latest`, AI Processing OFF — hit Test AI failing with "Provider response did not
+  include any text content." Root cause: `gemini-flash-latest` resolves to a "thinking"-capable
+  Gemini model that spends `generationConfig.maxOutputTokens` on internal reasoning before any
+  visible answer; the previous 16-token Test AI budget was entirely consumed by thinking, producing
+  `finishReason: 'MAX_TOKENS'` with zero visible text. Fixed in `google-gemini-provider-adapter.ts`:
+  new provider-local, bounded token budgets for Gemini only (test/classify/draft each larger than
+  the shared cross-provider constants, which were left untouched), plus a new visible-text extractor
+  that inspects every `content.parts` entry, explicitly excludes any `thought: true` part, and
+  concatenates only the visible text — chain-of-thought can never reach classification/draft output,
+  Test AI's result, logs, or audit records. A `MAX_TOKENS` finish with no visible text now produces
+  its own specific, diagnosable message instead of a generic one. Deliberately did not touch
+  `thinkingConfig` (its correct field differs by Gemini model generation and mixing them is a
+  documented API error) — no model-name-specific branching was introduced. Cross-provider audit of
+  the same failure class: found and fixed one real OpenAI gap (`testConnection()` never inspected the
+  response body, so a reasoning model exhausting its budget would have been misreported as a
+  successful test — fixed to require genuine `output_text`, mirroring classifyIntent/draftReply's
+  existing `status: 'incomplete'` check, which already handled this correctly); Anthropic audited and
+  found already safe (extended thinking is opt-in and never requested by this adapter, and its
+  existing extraction already finds the `text`-type block by type, never by array index) — no
+  Anthropic code changed. Did not change the saved provider/model, the API key, AI enablement, Auto
+  Accept, provider-neutral architecture, or model discovery. No schema/migration change. See
+  `PHASES/PHASE_03_1_ADMIN_SETTINGS.md`'s "Live production fix — Gemini thinking/visible-output
+  correction, cross-provider audit (2026-09-27)" section.
 - Phase 4+: LOCKED
 
 ## Phase 2.1 operational data correction
@@ -811,8 +836,10 @@ claim as scoped to that.
 - Mail (SMTP/IMAP): real transport/reader implemented (Slices B/C) with Microsoft 365 OAuth2
   support; no real Outlook tenant has been configured/smoke-tested in any session
 - AI classification/routing: provider-neutral gateway implemented (Slices D/F/G, corrected
-  2026-09-24 — OpenAI/Anthropic/Google Gemini adapters, admin-selectable); no real provider
-  credentials of any kind have been configured/smoke-tested in any session
+  2026-09-24 — OpenAI/Anthropic/Google Gemini adapters, admin-selectable); the owner has configured a
+  real Google Gemini API key/model in the live deployment and run a real Test AI against it (which
+  surfaced, and this session fixed, the 2026-09-27 thinking/visible-output bug — see above); OpenAI
+  and Anthropic credentials remain unconfigured/un-smoke-tested; AI Processing itself remains OFF
 - Administration settings (Phase 3.1, corrected 2026-09-23 and 2026-09-24): DB-backed, admin-managed
   Mail/AI operational control plane live in code, with no env var able to override or duplicate that
   DB state; `/dashboard/settings` UI complete, including a real AI provider selector

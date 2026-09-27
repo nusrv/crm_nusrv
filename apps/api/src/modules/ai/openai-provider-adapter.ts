@@ -28,6 +28,19 @@ interface OpenAiClientOptions {
 }
 
 /**
+ * Cross-provider audit correction — provider-local, bounded budget for testConnection only (never
+ * applied to classifyIntent/draftReply's shared AI_MAX_OUTPUT_TOKENS/AI_DRAFT_MAX_OUTPUT_TOKENS,
+ * which are intentionally left untouched). A reasoning-capable OpenAI model (selectable via the
+ * same admin-driven dynamic model discovery as any other model, since discovery never filters by
+ * name) spends reasoning tokens out of the SAME `max_output_tokens` budget as its visible answer —
+ * a `status: 'incomplete'`/`incomplete_details.reason: 'max_output_tokens'` response can contain
+ * only a `type: 'reasoning'` item and no `type: 'message'` item at all. The previous 16-token
+ * budget could be exhausted by reasoning alone on some models; this remains an explicit, bounded,
+ * finite value, just large enough to give reasoning genuine headroom for a trivial prompt.
+ */
+const OPENAI_TEST_CONNECTION_MAX_OUTPUT_TOKENS = 256;
+
+/**
  * Hardening-pass §11 — the ONLY shape a provider failure may cross the gateway boundary in. Never
  * the raw SDK error object (which may carry request/response headers, the JSON error body, or an
  * echo of what we sent) — only an HTTP status code and OpenAI's own opaque request ID, both safe,
@@ -47,6 +60,16 @@ interface SafeProviderErrorContext {
  * at all, and never reads a provider/model/key on its own — every call is handed a fully resolved
  * `LlmProviderAdapterConfig` by its caller, resolved ONCE per request. This is what makes "the DB
  * settings are resolved once and passed down" structurally true rather than a convention.
+ *
+ * Cross-provider audit (triggered by a live Gemini production failure — see
+ * google-gemini-provider-adapter.ts's own doc comment): classifyIntent/draftReply were ALREADY safe
+ * against a reasoning-capable model spending its entire `max_output_tokens` budget on invisible
+ * reasoning and returning `status: 'incomplete'` with only a `type: 'reasoning'` output item and no
+ * `type: 'message'` item — the existing `response.status === 'incomplete'` check (below) catches
+ * this unconditionally, before ever inspecting `output`/`output_parsed`, regardless of what the
+ * `output` array does or doesn't contain. The one real gap the audit found was in `testConnection()`
+ * (see its own doc comment), which checked only that the HTTP call succeeded and never inspected the
+ * response body at all — fixed there, not here.
  *
  * Uses `responses.parse()` with the SDK's Structured Outputs support (`text.format` via
  * `zodTextFormat`) so the provider is asked for an actual strict JSON Schema (additional properties
@@ -160,21 +183,40 @@ export class OpenAiProviderAdapter implements LlmProviderAdapter {
   }
 
   /**
-   * §K correction — the exact request Test AI makes: a single minimal, harmless round trip proving
-   * the model/API key combination is usable. Never classifies, never drafts, never touches
-   * AiClassification/AiRoutingDecision/RenewalCase/email.
+   * §K correction, hardened by the cross-provider audit — the exact request Test AI makes: a
+   * single minimal, harmless round trip proving the model/API key combination is usable. Never
+   * classifies, never drafts, never touches AiClassification/AiRoutingDecision/RenewalCase/email.
+   *
+   * Audit finding: this previously verified only that the HTTP call itself succeeded — it never
+   * inspected the response body at all, so a reasoning-capable model that spent its entire
+   * (previously 16-token) budget on internal reasoning and returned `status: 'incomplete'` with no
+   * visible message content would have been silently reported as a SUCCESSFUL test. Fixed to
+   * require the same genuine-visible-output proof classifyIntent/draftReply already require via
+   * `.parse()`'s identical `status`/`incomplete_details` check — using the plain `create()` call's
+   * own `output_text` convenience field (already the SDK's own aggregation of every visible
+   * `output_text` content part across the response, so no manual multi-item indexing is needed
+   * here either).
    */
   async testConnection(config: LlmProviderAdapterConfig): Promise<{ latencyMs: number }> {
     const client = this.buildClient(config.apiKey);
     const startedAt = Date.now();
+    let response: OpenAI.Responses.Response;
     try {
-      await client.responses.create({
+      response = await client.responses.create({
         model: config.model,
         input: 'connection test — reply with the single word OK.',
-        max_output_tokens: 16,
+        max_output_tokens: OPENAI_TEST_CONNECTION_MAX_OUTPUT_TOKENS,
       });
     } catch (error) {
       throw toLlmError(error);
+    }
+    if (response.status === 'incomplete') {
+      throw new LlmMalformedOutputError(
+        `Provider response was incomplete (${response.incomplete_details?.reason ?? 'unknown reason'}).`,
+      );
+    }
+    if (typeof response.output_text !== 'string' || response.output_text.trim() === '') {
+      throw new LlmMalformedOutputError('Provider response did not include any text content.');
     }
     return { latencyMs: Date.now() - startedAt };
   }

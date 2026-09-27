@@ -306,6 +306,57 @@ forbidding a hard-coded model catalog anywhere in source, since catalogs go stal
   real runtime health (§L/§P), since discovery proves a credential can list models, never that the
   selected model actually satisfies the CRM's classification/draft contract.
 
+## Live production fix — Gemini thinking/visible-output correction, cross-provider audit (2026-09-27)
+
+The owner's real configuration (Gemini, `gemini-flash-latest`, AI Processing OFF throughout — no
+production API key, saved model, or enablement state was ever touched by this correction) hit Test
+AI failing with "Provider response did not include any text content." Root cause: `gemini-flash-latest`
+resolves to a "thinking"-capable Gemini model, which by default spends
+`generationConfig.maxOutputTokens` on internal reasoning before any visible answer; the previous
+16-token Test AI budget could be — and was — entirely consumed by thinking, producing
+`finishReason: 'MAX_TOKENS'` with zero visible text, which the old `parts?.[0]?.text` extraction
+correctly, but unhelpfully, reported as "no text content."
+
+Fixed in `google-gemini-provider-adapter.ts`:
+- New provider-LOCAL token budgets (`GEMINI_TEST_CONNECTION_MAX_OUTPUT_TOKENS` = 1024,
+  `GEMINI_CLASSIFICATION_MAX_OUTPUT_TOKENS` = 4096, `GEMINI_DRAFT_MAX_OUTPUT_TOKENS` = 5120) —
+  explicit, bounded, Gemini-only; the shared `AI_MAX_OUTPUT_TOKENS`/`AI_DRAFT_MAX_OUTPUT_TOKENS`
+  constants OpenAI/Anthropic use were left untouched, per explicit instruction.
+- A new `extractVisibleText()` helper that inspects every `content.parts` entry (not just index 0),
+  explicitly excludes any part marked `thought: true`, and concatenates only the visible parts —
+  chain-of-thought can never reach classification/draft JSON, Test AI's result, logs, or audit
+  records. A candidate that finishes with `MAX_TOKENS` and no visible text at all now produces its
+  own specific message ("Provider exhausted the generation budget before producing usable output.")
+  instead of the generic, less-diagnosable "no text content" message. SAFETY/RECITATION/
+  PROHIBITED_CONTENT handling is preserved exactly as before.
+- Deliberately does NOT set `generationConfig.thinkingConfig` to control/disable thinking: the field
+  that actually does so differs by Gemini model generation (`thinkingBudget` for pre-3 models,
+  `thinkingLevel` for Gemini 3 — and the API documents that sending both to a Gemini 3 model is an
+  error), so reliably picking the right one would require exactly the brittle model-name-family
+  branching this correction was explicitly told to avoid unless the API leaves no cleaner option.
+  Budgeting generously and extracting robustly works uniformly across every Gemini generation,
+  including future moving aliases, without any model-name special-casing.
+
+**Cross-provider audit** (same failure class, each provider's own official semantics):
+- **OpenAI** — found and fixed one real gap: `testConnection()` previously verified only that the
+  HTTP call succeeded, never inspecting the response body, so a reasoning-capable model that spent
+  its whole budget on invisible reasoning (`status: 'incomplete'`, a `type: 'reasoning'` output item
+  only, no `type: 'message'` item) would have been reported as a successful test. Fixed to require
+  the same `status`/`incomplete_details` proof `classifyIntent`/`draftReply` already enforce via
+  `.parse()`, using the plain `create()` response's own `output_text` field. classifyIntent/
+  draftReply needed no change — their existing `status === 'incomplete'` check already catches this
+  unconditionally, before ever inspecting `output`/`output_parsed`.
+- **Anthropic** — audited, already safe, no code change. Extended thinking is opt-in via an explicit
+  `thinking` parameter this adapter never sends, so `max_tokens` here bounds only the visible answer;
+  the documented response shape places any `thinking`-type block before the final `text`-type block
+  in the same array, and this adapter's extraction already scans for `type === 'text'` (never by
+  array index), so a thinking block was already correctly skipped. Locked in with new regression
+  tests, no behavior change.
+
+No env var, DB schema, migration, provider-neutral architecture, model discovery, or Auto
+Accept/Slice G business rule was touched by this correction — see the "Test/health behavior" section
+below for the added test coverage.
+
 ## Security
 
 Every credential (SMTP/IMAP password, Microsoft client secret, AI provider API key) uses the
@@ -395,6 +446,22 @@ name-prefix filtering, UNKNOWN compatibility, hard-cap bounding; `anthropic-prov
 `models/` prefix stripping), and an extended `settings-rbac.spec.ts` case proving `discover-models`
 is ADMIN-only (IT and every other role denied, identically to `update`/`test`).
 
+Gemini thinking/visible-output correction (2026-09-27): a dedicated
+`google-gemini-provider-adapter.spec.ts` suite proves visible-text extraction across every
+thinking/multipart scenario (single visible part; multiple visible parts concatenated; a thought part
+before visible text; multiple thought parts before visible text; thought-only response fails safely;
+empty parts fails safely; `MAX_TOKENS` with no visible answer produces the specific
+budget-exhaustion message; SAFETY/RECITATION/PROHIBITED_CONTENT unchanged; the connectivity test no
+longer depends on the old 16-token budget and cannot treat a thought-only response as success;
+classifyIntent/draftReply normalize correctly with thought parts present; strict classification/draft
+Zod validation is unchanged; thought content never reaches normalized output or a thrown error
+message). `openai-provider-adapter.spec.ts` gained the `testConnection()` audit-fix coverage (requires
+genuine `output_text`; a `status: 'incomplete'`/reasoning-only response is never reported as success).
+`anthropic-provider-adapter.spec.ts` gained a "cross-provider audit — already safe" suite locking in
+that a `thinking`-type content block before the final `text` block is already correctly skipped, that
+thinking content never reaches normalized output, and that `testConnection()` already requires
+genuine visible text — with no adapter code changed for Anthropic.
+
 ## Acceptance criteria
 
 - [x] Mail and AI operational settings are fully manageable from the CRM UI (`/dashboard/settings`).
@@ -441,6 +508,13 @@ is ADMIN-only (IT and every other role denied, identically to `update`/`test`).
       remains the only place any AI configuration is persisted.
 - [x] Test AI remains the sole, unchanged, authoritative functional compatibility check for the SAVED
       provider/model/key combination.
+- [x] Gemini's thinking/reasoning behavior can never cause a genuinely working provider/model/key
+      combination to be misreported as broken — visible-output extraction and provider-local token
+      budgets account for it correctly, without ever exposing/persisting chain-of-thought.
+- [x] OpenAI's/Anthropic's own official API semantics were independently audited for the same
+      failure class (no visible output despite HTTP success); the one real OpenAI gap found
+      (`testConnection()` not checking response content) was fixed and regression-tested; Anthropic
+      required no change.
 - [x] API/Web typecheck, lint, build, and full non-live Jest suite green.
 - [ ] MariaDB live-suite re-run against this exact code: **deferred pre-production verification** —
       no disposable MariaDB credentials were available in the verification session; see the final

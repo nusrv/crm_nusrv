@@ -49,6 +49,17 @@ interface AnthropicModelsListResponse {
  * an unnecessary dependency). Deliberately stateless/credential-free (see LlmProviderAdapter's own
  * doc comment) — every call is handed a fully resolved model/API key by its caller.
  *
+ * Cross-provider audit (triggered by a live Gemini production failure — see
+ * google-gemini-provider-adapter.ts's own doc comment): AUDITED — ALREADY SAFE, no code change
+ * required. Anthropic's extended-thinking feature is entirely OPT-IN via an explicit `thinking`
+ * request parameter this adapter never sends, so Claude never spends `max_tokens` budget on
+ * invisible reasoning here — unlike Gemini, where thinking-capable models think by default. Even so,
+ * this adapter's `request()` already extracts the visible answer by scanning for the first block
+ * with `type === 'text'` (never `content[0]` by index), which already correctly skips over any
+ * `type: 'thinking'` block Anthropic's documented response shape places before it — see the
+ * "cross-provider audit" test suite in this class's own spec file for the regression coverage that
+ * locks this finding in.
+ *
  * No tools, no web search, no MCP, no function/business-action calling — plain single-turn text
  * requests only. Unlike OpenAI's Responses API, Anthropic's Messages API has no provider-side strict
  * JSON Schema constraint this codebase uses, so the model is asked in plain language (see

@@ -195,6 +195,69 @@ describe('AnthropicProviderAdapter (native fetch boundary)', () => {
     }
   });
 
+  // Cross-provider audit (live Gemini production fix triggered a review of OpenAI/Anthropic for the
+  // same failure class). Finding: Anthropic's extended-thinking feature is OPT-IN via an explicit
+  // `thinking` request parameter this adapter never sends, so Claude never spends `max_tokens`
+  // budget on invisible reasoning here, and the documented response shape places any `thinking`-type
+  // content block BEFORE the final `text`-type block in the SAME `content` array — this adapter's
+  // extraction already finds the first block with `type === 'text'` (never `content[0]` by index),
+  // so a thinking block already never becomes the extracted text. Audited — already safe; the tests
+  // below lock that finding in as regression coverage, with NO adapter code changed.
+  describe('cross-provider audit — extended-thinking content blocks (already safe, no code change)', () => {
+    it('a thinking-type block placed before the final text block is already skipped correctly (extraction finds by type, not by index)', async () => {
+      const fetchImpl = jest.fn(() =>
+        Promise.resolve(
+          fakeOkResponse({
+            content: [
+              { type: 'thinking', thinking: 'internal reasoning that must never leak', signature: 'sig' },
+              { type: 'text', text: JSON.stringify(validClassification) },
+            ],
+            stop_reason: 'end_turn',
+          }),
+        ),
+      );
+      const adapter = new AnthropicProviderAdapter();
+      adapter.fetchImpl = fetchImpl;
+
+      const result = await adapter.classifyIntent(input(), config());
+
+      expect(result.intent).toBe('ACCEPT_RENEWAL');
+    });
+
+    it('thinking-block content never reaches the normalized output', async () => {
+      const thinkingText = 'SECRET_INTERNAL_REASONING_MUST_NEVER_LEAK';
+      const fetchImpl = jest.fn(() =>
+        Promise.resolve(
+          fakeOkResponse({
+            content: [
+              { type: 'thinking', thinking: thinkingText, signature: 'sig' },
+              { type: 'text', text: JSON.stringify(validDraft) },
+            ],
+            stop_reason: 'end_turn',
+          }),
+        ),
+      );
+      const adapter = new AnthropicProviderAdapter();
+      adapter.fetchImpl = fetchImpl;
+
+      const result = await adapter.draftReply(draftInput(), config());
+
+      expect(JSON.stringify(result)).not.toContain(thinkingText);
+    });
+
+    it('a thinking-only response (no text block at all) already fails safely, never using thinking content as output', async () => {
+      const fetchImpl = jest.fn(() =>
+        Promise.resolve(
+          fakeOkResponse({ content: [{ type: 'thinking', thinking: 'still deciding...', signature: 'sig' }], stop_reason: 'end_turn' }),
+        ),
+      );
+      const adapter = new AnthropicProviderAdapter();
+      adapter.fetchImpl = fetchImpl;
+
+      await expect(adapter.classifyIntent(input(), config())).rejects.toBeInstanceOf(LlmMalformedOutputError);
+    });
+  });
+
   describe('testConnection (§K — Test AI)', () => {
     it('makes exactly one minimal round trip and reports latency, never classifying or drafting', async () => {
       const fetchImpl = jest.fn(() => Promise.resolve(fakeOkResponse(textResponse('OK'))));
@@ -205,6 +268,18 @@ describe('AnthropicProviderAdapter (native fetch boundary)', () => {
 
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       expect(typeof result.latencyMs).toBe('number');
+    });
+
+    it('audit confirmation — testConnection already requires genuine visible text via the shared request() helper; a thinking-only response is never reported as success', async () => {
+      const fetchImpl = jest.fn(() =>
+        Promise.resolve(
+          fakeOkResponse({ content: [{ type: 'thinking', thinking: 'thinking about how to say OK...', signature: 'sig' }], stop_reason: 'end_turn' }),
+        ),
+      );
+      const adapter = new AnthropicProviderAdapter();
+      adapter.fetchImpl = fetchImpl;
+
+      await expect(adapter.testConnection(config())).rejects.toBeInstanceOf(LlmMalformedOutputError);
     });
 
     it('normalizes a provider failure the same way as classifyIntent/draftReply', async () => {

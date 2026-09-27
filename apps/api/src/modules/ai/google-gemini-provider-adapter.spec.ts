@@ -41,6 +41,13 @@ function candidateResponse(text: string, overrides: Record<string, unknown> = {}
   return { candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP', ...overrides }] };
 }
 
+/** Builds a candidate whose `content.parts` array is exactly the given parts, each optionally
+ * marked `thought: true` — for exercising the live production correction's multi-part / thinking
+ * handling, which a single-string `candidateResponse()` helper cannot express. */
+function partsResponse(parts: Array<{ text: string; thought?: boolean }>, overrides: Record<string, unknown> = {}) {
+  return { candidates: [{ content: { parts }, finishReason: 'STOP', ...overrides }] };
+}
+
 describe('GoogleGeminiProviderAdapter (native fetch boundary)', () => {
   it('calls the Gemini generateContent endpoint with the resolved model in the URL path and the API key as a query parameter', async () => {
     const fetchImpl = jest.fn<typeof fetch>(() => Promise.resolve(fakeOkResponse(candidateResponse(JSON.stringify(validClassification)))));
@@ -216,6 +223,246 @@ describe('GoogleGeminiProviderAdapter (native fetch boundary)', () => {
 
       await expect(adapter.testConnection(config())).rejects.toBeInstanceOf(LlmPermanentError);
     });
+  });
+});
+
+describe('GoogleGeminiProviderAdapter — thinking/multipart visible-output correction (live production fix)', () => {
+  it('P1 — a visible answer in parts[0] (no thinking involved) still succeeds', async () => {
+    const fetchImpl = jest.fn(() => Promise.resolve(fakeOkResponse(candidateResponse(JSON.stringify(validClassification)))));
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const result = await adapter.classifyIntent(input(), config());
+
+    expect(result.intent).toBe('ACCEPT_RENEWAL');
+  });
+
+  it('P2 — multiple visible text parts concatenate correctly, in provider order', async () => {
+    const json = JSON.stringify(validDraft);
+    const fetchImpl = jest.fn(() =>
+      Promise.resolve(fakeOkResponse(partsResponse([{ text: json.slice(0, 10) }, { text: json.slice(10) }]))),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const result = await adapter.draftReply(draftInput(), config());
+
+    expect(result.bodyText).toBe(validDraft.bodyText);
+  });
+
+  it('P3 — a thought part followed by visible text succeeds, using only the visible text', async () => {
+    const fetchImpl = jest.fn(() =>
+      Promise.resolve(
+        fakeOkResponse(
+          partsResponse([
+            { text: 'Let me think about this classification carefully...', thought: true },
+            { text: JSON.stringify(validClassification) },
+          ]),
+        ),
+      ),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const result = await adapter.classifyIntent(input(), config());
+
+    expect(result.intent).toBe('ACCEPT_RENEWAL');
+  });
+
+  it('P4 — multiple thought parts followed by visible text succeeds', async () => {
+    const fetchImpl = jest.fn(() =>
+      Promise.resolve(
+        fakeOkResponse(
+          partsResponse([
+            { text: 'First, I will consider the tone of the message.', thought: true },
+            { text: 'Next, I will consider the explicit confirmation language.', thought: true },
+            { text: JSON.stringify(validClassification) },
+          ]),
+        ),
+      ),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const result = await adapter.classifyIntent(input(), config());
+
+    expect(result.intent).toBe('ACCEPT_RENEWAL');
+  });
+
+  it('P5 — a thought-only response (no visible text at all) fails safely, never using thought content as output', async () => {
+    const fetchImpl = jest.fn(() =>
+      Promise.resolve(fakeOkResponse(partsResponse([{ text: 'Thinking forever about this...', thought: true }]))),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await expect(adapter.classifyIntent(input(), config())).rejects.toBeInstanceOf(LlmMalformedOutputError);
+  });
+
+  it('P6 — an empty parts array fails safely', async () => {
+    const fetchImpl = jest.fn(() => Promise.resolve(fakeOkResponse(partsResponse([]))));
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await expect(adapter.classifyIntent(input(), config())).rejects.toBeInstanceOf(LlmMalformedOutputError);
+  });
+
+  it('P7 — a response missing candidates entirely fails safely (regression, already covered above — reasserted in this suite for completeness)', async () => {
+    const fetchImpl = jest.fn(() => Promise.resolve(fakeOkResponse({ candidates: [] })));
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await expect(adapter.classifyIntent(input(), config())).rejects.toBeInstanceOf(LlmMalformedOutputError);
+  });
+
+  it('P8 — the live production root cause: MAX_TOKENS with no usable visible answer produces a specific, safe budget-exhaustion error, never the generic "no text content" message', async () => {
+    const fetchImpl = jest.fn(() => Promise.resolve(fakeOkResponse(partsResponse([], { finishReason: 'MAX_TOKENS' }))));
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    expect.assertions(2);
+    try {
+      await adapter.testConnection(config());
+    } catch (error) {
+      expect(error).toBeInstanceOf(LlmMalformedOutputError);
+      expect((error as Error).message).toBe('Provider exhausted the generation budget before producing usable output.');
+    }
+  });
+
+  it('P8b — MAX_TOKENS reached after thinking alone consumed the whole budget (no content field at all) also produces the budget-exhaustion error', async () => {
+    const fetchImpl = jest.fn(() => Promise.resolve(fakeOkResponse({ candidates: [{ finishReason: 'MAX_TOKENS' }] })));
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await expect(adapter.testConnection(config())).rejects.toThrow(
+      'Provider exhausted the generation budget before producing usable output.',
+    );
+  });
+
+  it.each(['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT'] as const)(
+    'P9/P10/P11 — %s remains safely handled exactly as before this correction',
+    async (finishReason) => {
+      const fetchImpl = jest.fn(() => Promise.resolve(fakeOkResponse(partsResponse([], { finishReason }))));
+      const adapter = new GoogleGeminiProviderAdapter();
+      adapter.fetchImpl = fetchImpl;
+
+      await expect(adapter.classifyIntent(input(), config())).rejects.toBeInstanceOf(LlmMalformedOutputError);
+    },
+  );
+
+  it('P12 — testConnection no longer uses the unsafe 16-token budget', async () => {
+    const fetchImpl = jest.fn<typeof fetch>(() => Promise.resolve(fakeOkResponse(candidateResponse('OK'))));
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await adapter.testConnection(config());
+
+    const [, init] = fetchImpl.mock.calls[0]! as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { generationConfig: { maxOutputTokens: number } };
+    expect(body.generationConfig.maxOutputTokens).toBeGreaterThan(16);
+    expect(body.generationConfig.maxOutputTokens).toBeLessThanOrEqual(2048); // still explicitly bounded, never unbounded.
+  });
+
+  it('P13 — a thought-only response can never count as a successful connectivity test', async () => {
+    const fetchImpl = jest.fn(() =>
+      Promise.resolve(fakeOkResponse(partsResponse([{ text: 'Thinking about how to say OK...', thought: true }]))),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await expect(adapter.testConnection(config())).rejects.toBeInstanceOf(LlmMalformedOutputError);
+  });
+
+  it('P14 — classifyIntent normalizes correctly with thought parts preceding the visible JSON', async () => {
+    const fetchImpl = jest.fn(() =>
+      Promise.resolve(
+        fakeOkResponse(partsResponse([{ text: 'reasoning...', thought: true }, { text: JSON.stringify(validClassification) }])),
+      ),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const result = await adapter.classifyIntent(input(), config());
+
+    expect(result).toEqual({ schemaVersion: 'phase3-intent-v1', ...validClassification });
+  });
+
+  it('P15 — draftReply normalizes correctly with thought parts preceding the visible JSON', async () => {
+    const fetchImpl = jest.fn(() =>
+      Promise.resolve(fakeOkResponse(partsResponse([{ text: 'reasoning...', thought: true }, { text: JSON.stringify(validDraft) }]))),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const result = await adapter.draftReply(draftInput(), config());
+
+    expect(result).toEqual({ schemaVersion: 'phase3-draft-v1', ...validDraft });
+  });
+
+  it('P16 — strict classification Zod validation is unchanged: an unknown intent still fails even with a thought part present', async () => {
+    const fetchImpl = jest.fn(() =>
+      Promise.resolve(
+        fakeOkResponse(
+          partsResponse([
+            { text: 'reasoning...', thought: true },
+            { text: JSON.stringify({ ...validClassification, intent: 'MADE_UP_INTENT' }) },
+          ]),
+        ),
+      ),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await expect(adapter.classifyIntent(input(), config())).rejects.toBeInstanceOf(LlmMalformedOutputError);
+  });
+
+  it('P17 — strict draft Zod validation is unchanged: an unexpected extra key still fails even with a thought part present', async () => {
+    const fetchImpl = jest.fn(() =>
+      Promise.resolve(
+        fakeOkResponse(
+          partsResponse([{ text: 'reasoning...', thought: true }, { text: JSON.stringify({ ...validDraft, confidence: 0.9 }) }]),
+        ),
+      ),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await expect(adapter.draftReply(draftInput(), config())).rejects.toBeInstanceOf(LlmMalformedOutputError);
+  });
+
+  it('P18 — thought content never reaches the normalized classification/draft output', async () => {
+    const thoughtText = 'SECRET_INTERNAL_REASONING_MUST_NEVER_LEAK';
+    const fetchImpl = jest.fn(() =>
+      Promise.resolve(fakeOkResponse(partsResponse([{ text: thoughtText, thought: true }, { text: JSON.stringify(validDraft) }]))),
+    );
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    const result = await adapter.draftReply(draftInput(), config());
+
+    expect(JSON.stringify(result)).not.toContain(thoughtText);
+  });
+
+  it('P19 — thought content never appears in a thrown error message (never logged/persisted via an error path)', async () => {
+    const thoughtText = 'SECRET_INTERNAL_REASONING_MUST_NEVER_LEAK';
+    const fetchImpl = jest.fn(() => Promise.resolve(fakeOkResponse(partsResponse([{ text: thoughtText, thought: true }]))));
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    expect.assertions(1);
+    try {
+      await adapter.classifyIntent(input(), config());
+    } catch (error) {
+      expect((error as Error).message).not.toContain(thoughtText);
+    }
+  });
+
+  it('P20 — Gemini errors remain sanitized in this exact scenario class (network failure while a thinking-capable model is selected)', async () => {
+    const fetchImpl = jest.fn(() => Promise.reject(new TypeError('fetch failed')));
+    const adapter = new GoogleGeminiProviderAdapter();
+    adapter.fetchImpl = fetchImpl;
+
+    await expect(adapter.testConnection(config('gemini-flash-latest'))).rejects.toBeInstanceOf(LlmTransientError);
   });
 });
 

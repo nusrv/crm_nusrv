@@ -559,11 +559,11 @@ describe('OpenAiProviderAdapter.draftReply (Slice F, additive — classifyIntent
   });
 });
 
-describe('OpenAiProviderAdapter.testConnection (§K — Test AI)', () => {
-  it('makes exactly one minimal request and reports latency, without touching classifyIntent/draftReply', async () => {
+describe('OpenAiProviderAdapter.testConnection (§K — Test AI, hardened by the cross-provider audit)', () => {
+  it('makes exactly one minimal request, requires genuine visible output_text, and reports latency', async () => {
     const create = jest.fn((_args: Record<string, unknown>) => {
       void _args;
-      return Promise.resolve({ id: 'resp-1' });
+      return Promise.resolve({ status: 'completed', output_text: 'OK', incomplete_details: null });
     });
     const gateway = new OpenAiProviderAdapter();
     gateway.clientFactory = () => ({ responses: { create } }) as never;
@@ -573,8 +573,39 @@ describe('OpenAiProviderAdapter.testConnection (§K — Test AI)', () => {
     expect(create).toHaveBeenCalledTimes(1);
     const call = create.mock.calls[0]![0] as { model: string; max_output_tokens: number };
     expect(call.model).toBe('gpt-test');
-    expect(call.max_output_tokens).toBeLessThanOrEqual(32);
     expect(typeof result.latencyMs).toBe('number');
+  });
+
+  it('bounds the request to an explicit, finite token budget (never unbounded, and no longer the old 16-token budget reasoning could fully consume)', async () => {
+    const create = jest.fn<(args: { max_output_tokens: number }) => Promise<unknown>>(() =>
+      Promise.resolve({ status: 'completed', output_text: 'OK', incomplete_details: null }),
+    );
+    const gateway = new OpenAiProviderAdapter();
+    gateway.clientFactory = () => ({ responses: { create } }) as never;
+
+    await gateway.testConnection(config());
+
+    const call = create.mock.calls[0]![0];
+    expect(call.max_output_tokens).toBeGreaterThan(16);
+    expect(call.max_output_tokens).toBeLessThanOrEqual(1024);
+  });
+
+  it('audit fix — a reasoning-capable model that spends its entire budget on reasoning (status: incomplete, no message/output_text) is never reported as a successful test', async () => {
+    const create = jest.fn(() =>
+      Promise.resolve({ status: 'incomplete', output_text: '', incomplete_details: { reason: 'max_output_tokens' } }),
+    );
+    const gateway = new OpenAiProviderAdapter();
+    gateway.clientFactory = () => ({ responses: { create } }) as never;
+
+    await expect(gateway.testConnection(config())).rejects.toBeInstanceOf(LlmMalformedOutputError);
+  });
+
+  it('audit fix — a completed response with no visible output_text is never reported as a successful test', async () => {
+    const create = jest.fn(() => Promise.resolve({ status: 'completed', output_text: '', incomplete_details: null }));
+    const gateway = new OpenAiProviderAdapter();
+    gateway.clientFactory = () => ({ responses: { create } }) as never;
+
+    await expect(gateway.testConnection(config())).rejects.toBeInstanceOf(LlmMalformedOutputError);
   });
 
   it('normalizes a provider failure the same way as classifyIntent/draftReply', async () => {
