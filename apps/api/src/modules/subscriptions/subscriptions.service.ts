@@ -301,6 +301,13 @@ export class SubscriptionsService {
       });
       if (!subscription) throw new NotFoundException('Subscription not found.');
 
+      const invoiceCount = await tx.invoice.count({ where: { sourceSubscriptionId: id } });
+      if (invoiceCount > 0) {
+        throw new BadRequestException(
+          'Cannot delete a subscription with invoice history. Financial records must be retained.',
+        );
+      }
+
       const activeRenewalCases = await tx.renewalCase.count({
         where: { subscriptionId: id, status: { notIn: ['CLOSED', 'ERROR'] } },
       });

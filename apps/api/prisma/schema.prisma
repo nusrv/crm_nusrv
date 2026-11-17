@@ -236,6 +236,13 @@ enum IntegrationKind {
   AI
 }
 
+enum InvoiceStatus {
+  DRAFT
+  READY_FOR_FAWTARA
+  FAWTARA_ACCEPTED
+  FAWTARA_REJECTED
+}
+
 model BillingEntity {
   id                     String                @id @default(uuid()) @db.VarChar(36)
   name                   String
@@ -255,6 +262,8 @@ model BillingEntity {
   legacyImportRows       LegacyImportRow[]
   customerCodeSequence   CustomerCodeSequence?
   mailConfigurations     MailConfiguration[]
+  invoices               Invoice[]
+  invoiceSequences       InvoiceSequence[]
 
   @@map("billing_entities")
 }
@@ -302,6 +311,7 @@ model Customer {
   subscriptionCodeSequence SubscriptionCodeSequence?
   communicationThreads     CommunicationThread[]
   emailMessages            EmailMessage[]
+  invoices                 Invoice[]
 
   @@index([billingEntityId])
   @@index([nameEn])
@@ -520,6 +530,8 @@ model Subscription {
   renewalCases                  RenewalCase[]
   communicationOutbox           CommunicationOutbox[]
   legacyImportSource            LegacyImportSubscriptionLink?
+  invoices                      Invoice[]                     @relation("InvoiceSourceSubscription")
+  invoiceLines                  InvoiceLine[]                 @relation("InvoiceLineSourceSubscription")
 
   @@index([customerId])
   @@index([serviceTypeId])
@@ -996,29 +1008,29 @@ model RenewalEvaluationDecision {
 // ================================================================================================
 
 model CommunicationThread {
-  id                  String            @id @default(uuid()) @db.VarChar(36)
-  customerId          String?           @map("customer_id") @db.VarChar(36)
+  id                  String                @id @default(uuid()) @db.VarChar(36)
+  customerId          String?               @map("customer_id") @db.VarChar(36)
   // Nullable + unique: MariaDB/MySQL permits multiple NULL values under a UNIQUE index, so any
   // number of unattributed/general threads may exist, while a given non-null RenewalCase can never
   // have more than one canonical thread — enforced by the database itself, not by application code,
   // which is what makes this safe under concurrent thread creation.
-  renewalCaseId       String?           @unique @map("renewal_case_id") @db.VarChar(36)
+  renewalCaseId       String?               @unique @map("renewal_case_id") @db.VarChar(36)
   // Required: a thread must never exist without known mailbox/sender context.
-  mailConfigurationId String            @map("mail_configuration_id") @db.VarChar(36)
-  subject             String            @db.VarChar(500)
-  status              ThreadStatus      @default(OPEN)
-  lastMessageAt       DateTime          @map("last_message_at")
-  createdAt           DateTime          @default(now()) @map("created_at")
-  updatedAt           DateTime          @updatedAt @map("updated_at")
-  customer            Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  mailConfigurationId String                @map("mail_configuration_id") @db.VarChar(36)
+  subject             String                @db.VarChar(500)
+  status              ThreadStatus          @default(OPEN)
+  lastMessageAt       DateTime              @map("last_message_at")
+  createdAt           DateTime              @default(now()) @map("created_at")
+  updatedAt           DateTime              @updatedAt @map("updated_at")
+  customer            Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
   // SetNull, not Cascade: RenewalCase deletion is currently possible (see CustomersService
   // .deleteCustomer() / SubscriptionsService.remove(), both of which only ever delete already-
   // terminal-status cases) and retaining communication history is the established value in this
   // application — losing a RenewalCase row must never delete the evidence of what was actually said
   // to a customer. Requires `renewalCaseId` to remain nullable, which it already is.
-  renewalCase         RenewalCase?      @relation(fields: [renewalCaseId], references: [id], onDelete: SetNull)
+  renewalCase         RenewalCase?          @relation(fields: [renewalCaseId], references: [id], onDelete: SetNull)
   // Restrict: a MailConfiguration must never be deleted out from under a thread that references it.
-  mailConfiguration   MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
+  mailConfiguration   MailConfiguration     @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
   messages            EmailMessage[]
   operatorReplies     OperatorReplyOutbox[]
 
@@ -1030,39 +1042,39 @@ model CommunicationThread {
 }
 
 model EmailMessage {
-  id                   String                @id @default(uuid()) @db.VarChar(36)
-  threadId             String                @map("thread_id") @db.VarChar(36)
-  customerId           String?               @map("customer_id") @db.VarChar(36)
-  renewalCaseId        String?               @map("renewal_case_id") @db.VarChar(36)
-  direction            MessageDirection
-  channel              MessageChannel        @default(EMAIL)
+  id                       String                @id @default(uuid()) @db.VarChar(36)
+  threadId                 String                @map("thread_id") @db.VarChar(36)
+  customerId               String?               @map("customer_id") @db.VarChar(36)
+  renewalCaseId            String?               @map("renewal_case_id") @db.VarChar(36)
+  direction                MessageDirection
+  channel                  MessageChannel        @default(EMAIL)
   // Non-unique and indexed only — Message-ID is used for reply/thread correlation, never as the
   // authoritative inbound dedup key. Broken senders can omit it, duplicate it, or send malformed
   // values; the database must allow two distinct inbound messages with the same externalMessageId.
   // See imapIdentityKey below for the actual dedup invariant.
-  externalMessageId    String?               @map("external_message_id") @db.VarChar(500)
-  inReplyTo            String?               @map("in_reply_to") @db.VarChar(500)
+  externalMessageId        String?               @map("external_message_id") @db.VarChar(500)
+  inReplyTo                String?               @map("in_reply_to") @db.VarChar(500)
   // Text, not VarChar: the References header can accumulate many Message-IDs over a long thread.
-  references           String?               @db.Text
-  subject              String                @db.VarChar(500)
-  fromAddress          String                @map("from_address") @db.VarChar(320)
-  toAddressesJson      Json                  @map("to_addresses_json")
+  references               String?               @db.Text
+  subject                  String                @db.VarChar(500)
+  fromAddress              String                @map("from_address") @db.VarChar(320)
+  toAddressesJson          Json                  @map("to_addresses_json")
   // Required: the canonical plain-text content, and the only body form Slice E renders in V1.
-  bodyText             String                @map("body_text") @db.Text
+  bodyText                 String                @map("body_text") @db.Text
   // Nullable: stored for completeness/future use, never rendered as live HTML in Slice E. Slice C
   // must normalize HTML-only inbound messages into bodyText — not implemented in this slice.
-  bodyHtml             String?               @map("body_html") @db.Text
-  occurredAt           DateTime              @map("occurred_at")
+  bodyHtml                 String?               @map("body_html") @db.Text
+  occurredAt               DateTime              @map("occurred_at")
   // Only meaningful for INBOUND rows; left null for OUTBOUND.
-  classificationStatus ClassificationStatus? @map("classification_status")
+  classificationStatus     ClassificationStatus? @map("classification_status")
   // Required: which mailbox this was fetched from (INBOUND) or sent through (OUTBOUND).
-  mailConfigurationId  String                @map("mail_configuration_id") @db.VarChar(36)
-  imapFolder           String?               @map("imap_folder") @db.VarChar(255)
+  mailConfigurationId      String                @map("mail_configuration_id") @db.VarChar(36)
+  imapFolder               String?               @map("imap_folder") @db.VarChar(255)
   // BigInt: IMAP UID/UIDVALIDITY are 32-bit unsigned per RFC 3501, which can exceed a JS safe
   // integer only in edge cases, but BigInt is the correct, non-lossy Prisma/MySQL mapping (BIGINT)
   // regardless. See the BigInt/API note below — this is a database-layer decision only.
-  imapUid              BigInt?               @map("imap_uid")
-  imapUidValidity      BigInt?               @map("imap_uid_validity")
+  imapUid                  BigInt?               @map("imap_uid")
+  imapUidValidity          BigInt?               @map("imap_uid_validity")
   // FROZEN IDENTITY CONTRACT (persistence contract only — no hashing service exists in Slice A).
   // The authoritative inbound dedup invariant. NULL for every OUTBOUND row (MariaDB permits
   // multiple NULLs under a UNIQUE index, so outbound rows are entirely unaffected by this
@@ -1112,17 +1124,17 @@ model EmailMessage {
   // No IMAP implementation exists in Slice A — this rule is frozen now so Slice C does not
   // re-decide folder-name semantics. See phase3-slice-a-migration-contract.spec.ts for a
   // documentation-consistency check of both this rule and the encoding format's column-length fit.
-  imapIdentityKey      String?               @unique @map("imap_identity_key") @db.VarChar(191)
-  createdAt            DateTime              @default(now()) @map("created_at")
-  updatedAt            DateTime              @updatedAt @map("updated_at")
-  thread               CommunicationThread   @relation(fields: [threadId], references: [id], onDelete: Restrict)
-  customer             Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  imapIdentityKey          String?               @unique @map("imap_identity_key") @db.VarChar(191)
+  createdAt                DateTime              @default(now()) @map("created_at")
+  updatedAt                DateTime              @updatedAt @map("updated_at")
+  thread                   CommunicationThread   @relation(fields: [threadId], references: [id], onDelete: Restrict)
+  customer                 Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
   // SetNull, matching CommunicationThread.renewalCase above — never Cascade-delete communication
   // evidence when a (terminal-status) RenewalCase is removed via an existing deletion flow.
-  renewalCase          RenewalCase?          @relation(fields: [renewalCaseId], references: [id], onDelete: SetNull)
-  mailConfiguration    MailConfiguration     @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
-  aiClassifications    AiClassification[]
-  outboxEntry          CommunicationOutbox?
+  renewalCase              RenewalCase?          @relation(fields: [renewalCaseId], references: [id], onDelete: SetNull)
+  mailConfiguration        MailConfiguration     @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
+  aiClassifications        AiClassification[]
+  outboxEntry              CommunicationOutbox?
   operatorReplyOutboxEntry OperatorReplyOutbox?
 
   @@index([threadId])
@@ -1190,33 +1202,33 @@ enum AiRoutingStatus {
 }
 
 model AiRoutingDecision {
-  id                 String            @id @default(uuid()) @db.VarChar(36)
-  aiClassificationId String            @unique @map("ai_classification_id") @db.VarChar(36)
+  id                 String           @id @default(uuid()) @db.VarChar(36)
+  aiClassificationId String           @unique @map("ai_classification_id") @db.VarChar(36)
   // Nullable, evidence/context only — never the correctness boundary for anything. SetNull (not
   // Restrict, not Cascade) mirrors EmailMessage.renewalCaseId's own established precedent exactly:
   // deleting a (terminal-status) RenewalCase must never delete the routing evidence of what the AI
   // decided about it, but this table also must never block a legitimate RenewalCase deletion.
-  renewalCaseId      String?           @map("renewal_case_id") @db.VarChar(36)
+  renewalCaseId      String?          @map("renewal_case_id") @db.VarChar(36)
   // Evidence/reproducibility metadata only (see the model's own doc comment above) — NEVER part of
   // the uniqueness/correctness boundary.
-  routingVersion     String            @map("routing_version") @db.VarChar(50)
+  routingVersion     String           @map("routing_version") @db.VarChar(50)
   // Frozen at classification time (Slice G §6) — never reinterpreted by a later config change.
   action             AiRoutingAction
-  status             AiRoutingStatus   @default(PENDING)
+  status             AiRoutingStatus  @default(PENDING)
   // Free-text safe reason/outcome code (e.g. "AUTO_ACCEPTED", "SKIPPED_ALREADY_ACCEPTED") — never a
   // stack trace, never raw error text, mirroring OperatorReplyOutbox.lastError's own safety
   // discipline.
-  resultCode         String?           @map("result_code") @db.VarChar(191)
+  resultCode         String?          @map("result_code") @db.VarChar(191)
   // Claim/lease bookkeeping — same discipline as OperatorReplyOutbox/CommunicationOutbox: attempts
   // increments only on a genuine claim, lastAttemptAt is the exact lease token every subsequent
   // guarded write must re-check.
-  attempts           Int               @default(0)
-  lastAttemptAt      DateTime?         @map("last_attempt_at")
-  completedAt        DateTime?         @map("completed_at")
-  createdAt          DateTime          @default(now()) @map("created_at")
-  updatedAt          DateTime          @updatedAt @map("updated_at")
-  aiClassification   AiClassification  @relation(fields: [aiClassificationId], references: [id], onDelete: Restrict)
-  renewalCase        RenewalCase?      @relation(fields: [renewalCaseId], references: [id], onDelete: SetNull)
+  attempts           Int              @default(0)
+  lastAttemptAt      DateTime?        @map("last_attempt_at")
+  completedAt        DateTime?        @map("completed_at")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+  aiClassification   AiClassification @relation(fields: [aiClassificationId], references: [id], onDelete: Restrict)
+  renewalCase        RenewalCase?     @relation(fields: [renewalCaseId], references: [id], onDelete: SetNull)
 
   // Serves the recovery scanner's PENDING scan and its stale-PROCESSING reclaim scan respectively —
   // see AiRoutingService.processBatch()'s two-branch WHERE clause.
@@ -1425,4 +1437,120 @@ model AiSettings {
   updatedAt                DateTime  @updatedAt @map("updated_at")
 
   @@map("ai_settings")
+}
+
+// Manual-first Phase 4A invoice identity. One counter per Billing Entity and calendar year keeps
+// CRM references readable while preserving strict issuer isolation. Values only increment and are
+// never reused, even when a draft is later rejected.
+model InvoiceSequence {
+  billingEntityId String        @map("billing_entity_id") @db.VarChar(36)
+  year            Int
+  lastValue       Int           @default(0) @map("last_value")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  billingEntity   BillingEntity @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
+
+  @@id([billingEntityId, year])
+  @@map("invoice_sequences")
+}
+
+// A persisted commercial and legal snapshot. No renderer or total calculation reads live Customer,
+// Subscription, Package, Currency, or BillingEntity fields after this row is created. Source FKs are
+// retained for traceability and use RESTRICT so financial history can never disappear through an
+// existing Customer/Subscription deletion flow.
+model Invoice {
+  id                   String        @id @default(uuid()) @db.VarChar(36)
+  customerId           String        @map("customer_id") @db.VarChar(36)
+  billingEntityId      String        @map("billing_entity_id") @db.VarChar(36)
+  sourceSubscriptionId String        @map("source_subscription_id") @db.VarChar(36)
+  status               InvoiceStatus @default(DRAFT)
+  internalReference    String        @unique @map("internal_reference") @db.VarChar(80)
+  // Non-null only while the invoice is DRAFT/READY. The nullable unique key is the concurrent
+  // duplicate guard for one subscription + intended service period; MariaDB permits many NULLs.
+  activeDraftKey       String?       @unique @map("active_draft_key") @db.VarChar(191)
+  invoiceDate          DateTime      @map("invoice_date") @db.Date
+  currencyCode         String        @map("currency_code") @db.VarChar(3)
+  periodStart          DateTime      @map("period_start") @db.Date
+  periodEnd            DateTime      @map("period_end") @db.Date
+
+  customerCodeSnapshot      String  @map("customer_code_snapshot") @db.VarChar(191)
+  customerNameEnSnapshot    String? @map("customer_name_en_snapshot") @db.VarChar(191)
+  customerNameArSnapshot    String? @map("customer_name_ar_snapshot") @db.VarChar(191)
+  customerAddressSnapshot   String? @map("customer_address_snapshot") @db.Text
+  customerCountrySnapshot   String? @map("customer_country_snapshot") @db.VarChar(191)
+  customerPhoneSnapshot     String? @map("customer_phone_snapshot") @db.VarChar(80)
+  customerTaxNumberSnapshot String? @map("customer_tax_number_snapshot") @db.VarChar(191)
+
+  issuerCodeSnapshot         String  @map("issuer_code_snapshot") @db.VarChar(191)
+  issuerLegalNameSnapshot    String  @map("issuer_legal_name_snapshot") @db.VarChar(500)
+  issuerLegalNameArSnapshot  String? @map("issuer_legal_name_ar_snapshot") @db.VarChar(500)
+  issuerTaxNumberSnapshot    String? @map("issuer_tax_number_snapshot") @db.VarChar(191)
+  issuerAddressSnapshot      String? @map("issuer_address_snapshot") @db.Text
+  issuerInvoiceEmailSnapshot String? @map("issuer_invoice_email_snapshot") @db.VarChar(320)
+  issuerBankDetailsSnapshot  String? @map("issuer_bank_details_snapshot") @db.Text
+
+  subtotal      Decimal @default(0) @db.Decimal(14, 3)
+  discountTotal Decimal @default(0) @map("discount_total") @db.Decimal(14, 3)
+  taxTotal      Decimal @default(0) @map("tax_total") @db.Decimal(14, 3)
+  grandTotal    Decimal @default(0) @map("grand_total") @db.Decimal(14, 3)
+
+  fawtaraStatus           String?   @map("fawtara_status") @db.VarChar(50)
+  fawtaraInvoiceNumber    String?   @map("fawtara_invoice_number") @db.VarChar(191)
+  fawtaraInvoiceUuid      String?   @map("fawtara_invoice_uuid") @db.VarChar(191)
+  fawtaraQrPayload        String?   @map("fawtara_qr_payload") @db.Text
+  fawtaraQrImageDataUrl   String?   @map("fawtara_qr_image_data_url") @db.Text
+  fawtaraSubmittedAt      DateTime? @map("fawtara_submitted_at")
+  fawtaraAcceptedAt       DateTime? @map("fawtara_accepted_at")
+  latestFawtaraMessage    String?   @map("latest_fawtara_message") @db.Text
+  latestFawtaraResultJson Json?     @map("latest_fawtara_result_json")
+  officialCurrencyCode    String?   @map("official_currency_code") @db.VarChar(3)
+  officialSubtotal        Decimal?  @map("official_subtotal") @db.Decimal(14, 3)
+  officialDiscountTotal   Decimal?  @map("official_discount_total") @db.Decimal(14, 3)
+  officialTaxTotal        Decimal?  @map("official_tax_total") @db.Decimal(14, 3)
+  officialGrandTotal      Decimal?  @map("official_grand_total") @db.Decimal(14, 3)
+  officializationNote     String?   @map("officialization_note") @db.Text
+
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+  customer           Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  billingEntity      BillingEntity @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
+  sourceSubscription Subscription  @relation("InvoiceSourceSubscription", fields: [sourceSubscriptionId], references: [id], onDelete: Restrict)
+  lines              InvoiceLine[]
+
+  @@index([status, invoiceDate])
+  @@index([customerId, invoiceDate])
+  @@index([billingEntityId, invoiceDate])
+  @@index([sourceSubscriptionId, periodStart, periodEnd])
+  @@unique([billingEntityId, fawtaraInvoiceNumber], map: "invoices_entity_fawtara_number_key")
+  @@unique([fawtaraInvoiceUuid], map: "invoices_fawtara_uuid_key")
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id                      String        @id @default(uuid()) @db.VarChar(36)
+  invoiceId               String        @map("invoice_id") @db.VarChar(36)
+  sourceSubscriptionId    String?       @map("source_subscription_id") @db.VarChar(36)
+  position                Int
+  description             String        @db.Text
+  quantity                Decimal       @db.Decimal(14, 3)
+  unitPrice               Decimal       @map("unit_price") @db.Decimal(14, 3)
+  discountAmount          Decimal       @default(0) @map("discount_amount") @db.Decimal(14, 3)
+  taxCategoryCode         String?       @map("tax_category_code") @db.VarChar(50)
+  taxRate                 Decimal?      @map("tax_rate") @db.Decimal(7, 4)
+  lineSubtotal            Decimal       @map("line_subtotal") @db.Decimal(14, 3)
+  taxAmount               Decimal       @map("tax_amount") @db.Decimal(14, 3)
+  lineTotal               Decimal       @map("line_total") @db.Decimal(14, 3)
+  serviceTypeSnapshot     String?       @map("service_type_snapshot") @db.VarChar(191)
+  packageSnapshot         String?       @map("package_snapshot") @db.VarChar(191)
+  serviceSnapshotText     String?       @map("service_snapshot_text") @db.Text
+  identifiersSnapshotJson Json?         @map("identifiers_snapshot_json")
+  periodStart             DateTime?     @map("period_start") @db.Date
+  periodEnd               DateTime?     @map("period_end") @db.Date
+  createdAt               DateTime      @default(now()) @map("created_at")
+  updatedAt               DateTime      @updatedAt @map("updated_at")
+  invoice                 Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  sourceSubscription      Subscription? @relation("InvoiceLineSourceSubscription", fields: [sourceSubscriptionId], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, position])
+  @@index([sourceSubscriptionId])
+  @@map("invoice_lines")
 }

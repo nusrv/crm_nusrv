@@ -17,6 +17,7 @@ import { CustomersModule } from './modules/customers/customers.module';
 import { CurrenciesModule } from './modules/currencies/currencies.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { LegacyImportModule } from './modules/legacy-import/legacy-import.module';
+import { InvoicesModule } from './modules/invoices/invoices.module';
 import { MailModule } from './modules/mail/mail.module';
 import { RenewalCasesModule } from './modules/renewal-cases/renewal-cases.module';
 import { ServicePackagesModule } from './modules/service-packages/service-packages.module';
@@ -48,6 +49,7 @@ import { TimeModule } from './time/time.module';
     TechnicalConnectionsModule,
     SubscriptionConnectionsModule,
     LegacyImportModule,
+    InvoicesModule,
     RenewalCasesModule,
     MailModule,
     AiModule,

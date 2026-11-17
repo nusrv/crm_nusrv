@@ -304,7 +304,10 @@ export class CustomersService {
   // the generic update() edit form (see UpdateCustomerDto). Both directions go through here so the
   // suspend-cascade rule below has exactly one implementation.
   private async setStatus(id: string, status: CustomerStatus, context: MutationContext) {
-    const oldState = await this.prisma.customer.findUnique({ where: { id }, include: customerInclude });
+    const oldState = await this.prisma.customer.findUnique({
+      where: { id },
+      include: customerInclude,
+    });
     if (!oldState) throw new NotFoundException('Customer not found.');
     if (oldState.status === status) {
       throw new BadRequestException(`Customer is already ${status}.`);
@@ -359,6 +362,13 @@ export class CustomersService {
         select: { id: true, customerCode: true, nameEn: true, nameAr: true },
       });
       if (!customer) throw new NotFoundException('Customer not found.');
+
+      const invoiceCount = await tx.invoice.count({ where: { customerId: id } });
+      if (invoiceCount > 0) {
+        throw new BadRequestException(
+          'Cannot delete a customer with invoice history. Financial records must be retained.',
+        );
+      }
 
       const subscriptionIds = (
         await tx.subscription.findMany({ where: { customerId: id }, select: { id: true } })

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { addCalendarMonths } from '@cp/shared';
+import { useRouter } from 'next/navigation';
 import { apiRequest, type PageResult } from '../lib/api';
 import { customerCombinedLabel } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
@@ -118,6 +119,7 @@ export function SubscriptionModal({
   onSaved: () => void;
   onDeleted: () => void;
 }) {
+  const router = useRouter();
   const { can } = useControlPanel();
   const canManage = can('ADMIN', 'ACCOUNTANT');
   const canMap = can('ADMIN', 'IT');
@@ -318,6 +320,21 @@ export function SubscriptionModal({
     }
   }
 
+  async function createInvoice() {
+    if (!editing) return;
+    try {
+      const invoice = await apiRequest<{ id: string }>(
+        `/invoices/from-subscription/${editing.id}`,
+        { method: 'POST' },
+      );
+      setError('');
+      setMessage('Invoice draft created from the saved subscription snapshot.');
+      router.push(`/dashboard/invoices/${invoice.id}`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Invoice creation failed.');
+    }
+  }
+
   async function addMapping(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editing) return;
@@ -393,8 +410,8 @@ export function SubscriptionModal({
                     {editing.customer.customerCode} · {customerCombinedLabel(editing.customer)}
                   </strong>
                   <small className="muted">
-                    Customer is fixed once a subscription is created — its Subscription Code
-                    encodes this Customer. Use a Transfer workflow (not available yet) to move it.
+                    Customer is fixed once a subscription is created — its Subscription Code encodes
+                    this Customer. Use a Transfer workflow (not available yet) to move it.
                   </small>
                 </div>
               ) : lockedCustomer ? (
@@ -494,7 +511,9 @@ export function SubscriptionModal({
                   )}
                   <div className="field">
                     <span>Next Renewal Date</span>
-                    <strong>{previewRenewalDate ? toDateInput(previewRenewalDate.toISOString()) : '—'}</strong>
+                    <strong>
+                      {previewRenewalDate ? toDateInput(previewRenewalDate.toISOString()) : '—'}
+                    </strong>
                     <small className="muted">
                       Automatically calculated from Start Date and Renewal Interval.
                     </small>
@@ -635,6 +654,15 @@ export function SubscriptionModal({
                 <button className="button-primary" type="submit">
                   Save subscription
                 </button>
+                {editing?.status === 'ACTIVE' && (
+                  <button
+                    className="button-secondary"
+                    onClick={() => void createInvoice()}
+                    type="button"
+                  >
+                    Create Invoice
+                  </button>
+                )}
                 <button className="button-secondary" onClick={onClose} type="button">
                   Cancel
                 </button>

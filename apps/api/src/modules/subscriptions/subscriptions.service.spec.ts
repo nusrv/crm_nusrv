@@ -507,6 +507,7 @@ describe('SubscriptionsService.remove', () => {
         findUnique: jest.fn(() => Promise.resolve(subscription)),
         delete: jest.fn(() => Promise.resolve(subscription)),
       },
+      invoice: { count: jest.fn(() => Promise.resolve(0)) },
       renewalCase: {
         count: jest.fn(() => Promise.resolve(renewalCaseCount)),
         findMany: jest.fn(() => Promise.resolve([{ id: 'case-1' }, { id: 'case-2' }])),

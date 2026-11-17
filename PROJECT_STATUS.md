@@ -141,7 +141,23 @@
   Accept, provider-neutral architecture, or model discovery. No schema/migration change. See
   `PHASES/PHASE_03_1_ADMIN_SETTINGS.md`'s "Live production fix — Gemini thinking/visible-output
   correction, cross-provider audit (2026-09-27)" section.
-- Phase 4+: LOCKED
+- **Owner sequencing decision (2026-11-17)**: real Mail/AI end-to-end acceptance is intentionally
+  deferred. Phase 3/3.1 code remains unchanged and its operational switches remain OFF; invoice
+  usability for existing ACTIVE subscriptions is the immediate priority.
+- **Phase 4A — Manual-first Invoice Foundation**: IMPLEMENTED LOCALLY, pending owner deployment.
+  ADMIN/ACCOUNTANT can create a persisted commercial/legal snapshot manually from an ACTIVE
+  Subscription, review/edit DRAFT snapshot data and lines, run structured server-side preflight,
+  mark a passing invoice READY_FOR_FAWTARA, issue it outside the CRM, and record the official
+  JoFotara number/UUID/QR/accepted totals. Accepted invoices are locked, recorded official values
+  are authoritative in the A4 HTML/print output, discrepancies remain visible and audited, and
+  Customer/Subscription deletion is blocked whenever invoice history exists. The implementation
+  includes an integration boundary only; **no production JoFotara submission, credential storage,
+  UBL mapping, email automation, payment receipt, Telegram integration, or service automation is
+  enabled**. See `PHASES/PHASE_04_FAWTARA.md`.
+- Phase 4B (validated UBL 2.1 mapping and real JoFotara gateway): DEFERRED / LOCKED pending current
+  official specification review, BillingEntity-scoped credentials, sandbox/production acceptance,
+  and a separately approved implementation task.
+- Phase 5+: LOCKED
 
 ## Phase 2.1 operational data correction
 
