@@ -22,6 +22,19 @@ describe('ISTD mapper', () => {
     expect(mapped.xml).toContain('Issuer &amp; Sons');
     expect(mapped.xml).toContain('Buyer &lt;Test&gt;');
   });
+  it('never removes legally required UBL data when print fields are hidden', () => {
+    const i = fixture();
+    const before = mapper.map(i, '123').xml;
+    Object.assign(i, {
+      issuerPresentationSnapshot: {
+        version: 1,
+        visibility: { nameEn: false, address: false, taxNumber: false },
+      },
+    });
+    expect(mapper.map(i, '123').xml).toBe(before);
+    expect(before).toContain(i.issuerTaxNumberSnapshot);
+    expect(before).toContain('Issuer &amp; Sons');
+  });
   it('maps income only with explicitly reviewed INCOME category', () => {
     const i = fixture();
     i.invoiceTypeName = '021';

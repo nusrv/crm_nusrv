@@ -40,6 +40,9 @@ export interface InvoiceView {
   customerPhoneSnapshot: string | null;
   customerTaxNumberSnapshot: string | null;
   issuerCodeSnapshot: string;
+  issuerPresentationSnapshot: unknown;
+  issuerLogoDataUrl?: string | null;
+  issuerLogoAssetId?: string | null;
   issuerLegalNameSnapshot: string;
   issuerLegalNameArSnapshot: string | null;
   issuerTaxNumberSnapshot: string | null;

@@ -1,4 +1,5 @@
 'use client';
+import { InvoiceBrandingEditor } from './invoice-branding-editor';
 import { JoFotaraConnections } from './jofotara-connections';
 
 import { useEffect, useState } from 'react';
@@ -14,6 +15,7 @@ interface BillingEntity {
   customerCodePrefix: string;
   name: string;
   legalName: string;
+  issuerType: 'COMPANY' | 'INDIVIDUAL';
   paymentScope: 'LOCAL' | 'INTERNATIONAL';
   taxNumber: string | null;
   address: string | null;
@@ -47,6 +49,7 @@ export function BillingEntitiesManager() {
       ...(editing ? {} : { code: value('code'), customerCodePrefix: value('customerCodePrefix') }),
       name: value('name'),
       legalName: value('legalName'),
+      issuerType: value('issuerType'),
       paymentScope: value('paymentScope'),
       taxNumber: value('taxNumber') || undefined,
       address: value('address') || undefined,
@@ -95,12 +98,14 @@ export function BillingEntitiesManager() {
           </button>
         </div>
       )}
-      {items.map((entity) => (
-        <details key={entity.id} className="panel mb-3">
-          <summary>JoFotara ? {entity.name}</summary>
-          <JoFotaraConnections entityId={entity.id} />
-        </details>
-      ))}
+      {(can('ADMIN') || can('ACCOUNTANT')) &&
+        items.map((entity) => (
+          <details key={entity.id} className="panel mb-3">
+            <summary>Issuer branding and JoFotara - {entity.name}</summary>
+            <InvoiceBrandingEditor entityId={entity.id} onSaved={load} />
+            <JoFotaraConnections entityId={entity.id} />
+          </details>
+        ))}
       {formOpen && (
         <Modal
           onClose={() => setFormOpen(false)}
@@ -121,8 +126,20 @@ export function BillingEntitiesManager() {
                 required
               />
             )}
+            <label>
+              Issuer type
+              <select name="issuerType" defaultValue={editing?.issuerType ?? 'COMPANY'}>
+                <option value="COMPANY">Company / Organization</option>
+                <option value="INDIVIDUAL">Individual / Personal</option>
+              </select>
+            </label>
             <Field label="Display name" name="name" required value={editing?.name} />
-            <Field label="Legal name" name="legalName" required value={editing?.legalName} />
+            <Field
+              label="Full legal / personal name"
+              name="legalName"
+              required
+              value={editing?.legalName}
+            />
             <label className="field">
               <span>Payment scope</span>
               <select defaultValue={editing?.paymentScope ?? 'LOCAL'} name="paymentScope">
@@ -130,7 +147,7 @@ export function BillingEntitiesManager() {
                 <option value="INTERNATIONAL">International</option>
               </select>
             </label>
-            <Field label="Tax number" name="taxNumber" value={editing?.taxNumber} />
+            <Field label="Tax / National number" name="taxNumber" value={editing?.taxNumber} />
             <Field
               label="Invoice email"
               name="invoiceEmail"
@@ -149,7 +166,8 @@ export function BillingEntitiesManager() {
               <textarea defaultValue={editing?.address ?? ''} name="address" rows={2} />
             </label>
             <label className="field field-wide">
-              Replace invoice bank details (blank keeps saved value)
+              Legacy bank text (used only when no structured bank fields exist; blank keeps saved
+              value)
               <textarea name="bankDetails" rows={4} />
             </label>
             <div className="field-wide flex gap-3">

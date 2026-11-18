@@ -1,3 +1,4 @@
+import { defaultInvoiceVisibility } from '@cp/shared';
 import { jest } from '@jest/globals';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { InvoiceStatus, SubscriptionStatus } from '../../generated/prisma/enums';
@@ -42,6 +43,8 @@ function invoice(overrides: Record<string, unknown> = {}) {
     customerPhoneSnapshot: '+962700000000',
     customerTaxNumberSnapshot: '33445544',
     issuerCodeSnapshot: 'NS',
+    issuerPresentationSnapshot: null as unknown,
+    issuerLogoAssetId: null as string | null,
     issuerLegalNameSnapshot: 'New Serve',
     issuerLegalNameArSnapshot: null,
     issuerTaxNumberSnapshot: '12345678',
@@ -200,7 +203,11 @@ describe('InvoicesService creation', () => {
       return Promise.resolve(persisted);
     });
     const tx = {
-      billingEntity: { update: jest.fn(() => Promise.resolve({ lastInvoiceCounter: 1n })) },
+      billingEntity: {
+        update: jest.fn(() =>
+          Promise.resolve({ ...source.customer.billingEntity, lastInvoiceCounter: 1n }),
+        ),
+      },
       invoiceSequence: {
         upsert: jest.fn(() => Promise.resolve({ year: 2026, lastValue: 1 })),
       },
@@ -229,6 +236,45 @@ describe('InvoicesService creation', () => {
       }),
       expect.anything(),
     );
+  });
+
+  it('snapshots branding and asset version from its own issuer and never reloads changed defaults', async () => {
+    const source = subscription();
+    Object.assign(source.customer.billingEntity, {
+      issuerType: 'INDIVIDUAL',
+      countryCode: 'JO',
+      legalNameAr: 'Arabic name',
+      invoiceBranding: {
+        revision: 1,
+        logoAssetId: 'original-logo',
+        details: { phone: 'original-phone' },
+        visibility: defaultInvoiceVisibility(),
+      },
+    });
+    const h = harness(source);
+    const result = await h.service.createFromSubscription('subscription-1', context);
+    const snapshot = result.issuerPresentationSnapshot as {
+      details: { phone: string };
+      logoAssetId: string;
+      issuerType: string;
+    };
+    expect(snapshot).toMatchObject({
+      issuerType: 'INDIVIDUAL',
+      logoAssetId: 'original-logo',
+      details: { phone: 'original-phone' },
+    });
+    Object.assign(source.customer.billingEntity, {
+      invoiceBranding: {
+        revision: 2,
+        logoAssetId: 'new-logo',
+        details: { phone: 'new-phone' },
+        visibility: defaultInvoiceVisibility(),
+      },
+    });
+    expect(
+      (h.getPersisted().issuerPresentationSnapshot as { details: { phone: string } }).details.phone,
+    ).toBe('original-phone');
+    expect(result.issuerLogoAssetId).toBe('original-logo');
   });
 
   it('rejects every non-ACTIVE subscription on the server', async () => {
@@ -490,6 +536,27 @@ describe('Invoice hardening', () => {
       }),
       h.tx,
     );
+  });
+  it('accepted branding is locked against presentation overrides', async () => {
+    const h = harness(invoice({ status: 'FAWTARA_ACCEPTED' }));
+    await expect(
+      h.service.updateDraft(
+        'invoice-1',
+        { presentationVisibility: { ...defaultInvoiceVisibility(), logo: false } },
+        context,
+      ),
+    ).rejects.toThrow('Only a DRAFT');
+    expect(h.tx.invoice.updateMany).not.toHaveBeenCalled();
+  });
+  it('blocks final printing when required issuer identity data is missing regardless of visibility', async () => {
+    const h = harness(
+      invoice({
+        status: 'FAWTARA_ACCEPTED',
+        fawtaraQrImageDataUrl: 'data:image/png;base64,fixture',
+        issuerTaxNumberSnapshot: null,
+      }),
+    );
+    expect((await h.service.findOne('invoice-1')).finalPrintEnabled).toBe(false);
   });
   it('requires a cancellation reason', async () => {
     await expect(harness().service.cancelDraft('invoice-1', '  ', context)).rejects.toThrow(

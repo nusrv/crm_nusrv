@@ -152,6 +152,13 @@
   production submission defaults OFF and credential saves never submit. No real JoFotara POST or
   owner credentials were used. No Mail/AI integration or Payment Receipt. See
   `PHASES/PHASE_04_FAWTARA.md` for supported profiles, recovery, retention and first real invoice.
+- **Multi-issuer invoice presentation (2026-11-18)**: one shared approved layout; COMPANY/INDIVIDUAL
+  BillingEntity identity, optional retained logo versions, reusable profile defaults, invoice branding
+  snapshots and DRAFT-only visibility overrides. Official seller name/address/identifier remain
+  mandatory independently of JoFotara payload data. Approved NUSRV/Future reference forms require
+  explicit ADMIN review/save; no tax number/currency/type is inferred. Future issuer tax/national
+  number still requires authoritative configuration if absent. See PHASES/PHASE_04_FAWTARA.md and
+  docs/multi-issuer-branding-verification.md. Payment Receipt remains deferred without its source seal.
 - Phase 5+: LOCKED
 
 ## Phase 2.1 operational data correction
@@ -873,3 +880,19 @@ Verification is performed only in C:\sgv\phase4b_verify, outside the source repo
 Final counts and migration results are recorded in docs/phase4-verification.md: 1,181 tests passed,
 120 existing live tests skipped; Prisma/typecheck/lint/builds passed; all 15 migrations deployed to
 a fresh disposable MariaDB 11.4.7 database, with four populated-upgrade/retention/CAS checks passing.
+
+
+## Multi-issuer branding verification (2026-11-18)
+
+One shared approved layout now supports COMPANY/INDIVIDUAL issuers, optional immutable logos,
+per-issuer presentation defaults and retained per-invoice snapshots/visibility overrides. Official
+seller identity remains mandatory independently of UBL data. No silent issuer data overwrite or
+Future tax-number inference; ADMIN must review/save approved presets and authoritative identifiers.
+
+Verification: Prisma validate/generate, strict typecheck, lint and all production builds passed.
+Full regression ran once: 1,201 passed, 120 existing gated tests skipped. Four new branding MariaDB
+checks passed; all 16 migrations deployed to a fresh disposable MariaDB 11.4.7 database. Six compiled-
+CSS browser/PDF examples are single-page A4. See docs/multi-issuer-branding-verification.md.
+Existing baseline dependency audit has five critical advisories requiring separate pre-production
+review; this pass adds none. Owner review remains required before push/deployment. No real JoFotara
+request occurred. Payment Receipt remains deferred without its source stamp/seal.

@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsObject,
   IsBoolean,
   Equals,
   IsDateString,
@@ -71,6 +72,7 @@ export class InvoiceLineInputDto {
 }
 
 export class UpdateInvoiceDraftDto {
+  @IsOptional() @IsObject() presentationVisibility?: Record<string, boolean>;
   @IsOptional()
   @IsIn(['011', '021', '111', '121', '012', '022', '112', '122'])
   invoiceTypeName?: string;

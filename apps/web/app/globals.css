@@ -506,6 +506,9 @@ tbody tr:last-child td {
   align-items: start;
 }
 .nusrv-logo {
+  max-height: 24mm;
+  object-fit: contain;
+  object-position: left center;
   width: 58mm;
   height: auto;
   display: block;
@@ -684,4 +687,34 @@ tbody tr:last-child td {
 /* Reserve room for the draft banner without pushing a normal A4 draft footer to page two. */
 .nusrv-paper:has(.invoice-draft-banner) .nusrv-totals {
   margin-top: 20mm;
+}
+
+.branding-visibility {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  border: 1px solid var(--line);
+  padding: 12px;
+}
+.branding-visibility p {
+  grid-column: 1/-1;
+}
+.branding-visibility label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.branding-visibility input[type='checkbox'] {
+  width: auto;
+}
+.branding-visibility small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.nusrv-company,
+.nusrv-footer,
+.nusrv-buyer {
+  overflow-wrap: anywhere;
 }

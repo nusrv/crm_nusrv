@@ -1,6 +1,12 @@
 'use client';
 
 import Link from 'next/link';
+import {
+  readIssuerPresentation,
+  defaultInvoiceVisibility,
+  type InvoiceVisibility,
+} from '@cp/shared';
+import { InvoiceVisibilityEditor } from './invoice-visibility-editor';
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { InvoiceRenderer } from './invoice-renderer';
@@ -28,6 +34,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
   const [preflight, setPreflight] = useState<InvoicePreflightResult | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [visibility, setVisibility] = useState<InvoiceVisibility>(defaultInvoiceVisibility());
   const [qrImageDataUrl, setQrImageDataUrl] = useState('');
   const [connections, setConnections] = useState<
     Array<{ id: string; displayName: string; isDefault: boolean }>
@@ -50,6 +57,10 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
   const load = useCallback(async () => {
     const value = await apiRequest<InvoiceView>(`/invoices/${invoiceId}`);
     setInvoice(value);
+    setVisibility(
+      readIssuerPresentation(value.issuerPresentationSnapshot)?.visibility ??
+        defaultInvoiceVisibility(),
+    );
     setConnections(
       await apiRequest(`/billing-entities/${value.billingEntityId}/jofotara-connections`),
     );
@@ -113,11 +124,14 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
           method: 'PATCH',
           body: JSON.stringify({
             invoiceDate: String(form.get('invoiceDate')),
+            presentationVisibility: visibility,
             invoiceTypeName: String(form.get('invoiceTypeName')) || undefined,
             issuerCountryCode: String(form.get('issuerCountryCode')) || undefined,
             buyerCountryCode: String(form.get('buyerCountryCode')) || undefined,
             selectedConnectionId: connectionId || null,
-            issuerBankDetails: String(form.get('issuerBankDetails') ?? ''),
+            issuerBankDetails: form.has('issuerBankDetails')
+              ? String(form.get('issuerBankDetails'))
+              : undefined,
             issuerLegalNameAr: String(form.get('issuerLegalNameAr') ?? ''),
             periodStart: String(form.get('periodStart')),
             periodEnd: String(form.get('periodEnd')),
@@ -316,6 +330,13 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
             source Customer or Subscription.
           </p>
           <form className="form-grid mt-5" onSubmit={(event) => void saveDraft(event)}>
+            <div className="field-wide">
+              <InvoiceVisibilityEditor value={visibility} onChange={setVisibility} />
+              <p>
+                Only this DRAFT snapshot changes. Issuer profile defaults and tax payload fields are
+                unaffected.
+              </p>
+            </div>
             <label>
               Official invoice profile
               <select name="invoiceTypeName" defaultValue={invoice.invoiceTypeName || ''} required>
@@ -353,13 +374,20 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
               name="issuerLegalNameAr"
               value={invoice.issuerLegalNameArSnapshot || ''}
             />
-            <label>
-              Bank details (invoice snapshot)
-              <textarea
-                name="issuerBankDetails"
-                defaultValue={invoice.issuerBankDetailsSnapshot || ''}
-              />
-            </label>
+            {!readIssuerPresentation(invoice.issuerPresentationSnapshot) ? (
+              <label>
+                Legacy bank details (invoice snapshot)
+                <textarea
+                  name="issuerBankDetails"
+                  defaultValue={invoice.issuerBankDetailsSnapshot || ''}
+                />
+              </label>
+            ) : (
+              <p className="field-wide">
+                Issuer bank/contact values were snapshotted at creation. Use print checkboxes to
+                show/hide them; master edits affect future invoices only.
+              </p>
+            )}
             <p>
               General categories: S = taxed, Z = exempt, O = zero rated. Income profile: explicit
               INCOME and rate 0.

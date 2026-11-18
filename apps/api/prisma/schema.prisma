@@ -244,21 +244,31 @@ enum InvoiceStatus {
   CANCELLED
 }
 
+enum IssuerType {
+  COMPANY
+  INDIVIDUAL
+}
+
 model BillingEntity {
-  id                     String                @id @default(uuid()) @db.VarChar(36)
+  issuerType             IssuerType              @default(COMPANY) @map("issuer_type")
+  legalNameAr            String?                 @map("legal_name_ar") @db.VarChar(500)
+  countryCode            String?                 @map("country_code") @db.VarChar(2)
+  invoiceBranding        InvoiceBrandingProfile?
+  brandingAssets         InvoiceBrandingAsset[]
+  id                     String                  @id @default(uuid()) @db.VarChar(36)
   name                   String
-  code                   String                @unique
-  customerCodePrefix     String                @unique @map("customer_code_prefix") @db.VarChar(10)
-  paymentScope           PaymentScope          @map("payment_scope")
-  legalName              String                @map("legal_name")
-  taxNumber              String?               @map("tax_number")
+  code                   String                  @unique
+  customerCodePrefix     String                  @unique @map("customer_code_prefix") @db.VarChar(10)
+  paymentScope           PaymentScope            @map("payment_scope")
+  legalName              String                  @map("legal_name")
+  taxNumber              String?                 @map("tax_number")
   address                String?
-  invoiceEmail           String?               @map("invoice_email")
-  bankDetailsCiphertext  String?               @map("bank_details_ciphertext") @db.Text
-  fawtaraConfigReference String?               @map("fawtara_config_reference")
-  active                 Boolean               @default(true)
-  createdAt              DateTime              @default(now()) @map("created_at")
-  updatedAt              DateTime              @updatedAt @map("updated_at")
+  invoiceEmail           String?                 @map("invoice_email")
+  bankDetailsCiphertext  String?                 @map("bank_details_ciphertext") @db.Text
+  fawtaraConfigReference String?                 @map("fawtara_config_reference")
+  active                 Boolean                 @default(true)
+  createdAt              DateTime                @default(now()) @map("created_at")
+  updatedAt              DateTime                @updatedAt @map("updated_at")
   customers              Customer[]
   legacyImportRows       LegacyImportRow[]
   customerCodeSequence   CustomerCodeSequence?
@@ -266,7 +276,7 @@ model BillingEntity {
   invoices               Invoice[]
   invoiceSequences       InvoiceSequence[]
   joFotaraConnections    JoFotaraConnection[]
-  lastInvoiceCounter     BigInt                @default(0) @map("last_invoice_counter")
+  lastInvoiceCounter     BigInt                  @default(0) @map("last_invoice_counter")
 
   @@map("billing_entities")
 }
@@ -1461,19 +1471,22 @@ model InvoiceSequence {
 // retained for traceability and use RESTRICT so financial history can never disappear through an
 // existing Customer/Subscription deletion flow.
 model Invoice {
-  id                   String        @id @default(uuid()) @db.VarChar(36)
-  customerId           String        @map("customer_id") @db.VarChar(36)
-  billingEntityId      String        @map("billing_entity_id") @db.VarChar(36)
-  sourceSubscriptionId String        @map("source_subscription_id") @db.VarChar(36)
-  status               InvoiceStatus @default(DRAFT)
-  internalReference    String        @unique @map("internal_reference") @db.VarChar(80)
+  issuerPresentationSnapshot Json?                 @map("issuer_presentation_snapshot")
+  issuerLogoAssetId          String?               @map("issuer_logo_asset_id") @db.VarChar(36)
+  issuerLogoAsset            InvoiceBrandingAsset? @relation(fields: [issuerLogoAssetId], references: [id], onDelete: Restrict)
+  id                         String                @id @default(uuid()) @db.VarChar(36)
+  customerId                 String                @map("customer_id") @db.VarChar(36)
+  billingEntityId            String                @map("billing_entity_id") @db.VarChar(36)
+  sourceSubscriptionId       String                @map("source_subscription_id") @db.VarChar(36)
+  status                     InvoiceStatus         @default(DRAFT)
+  internalReference          String                @unique @map("internal_reference") @db.VarChar(80)
   // Non-null only while the invoice is DRAFT/READY. The nullable unique key is the concurrent
   // duplicate guard for one subscription + intended service period; MariaDB permits many NULLs.
-  activeDraftKey       String?       @unique @map("active_draft_key") @db.VarChar(191)
-  invoiceDate          DateTime      @map("invoice_date") @db.Date
-  currencyCode         String        @map("currency_code") @db.VarChar(3)
-  periodStart          DateTime      @map("period_start") @db.Date
-  periodEnd            DateTime      @map("period_end") @db.Date
+  activeDraftKey             String?               @unique @map("active_draft_key") @db.VarChar(191)
+  invoiceDate                DateTime              @map("invoice_date") @db.Date
+  currencyCode               String                @map("currency_code") @db.VarChar(3)
+  periodStart                DateTime              @map("period_start") @db.Date
+  periodEnd                  DateTime              @map("period_end") @db.Date
 
   customerCodeSnapshot      String  @map("customer_code_snapshot") @db.VarChar(191)
   customerNameEnSnapshot    String? @map("customer_name_en_snapshot") @db.VarChar(191)
@@ -1631,4 +1644,35 @@ model FawtaraSubmission {
   @@unique([invoiceId, attemptNumber])
   @@index([joFotaraConnectionId, createdAt])
   @@map("fawtara_submissions")
+}
+
+// Presentation defaults only. Legal identity stays on BillingEntity; credentials stay separate.
+model InvoiceBrandingProfile {
+  billingEntityId String                @id @map("billing_entity_id") @db.VarChar(36)
+  revision        Int                   @default(1)
+  details         Json
+  visibility      Json
+  logoAssetId     String?               @map("logo_asset_id") @db.VarChar(36)
+  createdAt       DateTime              @default(now()) @map("created_at")
+  updatedAt       DateTime              @updatedAt @map("updated_at")
+  billingEntity   BillingEntity         @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
+  logoAsset       InvoiceBrandingAsset? @relation(fields: [logoAssetId], references: [id], onDelete: Restrict)
+
+  @@map("invoice_branding_profiles")
+}
+
+// Immutable raster bytes stored once per issuer/hash, not duplicated in invoice JSON.
+model InvoiceBrandingAsset {
+  id              String                   @id @default(uuid()) @db.VarChar(36)
+  billingEntityId String                   @map("billing_entity_id") @db.VarChar(36)
+  sha256          String                   @db.VarChar(64)
+  mimeType        String                   @map("mime_type") @db.VarChar(30)
+  bytes           Bytes                    @db.MediumBlob
+  createdAt       DateTime                 @default(now()) @map("created_at")
+  billingEntity   BillingEntity            @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
+  profiles        InvoiceBrandingProfile[]
+  invoices        Invoice[]
+
+  @@unique([billingEntityId, sha256])
+  @@map("invoice_branding_assets")
 }

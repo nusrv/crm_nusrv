@@ -1,9 +1,28 @@
 'use client';
+import {
+  readIssuerPresentation,
+  defaultInvoiceVisibility,
+  effectiveInvoiceVisibility,
+} from '@cp/shared';
 import type { InvoiceView } from './invoice-types';
 const date = (v: string | null) => v?.slice(0, 10) || '-';
 const money = (v: string, c: string) => `${v} ${c}`;
 export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
   const official = invoice.status === 'FAWTARA_ACCEPTED';
+  const presentation = readIssuerPresentation(invoice.issuerPresentationSnapshot);
+  const visible = effectiveInvoiceVisibility(
+    presentation?.visibility ?? defaultInvoiceVisibility(),
+    official,
+  );
+  const details = presentation?.details ?? {};
+  // Legacy invoices use only their own persisted issuer code, never today's profile.
+  const logo =
+    invoice.issuerLogoDataUrl ??
+    ((!presentation && invoice.issuerCodeSnapshot === 'NEW_SERVE_LOCAL') ||
+    presentation?.legacyNusrvLogo
+      ? '/nusrv-invoice-logo.png'
+      : null);
+
   if (invoice.status === 'CANCELLED')
     return (
       <p className="no-print">
@@ -22,12 +41,26 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
       {!official && <div className="invoice-draft-banner">DRAFT / NOT OFFICIAL</div>}
       <header className="nusrv-header">
         <div>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="nusrv-logo" src="/nusrv-invoice-logo.png" alt="NUSRV" />
+          {visible.logo && logo && (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                className="nusrv-logo"
+                src={logo}
+                alt={`${invoice.issuerLegalNameSnapshot} logo`}
+              />
+            </>
+          )}
           <div className="nusrv-company">
-            <p>{invoice.issuerLegalNameSnapshot}</p>
-            <p dir="rtl">{invoice.issuerLegalNameArSnapshot}</p>
-            <p>{invoice.issuerAddressSnapshot}</p>
+            <p>{visible.nameEn && invoice.issuerLegalNameSnapshot}</p>
+            <p dir="rtl">{visible.nameAr && invoice.issuerLegalNameArSnapshot}</p>
+            <p>{visible.address && invoice.issuerAddressSnapshot}</p>
+            <p>{visible.country && (details.countryName || presentation?.countryCode)}</p>
+            <p>
+              {visible.taxNumber &&
+                invoice.issuerTaxNumberSnapshot &&
+                `Tax / National No. ${invoice.issuerTaxNumberSnapshot}`}
+            </p>
           </div>
           <div className="nusrv-rule" />
           <h1>Invoice {invoice.internalReference}</h1>
@@ -126,9 +159,54 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
         ))}
       </dl>
       <footer className="nusrv-footer">
-        <div className="nusrv-bank">{invoice.issuerBankDetailsSnapshot}</div>
+        <div className="nusrv-bank">
+          <p>
+            {[
+              visible.bankName && details.bankName && `Bank: ${details.bankName}`,
+              visible.bankBranch && details.bankBranch && `Branch: ${details.bankBranch}`,
+              visible.swift && details.swift && `SWIFT: ${details.swift}`,
+            ]
+              .filter(Boolean)
+              .join(' / ')}
+          </p>
+          {(['jod', 'usd', 'eur'] as const).map((currency) =>
+            visible[`${currency}Bank`] &&
+            (details[`${currency}Account`] || details[`${currency}Iban`]) ? (
+              <p key={currency}>
+                {currency.toUpperCase()}{' '}
+                {details[`${currency}Account`] && `Account: ${details[`${currency}Account`]}`}{' '}
+                {details[`${currency}Iban`] && `IBAN: ${details[`${currency}Iban`]}`}
+              </p>
+            ) : null,
+          )}
+          {!details.bankName &&
+            !details.bankBranch &&
+            !details.swift &&
+            !details.jodIban &&
+            !details.jodAccount &&
+            !details.usdIban &&
+            !details.usdAccount &&
+            !details.eurIban &&
+            !details.eurAccount &&
+            visible.bankName &&
+            visible.bankBranch &&
+            visible.swift &&
+            visible.jodBank &&
+            visible.usdBank &&
+            visible.eurBank &&
+            invoice.issuerBankDetailsSnapshot}
+        </div>
         <div className="nusrv-rule" />
-        <p>{invoice.issuerInvoiceEmailSnapshot}</p>
+        <p>
+          {[
+            visible.phone && details.phone && `Phone: ${details.phone}`,
+            visible.fax && details.fax && `Fax: ${details.fax}`,
+            visible.email && invoice.issuerInvoiceEmailSnapshot,
+            visible.website && details.website,
+          ]
+            .filter(Boolean)
+            .join(' | ')}
+        </p>
         <p>{official && invoice.fawtaraInvoiceUuid}</p>
         <p>{official ? 'Electronic invoice' : 'DRAFT / NOT OFFICIAL'}</p>
       </footer>

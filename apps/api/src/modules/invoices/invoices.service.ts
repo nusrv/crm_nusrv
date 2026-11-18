@@ -1,3 +1,8 @@
+import { readIssuerPresentation } from '@cp/shared';
+import {
+  snapshotPresentation,
+  visibilitySchema,
+} from '../invoice-branding/invoice-branding.schema';
 import { isManualQrImage } from './manual-qr';
 import { SecretEncryptionService } from '../../security/secret-encryption.service';
 import {
@@ -84,7 +89,19 @@ export class InvoicesService {
   }
 
   async findOne(id: string) {
-    return this.toView(await this.requireInvoice(id));
+    const invoice = await this.requireInvoice(id);
+    const asset = invoice.issuerLogoAssetId
+      ? await this.prisma.invoiceBrandingAsset.findFirst({
+          where: { id: invoice.issuerLogoAssetId, billingEntityId: invoice.billingEntityId },
+          select: { bytes: true, mimeType: true },
+        })
+      : null;
+    return {
+      ...this.toView(invoice),
+      issuerLogoDataUrl: asset
+        ? `data:${asset.mimeType};base64,${Buffer.from(asset.bytes).toString('base64')}`
+        : null,
+    };
   }
 
   async createFromSubscription(subscriptionId: string, context: MutationContext) {
@@ -93,7 +110,7 @@ export class InvoicesService {
       include: {
         customer: {
           include: {
-            billingEntity: true,
+            billingEntity: { include: { invoiceBranding: true } },
             phoneNumbers: {
               where: { active: true },
               orderBy: [{ primary: 'desc' }, { createdAt: 'asc' }],
@@ -166,11 +183,12 @@ export class InvoicesService {
           update: { lastValue: { increment: 1 } },
         });
         const internalReference = `${billingEntity.code}-INV-${sequence.year}-${String(sequence.lastValue).padStart(6, '0')}`;
-        const counter = await tx.billingEntity.update({
+        const currentIssuer = await tx.billingEntity.update({
           where: { id: billingEntity.id },
           data: { lastInvoiceCounter: { increment: 1 } },
-          select: { lastInvoiceCounter: true },
+          include: { invoiceBranding: true },
         });
+        const presentation = snapshotPresentation(currentIssuer, currentIssuer.invoiceBranding);
         const line = calculated.lines[0]!;
         const invoice = await tx.invoice.create({
           data: {
@@ -178,7 +196,7 @@ export class InvoicesService {
             billingEntityId: billingEntity.id,
             sourceSubscriptionId: subscription.id,
             internalReference,
-            invoiceCounter: counter.lastInvoiceCounter,
+            invoiceCounter: currentIssuer.lastInvoiceCounter,
             activeDraftKey,
             invoiceDate,
             currencyCode: subscription.currency,
@@ -192,16 +210,19 @@ export class InvoicesService {
             customerPhoneSnapshot:
               subscription.customer.phoneNumbers[0]?.phoneNumber ?? subscription.customer.phone,
             customerTaxNumberSnapshot: subscription.customer.taxNumber,
-            issuerCodeSnapshot: billingEntity.code,
-            issuerLegalNameSnapshot: billingEntity.legalName,
+            issuerCodeSnapshot: currentIssuer.code,
+            issuerLegalNameSnapshot: currentIssuer.legalName,
             // BillingEntity has no Arabic legal-name field yet; absence remains explicit.
-            issuerLegalNameArSnapshot: null,
-            issuerTaxNumberSnapshot: billingEntity.taxNumber,
-            issuerAddressSnapshot: billingEntity.address,
-            issuerInvoiceEmailSnapshot: billingEntity.invoiceEmail,
+            issuerLegalNameArSnapshot: currentIssuer.legalNameAr ?? null,
+            issuerCountryCodeSnapshot: currentIssuer.countryCode ?? null,
+            issuerPresentationSnapshot: presentation as unknown as Prisma.InputJsonValue,
+            issuerLogoAssetId: presentation.logoAssetId,
+            issuerTaxNumberSnapshot: currentIssuer.taxNumber,
+            issuerAddressSnapshot: currentIssuer.address,
+            issuerInvoiceEmailSnapshot: currentIssuer.invoiceEmail,
             // Decrypt configured bank data once into this immutable invoice snapshot.
-            issuerBankDetailsSnapshot: billingEntity.bankDetailsCiphertext
-              ? this.decryptBankDetails(billingEntity.bankDetailsCiphertext)
+            issuerBankDetailsSnapshot: currentIssuer.bankDetailsCiphertext
+              ? this.decryptBankDetails(currentIssuer.bankDetailsCiphertext)
               : null,
             subtotal: calculated.subtotal,
             discountTotal: calculated.discountTotal,
@@ -258,6 +279,30 @@ export class InvoicesService {
     const oldState = await this.requireInvoice(id);
     this.requireStatus(oldState, InvoiceStatus.DRAFT, 'Only a DRAFT invoice can be edited.');
 
+    let presentation = readIssuerPresentation(oldState.issuerPresentationSnapshot);
+    if (input.presentationVisibility) {
+      const parsed = visibilitySchema.safeParse(input.presentationVisibility);
+      if (!parsed.success) throw new BadRequestException('Invalid presentation visibility fields.');
+      presentation = { ...(presentation ?? snapshotPresentation({})), visibility: parsed.data };
+      // Preserve the existing immutable logo reference; overrides cannot select another issuer/asset.
+      presentation.logoAssetId = oldState.issuerLogoAssetId ?? null;
+      if (!oldState.issuerPresentationSnapshot && oldState.issuerCodeSnapshot === 'NEW_SERVE_LOCAL')
+        presentation.legacyNusrvLogo = true;
+      if (
+        Object.keys(input).every(
+          (k) =>
+            k === 'presentationVisibility' || input[k as keyof UpdateInvoiceDraftDto] === undefined,
+        )
+      ) {
+        return this.transitionStatus(
+          oldState,
+          InvoiceStatus.DRAFT,
+          'invoice.presentation_overridden',
+          context,
+          { issuerPresentationSnapshot: presentation as unknown as Prisma.InputJsonValue },
+        );
+      }
+    }
     if (input.selectedConnectionId) {
       const connection = await this.prisma.joFotaraConnection.findFirst({
         where: { id: input.selectedConnectionId, billingEntityId: oldState.billingEntityId },
@@ -321,6 +366,9 @@ export class InvoicesService {
           data: {
             invoiceDate,
             invoiceTypeName: input.invoiceTypeName,
+            issuerPresentationSnapshot: input.presentationVisibility
+              ? (presentation as unknown as Prisma.InputJsonValue)
+              : undefined,
             issuerCountryCodeSnapshot: input.issuerCountryCode,
             buyerCountryCodeSnapshot: input.buyerCountryCode,
             selectedConnectionId: input.selectedConnectionId,
@@ -870,6 +918,8 @@ export class InvoicesService {
         nameAr: invoice.customerNameArSnapshot,
         taxNumber: invoice.customerTaxNumberSnapshot,
       },
+      issuerPresentation: invoice.issuerPresentationSnapshot,
+      issuerLogoAssetId: invoice.issuerLogoAssetId,
       issuerSnapshot: {
         code: invoice.issuerCodeSnapshot,
         legalName: invoice.issuerLegalNameSnapshot,
@@ -930,7 +980,12 @@ export class InvoicesService {
       finalPrintEnabled:
         invoice.status === InvoiceStatus.FAWTARA_ACCEPTED &&
         !invoice.reconciliationRequired &&
-        Boolean(invoice.fawtaraQrImageDataUrl),
+        Boolean(invoice.fawtaraQrImageDataUrl) &&
+        Boolean(
+          invoice.issuerLegalNameSnapshot?.trim() &&
+          invoice.issuerAddressSnapshot?.trim() &&
+          invoice.issuerTaxNumberSnapshot?.trim(),
+        ),
       locked: invoice.status !== InvoiceStatus.DRAFT,
     };
   }

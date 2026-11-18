@@ -45,3 +45,78 @@ export function addCalendarMonths(date: Date, months: number): Date {
   const clampedDay = Math.min(day, daysInTargetMonth);
   return new Date(Date.UTC(year, targetMonthIndex, clampedDay));
 }
+
+// Shared immutable invoice presentation contract.
+export const INVOICE_VISIBILITY_KEYS = [
+  'logo',
+  'nameEn',
+  'nameAr',
+  'address',
+  'country',
+  'taxNumber',
+  'phone',
+  'fax',
+  'email',
+  'website',
+  'bankName',
+  'bankBranch',
+  'swift',
+  'jodBank',
+  'usdBank',
+  'eurBank',
+] as const;
+export type InvoiceVisibilityKey = (typeof INVOICE_VISIBILITY_KEYS)[number];
+export type InvoiceVisibility = Record<InvoiceVisibilityKey, boolean>;
+export const INVOICE_DETAIL_KEYS = [
+  'countryName',
+  'phone',
+  'fax',
+  'website',
+  'bankName',
+  'bankBranch',
+  'swift',
+  'jodAccount',
+  'jodIban',
+  'usdAccount',
+  'usdIban',
+  'eurAccount',
+  'eurIban',
+] as const;
+export type InvoiceDetails = Partial<Record<(typeof INVOICE_DETAIL_KEYS)[number], string>>;
+export const OFFICIAL_PRINT_REQUIRED = ['nameEn', 'address', 'taxNumber'] as const;
+export const defaultInvoiceVisibility = (): InvoiceVisibility =>
+  Object.fromEntries(INVOICE_VISIBILITY_KEYS.map((k) => [k, true])) as InvoiceVisibility;
+export interface IssuerPresentation {
+  version: 1;
+  legacyNusrvLogo?: boolean;
+  profileRevision: number;
+  issuerType: 'COMPANY' | 'INDIVIDUAL';
+  logoAssetId: string | null;
+  countryCode: string | null;
+  details: InvoiceDetails;
+  visibility: InvoiceVisibility;
+}
+export function effectiveInvoiceVisibility(
+  visibility: InvoiceVisibility,
+  official: boolean,
+): InvoiceVisibility {
+  const result = { ...visibility };
+  if (official) for (const k of OFFICIAL_PRINT_REQUIRED) result[k] = true;
+  return result;
+}
+/** Parse stored snapshots defensively, never consult a current issuer profile. */
+export function readIssuerPresentation(value: unknown): IssuerPresentation | null {
+  if (!value || typeof value !== 'object' || !('version' in value) || value.version !== 1)
+    return null;
+  const v = value as Partial<IssuerPresentation>;
+  return {
+    version: 1,
+    legacyNusrvLogo: v.legacyNusrvLogo === true,
+    profileRevision: typeof v.profileRevision === 'number' ? v.profileRevision : 0,
+    issuerType: v.issuerType === 'INDIVIDUAL' ? 'INDIVIDUAL' : 'COMPANY',
+    logoAssetId: typeof v.logoAssetId === 'string' ? v.logoAssetId : null,
+    countryCode: typeof v.countryCode === 'string' ? v.countryCode : null,
+    details: v.details ?? {},
+    visibility: { ...defaultInvoiceVisibility(), ...v.visibility },
+  };
+}

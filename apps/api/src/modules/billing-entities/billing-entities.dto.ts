@@ -5,12 +5,18 @@ import {
   IsEnum,
   IsOptional,
   IsString,
+  IsIn,
+  Matches,
   Length,
   MaxLength,
 } from 'class-validator';
 import { PaymentScope } from '../../generated/prisma/enums';
 
 export class CreateBillingEntityDto {
+  @IsOptional() @IsIn(['COMPANY', 'INDIVIDUAL']) issuerType?: 'COMPANY' | 'INDIVIDUAL';
+  @IsOptional() @IsString() @MaxLength(500) legalNameAr?: string;
+  @IsOptional() @Matches(/^[A-Z]{2}$/) countryCode?: string;
+
   @IsOptional() @IsString() @MaxLength(4000) bankDetails?: string;
   @Transform(({ value }) => String(value).trim().toUpperCase())
   @IsString()
@@ -53,6 +59,10 @@ export class CreateBillingEntityDto {
 }
 
 export class UpdateBillingEntityDto {
+  @IsOptional() @IsIn(['COMPANY', 'INDIVIDUAL']) issuerType?: 'COMPANY' | 'INDIVIDUAL';
+  @IsOptional() @IsString() @MaxLength(500) legalNameAr?: string;
+  @IsOptional() @Matches(/^[A-Z]{2}$/) countryCode?: string;
+
   @IsOptional() @IsString() @MaxLength(4000) bankDetails?: string;
   @IsOptional()
   @IsString()
