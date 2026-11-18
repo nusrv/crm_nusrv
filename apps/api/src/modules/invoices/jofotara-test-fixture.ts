@@ -1,0 +1,45 @@
+import type { InvoiceSnapshot } from './fawtara-mapper';
+const d = (v: string) => ({ toString: () => v });
+export function fixture(): InvoiceSnapshot {
+  return {
+    id: 'invoice-1',
+    billingEntityId: 'entity-a',
+    internalReference: 'NS-INV-2026-000001',
+    submissionUuid: 'e07fddc8-540f-4ce1-a913-154c40769e76',
+    invoiceCounter: 1n,
+    invoiceTypeName: '022',
+    invoiceDate: new Date('2026-11-17'),
+    currencyCode: 'JOD',
+    issuerCountryCodeSnapshot: 'JO',
+    buyerCountryCodeSnapshot: 'JO',
+    issuerTaxNumberSnapshot: '12345678',
+    issuerLegalNameSnapshot: 'Issuer & Sons',
+    customerNameEnSnapshot: 'Buyer <Test>',
+    customerNameArSnapshot: null,
+    customerTaxNumberSnapshot: '33445544',
+    subtotal: d('90.000'),
+    discountTotal: d('10.000'),
+    taxTotal: d('14.400'),
+    grandTotal: d('104.400'),
+    status: 'READY_FOR_FAWTARA',
+    selectedConnectionId: null,
+    submissionLock: null,
+    activeDraftKey: 'period-key',
+    updatedAt: new Date('2026-11-17'),
+    lines: [
+      {
+        id: 'line-1',
+        position: 1,
+        description: 'Hosting & support',
+        quantity: d('2.000'),
+        unitPrice: d('50.000'),
+        discountAmount: d('10.000'),
+        taxCategoryCode: 'S',
+        taxRate: d('16.0000'),
+        lineSubtotal: d('90.000'),
+        taxAmount: d('14.400'),
+        lineTotal: d('104.400'),
+      },
+    ],
+  } as unknown as InvoiceSnapshot;
+}

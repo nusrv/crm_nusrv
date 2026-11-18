@@ -144,19 +144,14 @@
 - **Owner sequencing decision (2026-11-17)**: real Mail/AI end-to-end acceptance is intentionally
   deferred. Phase 3/3.1 code remains unchanged and its operational switches remain OFF; invoice
   usability for existing ACTIVE subscriptions is the immediate priority.
-- **Phase 4A — Manual-first Invoice Foundation**: IMPLEMENTED LOCALLY, pending owner deployment.
-  ADMIN/ACCOUNTANT can create a persisted commercial/legal snapshot manually from an ACTIVE
-  Subscription, review/edit DRAFT snapshot data and lines, run structured server-side preflight,
-  mark a passing invoice READY_FOR_FAWTARA, issue it outside the CRM, and record the official
-  JoFotara number/UUID/QR/accepted totals. Accepted invoices are locked, recorded official values
-  are authoritative in the A4 HTML/print output, discrepancies remain visible and audited, and
-  Customer/Subscription deletion is blocked whenever invoice history exists. The implementation
-  includes an integration boundary only; **no production JoFotara submission, credential storage,
-  UBL mapping, email automation, payment receipt, Telegram integration, or service automation is
-  enabled**. See `PHASES/PHASE_04_FAWTARA.md`.
-- Phase 4B (validated UBL 2.1 mapping and real JoFotara gateway): DEFERRED / LOCKED pending current
-  official specification review, BillingEntity-scoped credentials, sandbox/production acceptance,
-  and a separately approved implementation task.
+- **Phase 4A hardening + Phase 4B JoFotara**: IMPLEMENTED LOCALLY by explicit owner authorization;
+  not pushed or deployed. Manual cancellation, MANUAL/API provenance, graphical QR requirement,
+  exact official reconciliation and approved NUSRV template rendering are implemented. Multiple
+  encrypted JoFotara device/link records are independent per Billing Entity, with one active default.
+  Real UBL mapping/native gateway and durable submission history are human-initiated only;
+  production submission defaults OFF and credential saves never submit. No real JoFotara POST or
+  owner credentials were used. No Mail/AI integration or Payment Receipt. See
+  `PHASES/PHASE_04_FAWTARA.md` for supported profiles, recovery, retention and first real invoice.
 - Phase 5+: LOCKED
 
 ## Phase 2.1 operational data correction
@@ -862,17 +857,19 @@ claim as scoped to that.
   (OpenAI/Anthropic/Google Gemini) and an Integration Health "Effective Status" breakdown
   (Configured / Operationally enabled / Deployment adapter / Effective) for SMTP/IMAP
 - Technical Connections: secure configuration/mapping only; no external provider calls
-- Phase 4+ integrations (Fawtara, collection, technical suspension, MCP): LOCKED and not started
+- JoFotara: Phase 4A/4B implemented locally; production submission OFF by default, no real acceptance call yet.
+- Collection, technical suspension and MCP remain later phases.
 
 ## Next allowed work
 
-Phase 3 and Phase 3.1 are code complete. Before Phase 4:
+Owner review/deployment preparation for Phase 4A/4B and a legitimate first human-initiated commercial
+invoice after deployment. Follow PHASES/PHASE_04_FAWTARA.md. Do not send dummy invoices as credential
+tests. Real Mail/AI acceptance remains independently deferred. Payment Receipt/collection is not
+started; later receipt must use supplied docs/templates references WITHOUT the stamp/seal.
 
-1. Deploy the Phase 3 + Phase 3.1 migrations and code to `crm.nusrv.com` (owner-performed, per the
-   existing deployment model).
-2. Provision one real Microsoft 365 mailbox and one real OpenAI API key via `/dashboard/settings`
-   (or the emergency `provision-mail-configuration` CLI), with `AI_AUTO_ROUTE_ACCEPT`/Auto Accept
-   left OFF, and perform the first real SMTP/IMAP/OpenAI smoke test per the operational checklist.
-3. Re-run the disposable MariaDB live suite against this exact code (deferred from the Phase 3.1
-   verification session — no disposable MariaDB credentials were available).
-4. Only after the owner explicitly authorizes it: begin Phase 4 (Fawtara and invoice publication).
+## Phase 4 verification
+
+Verification is performed only in C:\sgv\phase4b_verify, outside the source repository.
+Final counts and migration results are recorded in docs/phase4-verification.md: 1,181 tests passed,
+120 existing live tests skipped; Prisma/typecheck/lint/builds passed; all 15 migrations deployed to
+a fresh disposable MariaDB 11.4.7 database, with four populated-upgrade/retention/CAS checks passing.

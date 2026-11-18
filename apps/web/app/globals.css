@@ -485,3 +485,203 @@ tbody tr:last-child td {
     min-width: 120px;
   }
 }
+
+/* Approved docs/templates invoice proportions; dynamic persisted values, no DOM editing. */
+.nusrv-paper {
+  width: 210mm;
+  min-height: 297mm;
+  padding: 10mm 12mm 12mm;
+  margin: 14px auto;
+  background: white;
+  color: #111;
+  position: relative;
+  font-family: Tahoma, Arial, sans-serif;
+  border: 0;
+  border-radius: 0;
+}
+.nusrv-header {
+  display: grid;
+  grid-template-columns: 1.15fr 0.95fr;
+  gap: 10mm;
+  align-items: start;
+}
+.nusrv-logo {
+  width: 58mm;
+  height: auto;
+  display: block;
+}
+.nusrv-company {
+  font-size: 10.8pt;
+  line-height: 1.38;
+  margin-top: 2mm;
+  white-space: pre-line;
+}
+.nusrv-company p[dir='rtl'] {
+  text-align: left;
+}
+.nusrv-rule {
+  height: 1px;
+  background: #111;
+  margin-top: 4mm;
+}
+.nusrv-header h1 {
+  font-size: 20pt;
+  font-weight: 400;
+  margin: 11mm 0 3mm;
+}
+.nusrv-ein {
+  font-size: 13.2pt;
+  margin-bottom: 4mm;
+}
+.nusrv-meta {
+  display: grid;
+  grid-template-columns: 37mm 1fr;
+  gap: 1mm 3mm;
+  font-size: 10.4pt;
+  line-height: 1.25;
+}
+.nusrv-meta dt {
+  font-weight: 700;
+}
+.nusrv-buyer {
+  position: relative;
+  padding-top: 40mm;
+  font-size: 12pt;
+  line-height: 1.55;
+}
+.nusrv-buyer h2 {
+  font-size: 15pt;
+}
+.nusrv-qr {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 34mm;
+  height: 34mm;
+  object-fit: contain;
+}
+.nusrv-tax {
+  margin-top: 22mm;
+  text-align: right;
+  font-size: 10.8pt;
+  font-weight: bold;
+}
+.nusrv-items {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10mm;
+  table-layout: fixed;
+  font-size: 9.5pt;
+}
+.nusrv-items th {
+  font-weight: bold;
+  border-bottom: 1px solid #111;
+  text-align: left;
+  padding: 2mm 1mm;
+  min-width: 0;
+}
+.nusrv-items td {
+  vertical-align: top;
+  padding: 2mm 1mm;
+  white-space: pre-line;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.nusrv-items th:first-child {
+  width: 37%;
+}
+.nusrv-items th:last-child,
+.nusrv-items td:last-child {
+  text-align: right;
+}
+.nusrv-items small {
+  display: block;
+  font-size: 8pt;
+}
+.nusrv-totals {
+  width: 70mm;
+  margin: 35mm 0 55mm auto;
+  border-top: 1px solid #111;
+  font-size: 9.7pt;
+  break-inside: avoid;
+}
+.nusrv-totals div {
+  display: flex;
+  justify-content: space-between;
+  gap: 3mm;
+  padding: 2mm 1mm;
+  border-bottom: 1px solid #cfcfcf;
+}
+.nusrv-totals div:last-child {
+  border-bottom: 1px solid #111;
+  font-weight: bold;
+}
+.nusrv-footer {
+  font-size: 9.2pt;
+  text-align: center;
+  line-height: 1.45;
+  break-inside: avoid;
+}
+.nusrv-bank {
+  white-space: pre-line;
+  font-size: 9.4pt;
+}
+.nusrv-reconciliation {
+  font-size: 9pt;
+  border: 1px solid #111;
+  padding: 2mm;
+  margin-top: 3mm;
+}
+@media print {
+  @page {
+    size: A4;
+    margin: 0;
+  }
+  .nusrv-paper {
+    width: 210mm;
+    min-height: 297mm;
+    padding: 10mm 12mm 12mm;
+    margin: 0;
+    box-shadow: none;
+  }
+  .nusrv-items tr {
+    break-inside: avoid;
+  }
+  .nusrv-items thead {
+    display: table-header-group;
+  }
+}
+
+.nusrv-paper {
+  display: flex;
+  flex-direction: column;
+}
+.nusrv-paper :is(p, h2, dd) {
+  margin: 0;
+}
+.nusrv-paper p:empty {
+  display: none;
+}
+.nusrv-paper .nusrv-items th {
+  text-transform: none;
+  letter-spacing: normal;
+  color: #111;
+}
+.nusrv-paper .nusrv-items td {
+  border: 0;
+}
+.nusrv-totals {
+  margin-bottom: 20mm;
+}
+.nusrv-footer {
+  margin-top: auto;
+}
+
+.nusrv-paper .nusrv-tax {
+  margin-top: 22mm;
+}
+
+/* Reserve room for the draft banner without pushing a normal A4 draft footer to page two. */
+.nusrv-paper:has(.invoice-draft-banner) .nusrv-totals {
+  margin-top: 20mm;
+}

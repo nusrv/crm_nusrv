@@ -22,9 +22,13 @@ export interface InvoiceView {
   customerId: string;
   billingEntityId: string;
   sourceSubscriptionId: string;
-  status: 'DRAFT' | 'READY_FOR_FAWTARA' | 'FAWTARA_ACCEPTED' | 'FAWTARA_REJECTED';
+  status: 'DRAFT' | 'READY_FOR_FAWTARA' | 'FAWTARA_ACCEPTED' | 'FAWTARA_REJECTED' | 'CANCELLED';
   internalReference: string;
   invoiceDate: string;
+  invoiceTypeName: string | null;
+  issuerCountryCodeSnapshot: string | null;
+  buyerCountryCodeSnapshot: string | null;
+  selectedConnectionId: string | null;
   currencyCode: string;
   periodStart: string;
   periodEnd: string;
@@ -65,6 +69,12 @@ export interface InvoiceView {
   effectiveGrandTotal: string;
   officialValueDiscrepancies: Array<{ field: string; crm: string; official: string }>;
   locked: boolean;
+  finalPrintEnabled: boolean;
+  submissionPending: boolean;
+  reconciliationRequired: boolean;
+  reconciliationNote: string | null;
+  reconciledAt: string | null;
+  officializationProvenance: 'MANUAL' | 'API' | null;
   lines: InvoiceLineView[];
   customer: { id: string; customerCode: string; nameEn: string | null; nameAr: string | null };
   billingEntity: { id: string; code: string; name: string };

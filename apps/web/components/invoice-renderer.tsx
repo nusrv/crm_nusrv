@@ -1,187 +1,136 @@
 'use client';
-
 import type { InvoiceView } from './invoice-types';
-
-const date = (value: string | null) => (value ? value.slice(0, 10) : '—');
-const money = (value: string, currency: string) =>
-  `${Number(value).toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} ${currency}`;
-
+const date = (v: string | null) => v?.slice(0, 10) || '-';
+const money = (v: string, c: string) => `${v} ${c}`;
 export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
   const official = invoice.status === 'FAWTARA_ACCEPTED';
-  const currency = invoice.effectiveCurrencyCode;
-
+  if (invoice.status === 'CANCELLED')
+    return (
+      <p className="no-print">
+        Cancelled invoice retained for audit. No customer invoice is available.
+      </p>
+    );
+  if (official && !invoice.finalPrintEnabled)
+    return (
+      <p className="no-print">
+        Final customer document blocked: resolve reconciliation and supply an official graphical QR.
+      </p>
+    );
+  const discrepancy = invoice.officialValueDiscrepancies.length > 0;
   return (
-    <article className="invoice-document">
+    <article className="invoice-document nusrv-paper">
       {!official && <div className="invoice-draft-banner">DRAFT / NOT OFFICIAL</div>}
-      <header className="invoice-document-header">
+      <header className="nusrv-header">
         <div>
-          <p className="invoice-kicker">NUSRV Customer Invoice</p>
-          <h1>{invoice.issuerLegalNameSnapshot}</h1>
-          {invoice.issuerLegalNameArSnapshot && (
-            <p className="invoice-arabic" dir="rtl">
-              {invoice.issuerLegalNameArSnapshot}
-            </p>
-          )}
-          <p>{invoice.issuerAddressSnapshot || 'Issuer address not recorded'}</p>
-          {invoice.issuerTaxNumberSnapshot && <p>Tax ID: {invoice.issuerTaxNumberSnapshot}</p>}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="nusrv-logo" src="/nusrv-invoice-logo.png" alt="NUSRV" />
+          <div className="nusrv-company">
+            <p>{invoice.issuerLegalNameSnapshot}</p>
+            <p dir="rtl">{invoice.issuerLegalNameArSnapshot}</p>
+            <p>{invoice.issuerAddressSnapshot}</p>
+          </div>
+          <div className="nusrv-rule" />
+          <h1>Invoice {invoice.internalReference}</h1>
+          <p className="nusrv-ein">
+            Electronic Invoice Number: {official ? invoice.fawtaraInvoiceNumber : 'Not issued'}
+          </p>
+          <dl className="nusrv-meta">
+            <dt>Invoice Date:</dt>
+            <dd>{date(invoice.invoiceDate)}</dd>
+            <dt>Invoice Type:</dt>
+            <dd>
+              {invoice.invoiceTypeName
+                ? invoice.invoiceTypeName.startsWith('1')
+                  ? 'Export Invoice'
+                  : 'Local Invoice'
+                : 'Service Invoice'}
+            </dd>
+            <dt>Currency Type:</dt>
+            <dd>{invoice.effectiveCurrencyCode}</dd>
+          </dl>
         </div>
-        <div className="invoice-identity">
-          <h2>{official ? 'Electronic Invoice' : 'Invoice Preview'}</h2>
-          <p>
-            <strong>CRM Reference:</strong> {invoice.internalReference}
-          </p>
-          <p>
-            <strong>Electronic Invoice Number:</strong>{' '}
-            {invoice.fawtaraInvoiceNumber || 'Not issued'}
-          </p>
-          {invoice.fawtaraInvoiceUuid && (
-            <p className="break-all">
-              <strong>UUID:</strong> {invoice.fawtaraInvoiceUuid}
-            </p>
+        <div className="nusrv-buyer">
+          {official && invoice.fawtaraQrImageDataUrl && (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                className="nusrv-qr"
+                src={invoice.fawtaraQrImageDataUrl}
+                alt="Official JoFotara QR"
+              />
+            </>
           )}
+          <h2>{invoice.customerNameEnSnapshot || invoice.customerNameArSnapshot}</h2>
+          <p>{invoice.customerNameEnSnapshot && invoice.customerNameArSnapshot}</p>
+          <p>{invoice.customerPhoneSnapshot}</p>
+          <p>
+            {invoice.customerAddressSnapshot} {invoice.customerCountrySnapshot}
+          </p>
+          <p className="nusrv-tax">Sales Tax No.: {invoice.customerTaxNumberSnapshot || '-'}</p>
         </div>
       </header>
-
-      {invoice.officialValueDiscrepancies.length > 0 && (
-        <section className="invoice-discrepancy">
-          <strong>Official values differ from the CRM draft.</strong>
+      {discrepancy && (
+        <div className="nusrv-reconciliation">
+          <strong>Reconciled official values</strong>
           <p>
-            The official JoFotara values shown in totals are authoritative. The draft was not
-            silently changed.
+            The line amounts below preserve the original CRM draft. The official totals differ as
+            recorded here:
           </p>
-          <ul>
-            {invoice.officialValueDiscrepancies.map((item) => (
-              <li key={item.field}>
-                {item.field}: CRM {item.crm} → official {item.official}
-              </li>
-            ))}
-          </ul>
-        </section>
+          {invoice.officialValueDiscrepancies.map((d) => (
+            <p key={d.field}>
+              {d.field}: draft {d.crm}; official {d.official}
+            </p>
+          ))}
+        </div>
       )}
-
-      <section className="invoice-meta-grid">
-        <div>
-          <h3>Bill To</h3>
-          <p>
-            <strong>{invoice.customerNameEnSnapshot || invoice.customerNameArSnapshot}</strong>
-          </p>
-          {invoice.customerNameArSnapshot && invoice.customerNameEnSnapshot && (
-            <p dir="rtl">{invoice.customerNameArSnapshot}</p>
-          )}
-          <p>Customer Code: {invoice.customerCodeSnapshot}</p>
-          <p>{invoice.customerAddressSnapshot || 'Address not recorded'}</p>
-          <p>{invoice.customerCountrySnapshot || 'Country not recorded'}</p>
-          {invoice.customerPhoneSnapshot && <p>{invoice.customerPhoneSnapshot}</p>}
-          {invoice.customerTaxNumberSnapshot && <p>Tax ID: {invoice.customerTaxNumberSnapshot}</p>}
-        </div>
-        <div>
-          <h3>Invoice Metadata</h3>
-          <p>
-            <strong>Invoice Date:</strong> {date(invoice.invoiceDate)}
-          </p>
-          <p>
-            <strong>Invoice Type:</strong> Service invoice
-          </p>
-          <p>
-            <strong>Currency:</strong> {currency}
-          </p>
-          <p>
-            <strong>Service Period:</strong> {date(invoice.periodStart)} to{' '}
-            {date(invoice.periodEnd)}
-          </p>
-        </div>
-      </section>
-
-      <table className="invoice-lines-table">
+      <table className="nusrv-items">
         <thead>
           <tr>
-            <th>Description</th>
-            <th>Quantity</th>
-            <th>Unit Price</th>
-            <th>Discount</th>
-            <th>Taxes</th>
-            <th>Amount</th>
+            {['Description', 'Quantity', 'Unit Price', 'Discount', 'Taxes', 'Amount'].map((t) => (
+              <th key={t}>{t}</th>
+            ))}
           </tr>
         </thead>
         <tbody>
-          {invoice.lines.map((line) => (
-            <tr key={line.id}>
+          {invoice.lines.map((l) => (
+            <tr key={l.id}>
               <td>
-                <strong>{line.description}</strong>
-                {(line.serviceTypeSnapshot || line.packageSnapshot) && (
-                  <small>
-                    {[line.serviceTypeSnapshot, line.packageSnapshot].filter(Boolean).join(' · ')}
-                  </small>
-                )}
+                <strong>{l.description}</strong>
+                <small>{l.serviceSnapshotText}</small>
                 <small>
-                  {date(line.periodStart)} to {date(line.periodEnd)}
+                  {date(l.periodStart)} to {date(l.periodEnd)}
                 </small>
               </td>
-              <td>{line.quantity}</td>
-              <td>{money(line.unitPrice, invoice.currencyCode)}</td>
-              <td>{money(line.discountAmount, invoice.currencyCode)}</td>
+              <td>{l.quantity}</td>
+              <td>{l.unitPrice}</td>
+              <td>{l.discountAmount}</td>
               <td>
-                {line.taxCategoryCode || 'Not reviewed'}
-                {line.taxRate !== null ? ` · ${line.taxRate}%` : ''}
-                <small>{money(line.taxAmount, invoice.currencyCode)}</small>
+                {l.taxRate}%<small>{l.taxAmount}</small>
               </td>
-              <td>{money(line.lineTotal, invoice.currencyCode)}</td>
+              <td>{money(l.lineTotal, invoice.currencyCode)}</td>
             </tr>
           ))}
         </tbody>
       </table>
-
-      <section className="invoice-footer-grid">
-        <div>
-          {invoice.issuerBankDetailsSnapshot && (
-            <>
-              <h3>Bank Details</h3>
-              <p className="whitespace-pre-wrap">{invoice.issuerBankDetailsSnapshot}</p>
-            </>
-          )}
-          {official && invoice.fawtaraQrImageDataUrl && (
-            <div className="invoice-qr">
-              {/* The supplied image is rendered byte-for-byte; the CRM never regenerates a QR. */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img alt="Official JoFotara QR" src={invoice.fawtaraQrImageDataUrl} />
-              <span>Official JoFotara QR</span>
-            </div>
-          )}
-          {official && !invoice.fawtaraQrImageDataUrl && invoice.fawtaraQrPayload && (
-            <div className="invoice-qr-payload">
-              <strong>Official JoFotara QR payload recorded</strong>
-              <p>A QR image was not supplied during manual officialization.</p>
-              <code>{invoice.fawtaraQrPayload}</code>
-            </div>
-          )}
-        </div>
-        <dl className="invoice-totals">
-          <div>
-            <dt>Total Without Taxes</dt>
-            <dd>{money(invoice.effectiveSubtotal, currency)}</dd>
+      <dl className="nusrv-totals">
+        {[
+          ['Total Without Taxes', invoice.effectiveSubtotal],
+          ['Discount included', invoice.effectiveDiscountTotal],
+          ['Taxes', invoice.effectiveTaxTotal],
+          ['Total', invoice.effectiveGrandTotal],
+        ].map(([k, v]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd>{money(v!, invoice.effectiveCurrencyCode)}</dd>
           </div>
-          <div>
-            <dt>Discount</dt>
-            <dd>{money(invoice.effectiveDiscountTotal, currency)}</dd>
-          </div>
-          <div>
-            <dt>Tax</dt>
-            <dd>{money(invoice.effectiveTaxTotal, currency)}</dd>
-          </div>
-          <div className="invoice-grand-total">
-            <dt>Total</dt>
-            <dd>{money(invoice.effectiveGrandTotal, currency)}</dd>
-          </div>
-        </dl>
-      </section>
-
-      <footer className="invoice-document-footer">
+        ))}
+      </dl>
+      <footer className="nusrv-footer">
+        <div className="nusrv-bank">{invoice.issuerBankDetailsSnapshot}</div>
+        <div className="nusrv-rule" />
         <p>{invoice.issuerInvoiceEmailSnapshot}</p>
-        <p>
-          {official
-            ? `JoFotara status: ${invoice.fawtaraStatus}`
-            : 'This preview is not an official tax invoice.'}
-        </p>
+        <p>{official && invoice.fawtaraInvoiceUuid}</p>
+        <p>{official ? 'Electronic invoice' : 'DRAFT / NOT OFFICIAL'}</p>
       </footer>
     </article>
   );

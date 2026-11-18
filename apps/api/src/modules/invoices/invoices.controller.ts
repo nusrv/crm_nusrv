@@ -1,8 +1,11 @@
+import { FawtaraSubmissionService } from './fawtara-submission.service';
 import { Body, Controller, Get, Ip, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../../identity/auth-user';
 import { Roles } from '../../identity/roles.decorator';
 import {
   InvoiceListQueryDto,
+  InvoiceReasonDto,
+  SubmitOfficialInvoiceDto,
   RecordFawtaraRejectionDto,
   RecordFawtaraResultDto,
   UpdateInvoiceDraftDto,
@@ -12,11 +15,34 @@ import { InvoicesService } from './invoices.service';
 @Roles('ADMIN', 'ACCOUNTANT')
 @Controller('invoices')
 export class InvoicesController {
-  constructor(private readonly invoices: InvoicesService) {}
+  constructor(
+    private readonly invoices: InvoicesService,
+    private readonly submissions: FawtaraSubmissionService,
+  ) {}
 
   @Get()
   list(@Query() query: InvoiceListQueryDto) {
     return this.invoices.list(query);
+  }
+
+  @Get(':id/submissions')
+  history(@Param('id') id: string) {
+    return this.submissions.history(id);
+  }
+
+  @Post(':id/submit-official')
+  submit(
+    @Param('id') id: string,
+    @Body() input: SubmitOfficialInvoiceDto,
+    @Req() req: AuthenticatedRequest,
+    @Ip() ip: string,
+  ) {
+    return this.submissions.submit(id, input, {
+      actorId: req.user.id,
+      roles: req.user.roles,
+      initiation: 'HUMAN',
+      ipAddress: ip,
+    });
   }
 
   @Get(':id')
@@ -44,6 +70,26 @@ export class InvoicesController {
     @Ip() ip: string,
   ) {
     return this.invoices.updateDraft(id, input, { actorId: req.user.id, ipAddress: ip });
+  }
+
+  @Post(':id/cancel-draft')
+  cancelDraft(
+    @Param('id') id: string,
+    @Body() input: InvoiceReasonDto,
+    @Req() req: AuthenticatedRequest,
+    @Ip() ip: string,
+  ) {
+    return this.invoices.cancelDraft(id, input.reason, { actorId: req.user.id, ipAddress: ip });
+  }
+
+  @Post(':id/reconcile')
+  reconcile(
+    @Param('id') id: string,
+    @Body() input: InvoiceReasonDto,
+    @Req() req: AuthenticatedRequest,
+    @Ip() ip: string,
+  ) {
+    return this.invoices.reconcile(id, input.reason, { actorId: req.user.id, ipAddress: ip });
   }
 
   @Post(':id/preflight')

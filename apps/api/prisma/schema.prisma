@@ -241,6 +241,7 @@ enum InvoiceStatus {
   READY_FOR_FAWTARA
   FAWTARA_ACCEPTED
   FAWTARA_REJECTED
+  CANCELLED
 }
 
 model BillingEntity {
@@ -264,6 +265,8 @@ model BillingEntity {
   mailConfigurations     MailConfiguration[]
   invoices               Invoice[]
   invoiceSequences       InvoiceSequence[]
+  joFotaraConnections    JoFotaraConnection[]
+  lastInvoiceCounter     BigInt                @default(0) @map("last_invoice_counter")
 
   @@map("billing_entities")
 }
@@ -1447,7 +1450,7 @@ model InvoiceSequence {
   year            Int
   lastValue       Int           @default(0) @map("last_value")
   updatedAt       DateTime      @updatedAt @map("updated_at")
-  billingEntity   BillingEntity @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
+  billingEntity   BillingEntity @relation(fields: [billingEntityId], references: [id], onDelete: Restrict, map: "invoice_sequences_billing_entity_fkey")
 
   @@id([billingEntityId, year])
   @@map("invoice_sequences")
@@ -1493,35 +1496,53 @@ model Invoice {
   taxTotal      Decimal @default(0) @map("tax_total") @db.Decimal(14, 3)
   grandTotal    Decimal @default(0) @map("grand_total") @db.Decimal(14, 3)
 
-  fawtaraStatus           String?   @map("fawtara_status") @db.VarChar(50)
-  fawtaraInvoiceNumber    String?   @map("fawtara_invoice_number") @db.VarChar(191)
-  fawtaraInvoiceUuid      String?   @map("fawtara_invoice_uuid") @db.VarChar(191)
-  fawtaraQrPayload        String?   @map("fawtara_qr_payload") @db.Text
-  fawtaraQrImageDataUrl   String?   @map("fawtara_qr_image_data_url") @db.Text
-  fawtaraSubmittedAt      DateTime? @map("fawtara_submitted_at")
-  fawtaraAcceptedAt       DateTime? @map("fawtara_accepted_at")
-  latestFawtaraMessage    String?   @map("latest_fawtara_message") @db.Text
-  latestFawtaraResultJson Json?     @map("latest_fawtara_result_json")
-  officialCurrencyCode    String?   @map("official_currency_code") @db.VarChar(3)
-  officialSubtotal        Decimal?  @map("official_subtotal") @db.Decimal(14, 3)
-  officialDiscountTotal   Decimal?  @map("official_discount_total") @db.Decimal(14, 3)
-  officialTaxTotal        Decimal?  @map("official_tax_total") @db.Decimal(14, 3)
-  officialGrandTotal      Decimal?  @map("official_grand_total") @db.Decimal(14, 3)
-  officializationNote     String?   @map("officialization_note") @db.Text
+  fawtaraStatus             String?             @map("fawtara_status") @db.VarChar(50)
+  fawtaraInvoiceNumber      String?             @map("fawtara_invoice_number") @db.VarChar(191)
+  fawtaraInvoiceUuid        String?             @map("fawtara_invoice_uuid") @db.VarChar(191)
+  fawtaraQrPayload          String?             @map("fawtara_qr_payload") @db.Text
+  fawtaraQrImageDataUrl     String?             @map("fawtara_qr_image_data_url") @db.Text
+  fawtaraSubmittedAt        DateTime?           @map("fawtara_submitted_at")
+  fawtaraAcceptedAt         DateTime?           @map("fawtara_accepted_at")
+  latestFawtaraMessage      String?             @map("latest_fawtara_message") @db.Text
+  latestFawtaraResultJson   Json?               @map("latest_fawtara_result_json")
+  officialCurrencyCode      String?             @map("official_currency_code") @db.VarChar(3)
+  officialSubtotal          Decimal?            @map("official_subtotal") @db.Decimal(14, 3)
+  officialDiscountTotal     Decimal?            @map("official_discount_total") @db.Decimal(14, 3)
+  officialTaxTotal          Decimal?            @map("official_tax_total") @db.Decimal(14, 3)
+  officialGrandTotal        Decimal?            @map("official_grand_total") @db.Decimal(14, 3)
+  submissionUuid            String              @unique @default(uuid()) @map("submission_uuid") @db.VarChar(36)
+  invoiceTypeName           String?             @map("invoice_type_name") @db.VarChar(3)
+  invoiceCounter            BigInt?             @map("invoice_counter")
+  issuerCountryCodeSnapshot String?             @map("issuer_country_code_snapshot") @db.VarChar(2)
+  buyerCountryCodeSnapshot  String?             @map("buyer_country_code_snapshot") @db.VarChar(2)
+  selectedConnectionId      String?             @map("selected_connection_id") @db.VarChar(36)
+  revision                  Int                 @default(0)
+  submissionLock            String?             @map("submission_lock") @db.VarChar(36)
+  submissions               FawtaraSubmission[]
+  selectedConnection        JoFotaraConnection? @relation(fields: [selectedConnectionId], references: [id], onDelete: Restrict)
+  officializationProvenance String?             @map("officialization_provenance") @db.VarChar(10)
+  cancellationReason        String?             @map("cancellation_reason") @db.Text
+  cancelledAt               DateTime?           @map("cancelled_at")
+  cancelledBy               String?             @map("cancelled_by") @db.VarChar(36)
+  reconciliationRequired    Boolean             @default(false) @map("reconciliation_required")
+  reconciledAt              DateTime?           @map("reconciled_at")
+  reconciledBy              String?             @map("reconciled_by") @db.VarChar(36)
+  reconciliationNote        String?             @map("reconciliation_note") @db.Text
+  officializationNote       String?             @map("officialization_note") @db.Text
 
   createdAt          DateTime      @default(now()) @map("created_at")
   updatedAt          DateTime      @updatedAt @map("updated_at")
-  customer           Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  billingEntity      BillingEntity @relation(fields: [billingEntityId], references: [id], onDelete: Restrict)
-  sourceSubscription Subscription  @relation("InvoiceSourceSubscription", fields: [sourceSubscriptionId], references: [id], onDelete: Restrict)
+  customer           Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict, map: "invoices_customer_fkey")
+  billingEntity      BillingEntity @relation(fields: [billingEntityId], references: [id], onDelete: Restrict, map: "invoices_billing_entity_fkey")
+  sourceSubscription Subscription  @relation("InvoiceSourceSubscription", fields: [sourceSubscriptionId], references: [id], onDelete: Restrict, map: "invoices_source_subscription_fkey")
   lines              InvoiceLine[]
 
-  @@index([status, invoiceDate])
-  @@index([customerId, invoiceDate])
-  @@index([billingEntityId, invoiceDate])
-  @@index([sourceSubscriptionId, periodStart, periodEnd])
   @@unique([billingEntityId, fawtaraInvoiceNumber], map: "invoices_entity_fawtara_number_key")
   @@unique([fawtaraInvoiceUuid], map: "invoices_fawtara_uuid_key")
+  @@index([status, invoiceDate])
+  @@index([customerId, invoiceDate], map: "invoices_customer_invoice_date_idx")
+  @@index([billingEntityId, invoiceDate], map: "invoices_entity_invoice_date_idx")
+  @@index([sourceSubscriptionId, periodStart, periodEnd], map: "invoices_subscription_period_idx")
   @@map("invoices")
 }
 
@@ -1547,10 +1568,67 @@ model InvoiceLine {
   periodEnd               DateTime?     @map("period_end") @db.Date
   createdAt               DateTime      @default(now()) @map("created_at")
   updatedAt               DateTime      @updatedAt @map("updated_at")
-  invoice                 Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  sourceSubscription      Subscription? @relation("InvoiceLineSourceSubscription", fields: [sourceSubscriptionId], references: [id], onDelete: Restrict)
+  invoice                 Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade, map: "invoice_lines_invoice_fkey")
+  sourceSubscription      Subscription? @relation("InvoiceLineSourceSubscription", fields: [sourceSubscriptionId], references: [id], onDelete: Restrict, map: "invoice_lines_source_subscription_fkey")
 
-  @@unique([invoiceId, position])
-  @@index([sourceSubscriptionId])
+  @@unique([invoiceId, position], map: "invoice_lines_invoice_position_key")
+  @@index([sourceSubscriptionId], map: "invoice_lines_source_subscription_idx")
   @@map("invoice_lines")
+}
+
+// No physical-delete API. Nullable unique default key enforces one active default per entity.
+model JoFotaraConnection {
+  id                          String              @id @default(uuid()) @db.VarChar(36)
+  billingEntityId             String              @map("billing_entity_id") @db.VarChar(36)
+  displayName                 String              @map("display_name") @db.VarChar(191)
+  userLabel                   String?             @map("user_label") @db.VarChar(191)
+  incomeSourceSequence        String              @map("income_source_sequence") @db.VarChar(80)
+  clientIdCiphertext          String?             @map("client_id_ciphertext") @db.Text
+  secretKeyCiphertext         String?             @map("secret_key_ciphertext") @db.Text
+  enabled                     Boolean             @default(true)
+  productionSubmissionEnabled Boolean             @default(false) @map("production_submission_enabled")
+  defaultEntityKey            String?             @unique @map("default_entity_key") @db.VarChar(36)
+  createdAt                   DateTime            @default(now()) @map("created_at")
+  updatedAt                   DateTime            @updatedAt @map("updated_at")
+  lastUsedAt                  DateTime?           @map("last_used_at")
+  disabledAt                  DateTime?           @map("disabled_at")
+  billingEntity               BillingEntity       @relation(fields: [billingEntityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  submissions                 FawtaraSubmission[]
+  selectedInvoices            Invoice[]
+
+  @@index([billingEntityId, enabled])
+  @@map("jofotara_connections")
+}
+
+model FawtaraSubmission {
+  id                     String             @id @default(uuid()) @db.VarChar(36)
+  invoiceId              String             @map("invoice_id") @db.VarChar(36)
+  joFotaraConnectionId   String             @map("jofotara_connection_id") @db.VarChar(36)
+  attemptNumber          Int                @map("attempt_number")
+  businessId             String             @map("business_id") @db.VarChar(80)
+  businessUuid           String             @map("business_uuid") @db.VarChar(36)
+  requestXmlHash         String             @map("request_xml_hash") @db.VarChar(64)
+  // Invoice-only exact XML retained for audit/recovery. Never credentials or HTTP headers.
+  requestXml             String             @map("request_xml") @db.LongText
+  connectionNameSnapshot String             @map("connection_name_snapshot") @db.VarChar(191)
+  incomeSourceSnapshot   String             @map("income_source_snapshot") @db.VarChar(80)
+  httpStatus             Int?               @map("http_status")
+  einvStatus             String?            @map("einv_status") @db.VarChar(50)
+  results                Json?
+  message                String?            @db.Text
+  officialNumber         String?            @map("official_number") @db.VarChar(191)
+  officialUuid           String?            @map("official_uuid") @db.VarChar(191)
+  officialQr             String?            @map("official_qr") @db.Text
+  outcome                String             @db.VarChar(30)
+  errorClassification    String?            @map("error_classification") @db.VarChar(50)
+  actorId                String             @map("actor_id") @db.VarChar(36)
+  createdAt              DateTime           @default(now()) @map("created_at")
+  submittedAt            DateTime?          @map("submitted_at")
+  completedAt            DateTime?          @map("completed_at")
+  invoice                Invoice            @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  connection             JoFotaraConnection @relation(fields: [joFotaraConnectionId], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, attemptNumber])
+  @@index([joFotaraConnectionId, createdAt])
+  @@map("fawtara_submissions")
 }

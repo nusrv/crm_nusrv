@@ -1,9 +1,12 @@
+import { isManualQrImage } from './manual-qr';
+import { SecretEncryptionService } from '../../security/secret-encryption.service';
 import {
   BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { FawtaraMapper } from './fawtara-mapper';
 import { AuditService } from '../../audit/audit.service';
 import type { MutationContext } from '../../common/mutation-context';
 import { pageMetadata } from '../../common/page-query.dto';
@@ -26,7 +29,7 @@ import type {
 const invoiceInclude = {
   lines: { orderBy: { position: 'asc' as const } },
   customer: { select: { id: true, customerCode: true, nameEn: true, nameAr: true } },
-  billingEntity: { select: { id: true, code: true, name: true } },
+  billingEntity: { select: { id: true, code: true, name: true, active: true } },
   sourceSubscription: {
     select: { id: true, subscriptionCode: true, name: true, status: true },
   },
@@ -42,6 +45,8 @@ export class InvoicesService {
     private readonly clock: ClockService,
     private readonly businessTime: BusinessTimeService,
     private readonly preflightService: InvoicePreflightService,
+    private readonly mapper: FawtaraMapper = new FawtaraMapper(),
+    private readonly secrets?: SecretEncryptionService,
   ) {}
 
   async list(query: InvoiceListQueryDto) {
@@ -161,6 +166,11 @@ export class InvoicesService {
           update: { lastValue: { increment: 1 } },
         });
         const internalReference = `${billingEntity.code}-INV-${sequence.year}-${String(sequence.lastValue).padStart(6, '0')}`;
+        const counter = await tx.billingEntity.update({
+          where: { id: billingEntity.id },
+          data: { lastInvoiceCounter: { increment: 1 } },
+          select: { lastInvoiceCounter: true },
+        });
         const line = calculated.lines[0]!;
         const invoice = await tx.invoice.create({
           data: {
@@ -168,6 +178,7 @@ export class InvoicesService {
             billingEntityId: billingEntity.id,
             sourceSubscriptionId: subscription.id,
             internalReference,
+            invoiceCounter: counter.lastInvoiceCounter,
             activeDraftKey,
             invoiceDate,
             currencyCode: subscription.currency,
@@ -188,9 +199,10 @@ export class InvoicesService {
             issuerTaxNumberSnapshot: billingEntity.taxNumber,
             issuerAddressSnapshot: billingEntity.address,
             issuerInvoiceEmailSnapshot: billingEntity.invoiceEmail,
-            // The existing BillingEntity field is encrypted and not operationally exposed. Never
-            // copy ciphertext into a printable invoice snapshot.
-            issuerBankDetailsSnapshot: null,
+            // Decrypt configured bank data once into this immutable invoice snapshot.
+            issuerBankDetailsSnapshot: billingEntity.bankDetailsCiphertext
+              ? this.decryptBankDetails(billingEntity.bankDetailsCiphertext)
+              : null,
             subtotal: calculated.subtotal,
             discountTotal: calculated.discountTotal,
             taxTotal: calculated.taxTotal,
@@ -246,6 +258,13 @@ export class InvoicesService {
     const oldState = await this.requireInvoice(id);
     this.requireStatus(oldState, InvoiceStatus.DRAFT, 'Only a DRAFT invoice can be edited.');
 
+    if (input.selectedConnectionId) {
+      const connection = await this.prisma.joFotaraConnection.findFirst({
+        where: { id: input.selectedConnectionId, billingEntityId: oldState.billingEntityId },
+      });
+      if (!connection)
+        throw new BadRequestException('Connection does not belong to this Billing Entity.');
+    }
     const invoiceDate = input.invoiceDate ? new Date(input.invoiceDate) : oldState.invoiceDate;
     const periodStart = input.periodStart ? new Date(input.periodStart) : oldState.periodStart;
     const periodEnd = input.periodEnd ? new Date(input.periodEnd) : oldState.periodEnd;
@@ -285,11 +304,28 @@ export class InvoicesService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const reserved = await tx.invoice.updateMany({
+          where: {
+            id,
+            status: InvoiceStatus.DRAFT,
+            submissionLock: null,
+            revision: oldState.revision,
+          },
+          data: { revision: { increment: 1 } },
+        });
+        if (reserved.count !== 1)
+          throw new ConflictException('Invoice changed concurrently. Reload.');
         await tx.invoiceLine.deleteMany({ where: { invoiceId: id } });
         const invoice = await tx.invoice.update({
           where: { id },
           data: {
             invoiceDate,
+            invoiceTypeName: input.invoiceTypeName,
+            issuerCountryCodeSnapshot: input.issuerCountryCode,
+            buyerCountryCodeSnapshot: input.buyerCountryCode,
+            selectedConnectionId: input.selectedConnectionId,
+            issuerBankDetailsSnapshot: input.issuerBankDetails,
+            issuerLegalNameArSnapshot: input.issuerLegalNameAr,
             periodStart,
             periodEnd,
             activeDraftKey,
@@ -347,14 +383,118 @@ export class InvoicesService {
     }
   }
 
-  async preflight(id: string) {
-    return this.preflightService.validate(await this.requireInvoice(id));
+  async cancelDraft(id: string, reason: string, context: MutationContext) {
+    if (!reason?.trim()) throw new BadRequestException('Cancellation reason is required.');
+    const oldState = await this.requireInvoice(id);
+    this.requireStatus(oldState, InvoiceStatus.DRAFT, 'Only a DRAFT invoice can be cancelled.');
+    return this.transitionStatus(
+      oldState,
+      InvoiceStatus.CANCELLED,
+      'invoice.draft_cancelled',
+      context,
+      {
+        activeDraftKey: null,
+        cancellationReason: reason.trim(),
+        cancelledAt: this.clock.now(),
+        cancelledBy: context.actorId,
+      },
+    );
+  }
+
+  async reconcile(id: string, note: string, context: MutationContext) {
+    if (!note?.trim()) throw new BadRequestException('Reconciliation note is required.');
+    const oldState = await this.requireInvoice(id);
+    this.requireStatus(
+      oldState,
+      InvoiceStatus.FAWTARA_ACCEPTED,
+      'Only accepted invoices can be reconciled.',
+    );
+    if (!oldState.reconciliationRequired)
+      throw new BadRequestException('No reconciliation is required.');
+    // Acknowledgement does not rewrite draft lines. The final document explicitly separates
+    // historical CRM line values and authoritative official totals when they differ.
+    return this.transitionStatus(
+      oldState,
+      InvoiceStatus.FAWTARA_ACCEPTED,
+      'invoice.official_values_reconciled',
+      context,
+      {
+        reconciliationRequired: false,
+        reconciledAt: this.clock.now(),
+        reconciledBy: context.actorId,
+        reconciliationNote: note.trim(),
+      },
+    );
+  }
+
+  async preflight(id: string, connectionId?: string) {
+    const invoice = await this.requireInvoice(id);
+    const result = this.preflightService.validate(invoice);
+    const selected = connectionId ?? invoice.selectedConnectionId;
+    const connection = await this.prisma.joFotaraConnection.findFirst({
+      where: {
+        billingEntityId: invoice.billingEntityId,
+        ...(selected ? { id: selected } : { defaultEntityKey: invoice.billingEntityId }),
+      },
+    });
+    const add = (code: string, label: string, pass: boolean, message: string, blocking = true) =>
+      result.checks.push({ code, label, status: pass ? 'PASS' : 'FAIL', message, blocking });
+    add(
+      'BILLING_ENTITY',
+      'Billing Entity',
+      invoice.billingEntity.active,
+      'Invoice must belong to an active Billing Entity.',
+    );
+    const errors = this.mapper.readiness(invoice);
+    add(
+      'UBL_MAPPING',
+      'UBL mapping readiness',
+      errors.length === 0,
+      errors.join(' ') || 'Supported official profile is complete.',
+    );
+    add(
+      'CONNECTION',
+      'Billing Entity connection',
+      Boolean(connection?.enabled),
+      'An enabled connection belonging to this Billing Entity is required.',
+    );
+    add(
+      'INCOME_SOURCE',
+      'Income Source Sequence',
+      Boolean(connection && /^\d+$/.test(connection.incomeSourceSequence)),
+      'Connection must have its own numeric income source sequence.',
+    );
+    add(
+      'CLIENT_ID',
+      'Client ID configured',
+      Boolean(connection?.clientIdCiphertext),
+      'Encrypted Client ID required.',
+    );
+    add(
+      'SECRET_KEY',
+      'Secret Key configured',
+      Boolean(connection?.secretKeyCiphertext),
+      'Encrypted Secret Key required.',
+    );
+    add(
+      'PRODUCTION_PERMISSION',
+      'Production submission',
+      Boolean(connection?.productionSubmissionEnabled),
+      connection?.productionSubmissionEnabled
+        ? 'ENABLED: explicit human action still required.'
+        : 'DISABLED: readiness is allowed, real submission is blocked.',
+      false,
+    );
+    result.valid = result.valid && result.checks.every((c) => !c.blocking || c.status === 'PASS');
+    result.scopeNote =
+      'Snapshot arithmetic, supported ISTD UBL mapping, and issuer-scoped connection readiness. Production permission is separate. No network request is performed.';
+    return result;
   }
 
   async markReady(id: string, context: MutationContext) {
     const oldState = await this.requireInvoice(id);
     this.requireStatus(oldState, InvoiceStatus.DRAFT, 'Only a DRAFT invoice can be marked ready.');
-    const preflight = this.preflightService.validate(oldState);
+    const preflight = await this.preflight(id);
     if (!preflight.valid) {
       throw new BadRequestException({
         message: 'Invoice preflight has blocking failures.',
@@ -400,8 +540,16 @@ export class InvoicesService {
       InvoiceStatus.READY_FOR_FAWTARA,
       'Only a READY_FOR_FAWTARA invoice can be officialized.',
     );
-    if (!input.qrPayload?.trim() && !input.qrImageDataUrl?.trim()) {
-      throw new BadRequestException('Record the official JoFotara QR payload or QR image.');
+    if (!isManualQrImage(input.qrImageDataUrl)) {
+      throw new BadRequestException(
+        'An official graphical QR image is required for manual officialization.',
+      );
+    }
+    if (
+      !['SUBMITTED', 'ALREADY_SUBMITTED'].includes(input.fawtaraStatus) ||
+      !input.invoiceNumber?.trim()
+    ) {
+      throw new BadRequestException('Accepted EINV status and official number are required.');
     }
     const acceptedAt = new Date(input.acceptedAt);
     if (!Number.isFinite(acceptedAt.getTime())) {
@@ -420,9 +568,15 @@ export class InvoicesService {
     try {
       return await this.prisma.$transaction(async (tx) => {
         const changed = await tx.invoice.updateMany({
-          where: { id, status: InvoiceStatus.READY_FOR_FAWTARA },
+          where: {
+            id,
+            status: InvoiceStatus.READY_FOR_FAWTARA,
+            submissionLock: null,
+            revision: oldState.revision,
+          },
           data: {
             status: InvoiceStatus.FAWTARA_ACCEPTED,
+            revision: { increment: 1 },
             activeDraftKey: null,
             fawtaraStatus: input.fawtaraStatus,
             fawtaraInvoiceNumber: input.invoiceNumber.trim(),
@@ -444,6 +598,8 @@ export class InvoicesService {
             officialTaxTotal: officialValues.taxTotal,
             officialGrandTotal: officialValues.grandTotal,
             officializationNote: this.cleanText(input.note),
+            officializationProvenance: 'MANUAL',
+            reconciliationRequired: discrepancies.length > 0,
           },
         });
         if (changed.count !== 1) {
@@ -493,9 +649,15 @@ export class InvoicesService {
     try {
       return await this.prisma.$transaction(async (tx) => {
         const changed = await tx.invoice.updateMany({
-          where: { id, status: InvoiceStatus.READY_FOR_FAWTARA },
+          where: {
+            id,
+            status: InvoiceStatus.READY_FOR_FAWTARA,
+            submissionLock: null,
+            revision: oldState.revision,
+          },
           data: {
             status: InvoiceStatus.FAWTARA_REJECTED,
+            revision: { increment: 1 },
             activeDraftKey: null,
             fawtaraStatus: 'NOT_SUBMITTED',
             latestFawtaraMessage: input.message.trim(),
@@ -543,8 +705,13 @@ export class InvoicesService {
     try {
       return await this.prisma.$transaction(async (tx) => {
         const changed = await tx.invoice.updateMany({
-          where: { id: oldState.id, status: oldState.status },
-          data: { status, ...extraData },
+          where: {
+            id: oldState.id,
+            status: oldState.status,
+            submissionLock: null,
+            revision: oldState.revision,
+          },
+          data: { status, revision: { increment: 1 }, ...extraData },
         });
         if (changed.count !== 1) {
           throw new ConflictException('Invoice status changed concurrently. Reload and try again.');
@@ -609,6 +776,18 @@ export class InvoicesService {
     };
   }
 
+  private decryptBankDetails(ciphertext: string): string {
+    if (!this.secrets)
+      throw new BadRequestException('Bank snapshot encryption service unavailable.');
+    try {
+      const value: unknown = this.secrets.decrypt(ciphertext);
+      if (typeof value !== 'string') throw new Error();
+      return value;
+    } catch {
+      throw new BadRequestException('Billing Entity bank details cannot be decrypted.');
+    }
+  }
+
   private activeDraftKey(subscriptionId: string, start: Date, end: Date) {
     return `${subscriptionId}:${this.dateKey(start)}:${this.dateKey(end)}`;
   }
@@ -667,6 +846,19 @@ export class InvoicesService {
     return {
       id: invoice.id,
       status: invoice.status,
+      invoiceTypeName: invoice.invoiceTypeName,
+      invoiceCounter: invoice.invoiceCounter?.toString(),
+      submissionUuid: invoice.submissionUuid,
+      selectedConnectionId: invoice.selectedConnectionId,
+      issuerCountryCode: invoice.issuerCountryCodeSnapshot,
+      buyerCountryCode: invoice.buyerCountryCodeSnapshot,
+      issuerBankDetails: invoice.issuerBankDetailsSnapshot,
+      cancellationReason: invoice.cancellationReason,
+      reconciliationRequired: invoice.reconciliationRequired,
+      reconciledAt: invoice.reconciledAt,
+      reconciledBy: invoice.reconciledBy,
+      reconciliationNote: invoice.reconciliationNote,
+      officializationProvenance: invoice.officializationProvenance,
       internalReference: invoice.internalReference,
       invoiceDate: invoice.invoiceDate,
       currencyCode: invoice.currencyCode,
@@ -727,13 +919,19 @@ export class InvoicesService {
     });
     return {
       ...invoice,
+      invoiceCounter: invoice.invoiceCounter?.toString() ?? null,
       effectiveCurrencyCode: invoice.officialCurrencyCode ?? invoice.currencyCode,
       effectiveSubtotal: invoice.officialSubtotal ?? invoice.subtotal,
       effectiveDiscountTotal: invoice.officialDiscountTotal ?? invoice.discountTotal,
       effectiveTaxTotal: invoice.officialTaxTotal ?? invoice.taxTotal,
       effectiveGrandTotal: invoice.officialGrandTotal ?? invoice.grandTotal,
       officialValueDiscrepancies: discrepancies,
-      locked: invoice.status === InvoiceStatus.FAWTARA_ACCEPTED,
+      submissionPending: Boolean(invoice.submissionLock),
+      finalPrintEnabled:
+        invoice.status === InvoiceStatus.FAWTARA_ACCEPTED &&
+        !invoice.reconciliationRequired &&
+        Boolean(invoice.fawtaraQrImageDataUrl),
+      locked: invoice.status !== InvoiceStatus.DRAFT,
     };
   }
 }

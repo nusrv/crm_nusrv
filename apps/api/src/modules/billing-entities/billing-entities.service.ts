@@ -1,3 +1,4 @@
+import { SecretEncryptionService } from '../../security/secret-encryption.service';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { AuditService } from '../../audit/audit.service';
 import type { MutationContext } from '../../common/mutation-context';
@@ -27,7 +28,22 @@ export class BillingEntitiesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly secrets: SecretEncryptionService,
   ) {}
+
+  private prepareData<T extends CreateBillingEntityDto | UpdateBillingEntityDto>(input: T) {
+    const { bankDetails, ...data } = input;
+    return {
+      ...data,
+      ...(bankDetails === undefined
+        ? {}
+        : {
+            bankDetailsCiphertext: bankDetails.trim()
+              ? this.secrets.encrypt(bankDetails.trim())
+              : null,
+          }),
+    };
+  }
 
   list() {
     return this.prisma.billingEntity.findMany({ select: safeSelect, orderBy: { name: 'asc' } });
@@ -45,7 +61,10 @@ export class BillingEntitiesService {
   async create(input: CreateBillingEntityDto, context: MutationContext) {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const entity = await tx.billingEntity.create({ data: input, select: safeSelect });
+        const entity = await tx.billingEntity.create({
+          data: this.prepareData(input),
+          select: safeSelect,
+        });
         // Pre-create the sequence row here rather than relying solely on CustomerCodeService's
         // upsert-on-first-use: it closes the (extremely unlikely, but real) race where the very
         // first two customers under a brand-new Billing Entity are created concurrently before
@@ -76,7 +95,7 @@ export class BillingEntitiesService {
       return await this.prisma.$transaction(async (tx) => {
         const entity = await tx.billingEntity.update({
           where: { id },
-          data: input,
+          data: this.prepareData(input),
           select: safeSelect,
         });
         await this.audit.record(

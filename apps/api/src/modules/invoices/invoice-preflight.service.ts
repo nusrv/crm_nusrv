@@ -226,7 +226,7 @@ export class InvoicePreflightService {
       'Required JoFotara data',
       localFawtaraReadiness,
       localFawtaraReadiness
-        ? 'The local fields required by this manual-first foundation are present. Full UBL 2.1 mapping remains a later validated sub-phase.'
+        ? 'Basic issuer, buyer, and tax snapshot fields are present. UBL and connection readiness are checked separately.'
         : 'Local JoFotara readiness needs an internal reference, issuer identity/tax data, buyer name, and explicit line tax treatment.',
     );
 

@@ -1,4 +1,5 @@
 'use client';
+import { JoFotaraConnections } from './jofotara-connections';
 
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
@@ -51,6 +52,7 @@ export function BillingEntitiesManager() {
       address: value('address') || undefined,
       invoiceEmail: value('invoiceEmail') || undefined,
       active: value('active') === 'true',
+      bankDetails: value('bankDetails') || undefined,
     };
     try {
       await apiRequest(`/billing-entities${editing ? `/${editing.id}` : ''}`, {
@@ -93,6 +95,12 @@ export function BillingEntitiesManager() {
           </button>
         </div>
       )}
+      {items.map((entity) => (
+        <details key={entity.id} className="panel mb-3">
+          <summary>JoFotara ? {entity.name}</summary>
+          <JoFotaraConnections entityId={entity.id} />
+        </details>
+      ))}
       {formOpen && (
         <Modal
           onClose={() => setFormOpen(false)}
@@ -139,6 +147,10 @@ export function BillingEntitiesManager() {
             <label className="field field-wide">
               <span>Address</span>
               <textarea defaultValue={editing?.address ?? ''} name="address" rows={2} />
+            </label>
+            <label className="field field-wide">
+              Replace invoice bank details (blank keeps saved value)
+              <textarea name="bankDetails" rows={4} />
             </label>
             <div className="field-wide flex gap-3">
               <button className="button-primary" type="submit">

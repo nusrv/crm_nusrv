@@ -14,6 +14,21 @@ function invoice(overrides: Record<string, unknown> = {}) {
     sourceSubscriptionId: 'subscription-1',
     status: InvoiceStatus.DRAFT,
     internalReference: 'NS-INV-2026-000001',
+    invoiceCounter: 1n,
+    submissionUuid: 'd0fe13c4-94a8-4b4d-88c2-a92204b58717',
+    invoiceTypeName: '022',
+    issuerCountryCodeSnapshot: 'JO',
+    buyerCountryCodeSnapshot: 'JO',
+    selectedConnectionId: null,
+    submissionLock: null,
+    cancellationReason: null,
+    cancelledBy: null,
+    cancelledAt: null,
+    reconciliationRequired: false,
+    reconciledAt: null,
+    reconciledBy: null,
+    reconciliationNote: null,
+    officializationProvenance: null,
     activeDraftKey: 'subscription-1:2026-01-01:2027-01-01',
     invoiceDate: new Date('2026-11-17'),
     currencyCode: 'JOD',
@@ -25,11 +40,11 @@ function invoice(overrides: Record<string, unknown> = {}) {
     customerAddressSnapshot: 'Original Address',
     customerCountrySnapshot: 'Jordan',
     customerPhoneSnapshot: '+962700000000',
-    customerTaxNumberSnapshot: 'CUSTOMER-TAX',
+    customerTaxNumberSnapshot: '33445544',
     issuerCodeSnapshot: 'NS',
     issuerLegalNameSnapshot: 'New Serve',
     issuerLegalNameArSnapshot: null,
-    issuerTaxNumberSnapshot: 'ISSUER-TAX',
+    issuerTaxNumberSnapshot: '12345678',
     issuerAddressSnapshot: 'Issuer Address',
     issuerInvoiceEmailSnapshot: 'billing@example.com',
     issuerBankDetailsSnapshot: null,
@@ -60,7 +75,7 @@ function invoice(overrides: Record<string, unknown> = {}) {
       nameEn: 'Original Customer',
       nameAr: null,
     },
-    billingEntity: { id: 'entity-1', code: 'NS', name: 'New Serve' },
+    billingEntity: { id: 'entity-1', code: 'NS', name: 'New Serve', active: true },
     sourceSubscription: {
       id: 'subscription-1',
       subscriptionCode: 'NS0001-S01',
@@ -77,7 +92,7 @@ function invoice(overrides: Record<string, unknown> = {}) {
         quantity: amount('1.000'),
         unitPrice: amount('100.000'),
         discountAmount: amount('0.000'),
-        taxCategoryCode: 'STANDARD',
+        taxCategoryCode: 'S',
         taxRate: amount('16.0000'),
         lineSubtotal: amount('100.000'),
         taxAmount: amount('16.000'),
@@ -141,7 +156,22 @@ function serviceWith(prisma: Record<string, unknown>, preflight = { validate: je
     ),
   };
   const service = new InvoicesService(
-    prisma as never,
+    {
+      joFotaraConnection: {
+        findFirst: jest.fn(() =>
+          Promise.resolve({
+            id: 'conn-1',
+            billingEntityId: 'entity-1',
+            enabled: true,
+            incomeSourceSequence: '123',
+            clientIdCiphertext: 'encrypted',
+            secretKeyCiphertext: 'encrypted',
+            productionSubmissionEnabled: false,
+          }),
+        ),
+      },
+      ...(prisma as object),
+    } as never,
     audit as never,
     { now: () => new Date('2026-11-17T10:00:00.000Z') },
     { businessDate: () => new Date('2026-11-17') } as never,
@@ -170,6 +200,7 @@ describe('InvoicesService creation', () => {
       return Promise.resolve(persisted);
     });
     const tx = {
+      billingEntity: { update: jest.fn(() => Promise.resolve({ lastInvoiceCounter: 1n })) },
       invoiceSequence: {
         upsert: jest.fn(() => Promise.resolve({ year: 2026, lastValue: 1 })),
       },
@@ -193,7 +224,9 @@ describe('InvoicesService creation', () => {
     expect(result.lines[0]?.taxRate).toBeNull();
     expect(create).toHaveBeenCalledTimes(1);
     expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ eventKey: 'invoice.created_from_subscription' }),
+      expect.objectContaining<Record<string, unknown>>({
+        eventKey: 'invoice.created_from_subscription',
+      }),
       expect.anything(),
     );
   });
@@ -236,6 +269,7 @@ describe('InvoicesService draft/preflight transitions', () => {
     const tx = {
       invoiceLine: { deleteMany: jest.fn(() => Promise.resolve({ count: 1 })) },
       invoice: {
+        updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
         update: jest.fn((input: { data: Record<string, unknown> }) => {
           updatedData = input.data;
           const lineCreate = (input.data.lines as { create: Array<Record<string, unknown>> })
@@ -268,7 +302,7 @@ describe('InvoicesService draft/preflight transitions', () => {
             quantity: '2',
             unitPrice: '50',
             discountAmount: '10',
-            taxCategoryCode: 'STANDARD',
+            taxCategoryCode: 'S',
             taxRate: '16',
           },
         ],
@@ -277,7 +311,7 @@ describe('InvoicesService draft/preflight transitions', () => {
     );
 
     expect(updatedData).toEqual(
-      expect.objectContaining({
+      expect.objectContaining<Record<string, unknown>>({
         subtotal: '90.000',
         discountTotal: '10.000',
         taxTotal: '14.400',
@@ -315,7 +349,9 @@ describe('InvoicesService draft/preflight transitions', () => {
     const result = await service.markReady(old.id, context);
     expect(result.status).toBe(InvoiceStatus.READY_FOR_FAWTARA);
     expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ eventKey: 'invoice.marked_ready_for_fawtara' }),
+      expect.objectContaining<Record<string, unknown>>({
+        eventKey: 'invoice.marked_ready_for_fawtara',
+      }),
       tx,
     );
   });
@@ -373,6 +409,8 @@ describe('InvoicesService manual JoFotara officialization', () => {
         invoiceNumber: 'EINV-1',
         invoiceUuid: 'official-uuid',
         qrPayload: 'official-qr-payload',
+        qrImageDataUrl:
+          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jPZkAAAAASUVORK5CYII=',
         acceptedAt: '2026-11-17T10:00:00.000Z',
         officialCurrencyCode: 'JOD',
         officialGrandTotal: '117.000',
@@ -381,7 +419,7 @@ describe('InvoicesService manual JoFotara officialization', () => {
     );
 
     expect(updateData).toEqual(
-      expect.objectContaining({
+      expect.objectContaining<Record<string, unknown>>({
         status: InvoiceStatus.FAWTARA_ACCEPTED,
         activeDraftKey: null,
         fawtaraInvoiceNumber: 'EINV-1',
@@ -392,10 +430,12 @@ describe('InvoicesService manual JoFotara officialization', () => {
     expect(result.locked).toBe(true);
     expect(result.effectiveGrandTotal.toString()).toBe('117.000');
     expect(result.officialValueDiscrepancies).toEqual(
-      expect.arrayContaining([expect.objectContaining({ field: 'grandTotal' })]),
+      expect.arrayContaining([
+        expect.objectContaining<Record<string, unknown>>({ field: 'grandTotal' }),
+      ]),
     );
     expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expect.objectContaining<Record<string, unknown>>({
         eventKey: 'invoice.fawtara_result_recorded',
       }),
       tx,
@@ -413,6 +453,100 @@ describe('InvoicesService manual JoFotara officialization', () => {
     });
     await expect(service.updateDraft('invoice-1', {}, context)).rejects.toThrow(
       'Only a DRAFT invoice can be edited',
+    );
+  });
+});
+
+describe('Invoice hardening', () => {
+  function harness(current = invoice()) {
+    let persisted = current;
+    const tx = {
+      invoice: {
+        updateMany: jest.fn((args: { data: Record<string, unknown> }) => {
+          persisted = invoice({ ...persisted, ...args.data });
+          return Promise.resolve({ count: 1 });
+        }),
+        findUniqueOrThrow: jest.fn(() => Promise.resolve(persisted)),
+      },
+    };
+    const { service, audit } = serviceWith({
+      invoice: { findUnique: jest.fn(() => Promise.resolve(persisted)) },
+      $transaction: (cb: (client: typeof tx) => unknown) => cb(tx),
+    });
+    return { service, audit, tx, get: () => persisted };
+  }
+  it('cancels a draft, retains history and releases duplicate guard', async () => {
+    const h = harness();
+    const result = await h.service.cancelDraft('invoice-1', 'Created by mistake', context);
+    expect(result.status).toBe('CANCELLED');
+    expect(result.activeDraftKey).toBeNull();
+    expect(result.finalPrintEnabled).toBe(false);
+    expect(h.audit.record).toHaveBeenCalledWith(
+      expect.objectContaining<Record<string, unknown>>({
+        eventKey: 'invoice.draft_cancelled',
+        newState: expect.objectContaining<Record<string, unknown>>({
+          cancellationReason: 'Created by mistake',
+        }),
+      }),
+      h.tx,
+    );
+  });
+  it('requires a cancellation reason', async () => {
+    await expect(harness().service.cancelDraft('invoice-1', '  ', context)).rejects.toThrow(
+      'reason',
+    );
+  });
+  it.each(['FAWTARA_ACCEPTED', 'READY_FOR_FAWTARA', 'CANCELLED'] as const)(
+    'cannot cancel %s',
+    async (status) => {
+      await expect(
+        harness(invoice({ status })).service.cancelDraft('invoice-1', 'Mistake', context),
+      ).rejects.toThrow('Only a DRAFT');
+    },
+  );
+  it('manual payload alone cannot officialize', async () => {
+    await expect(
+      harness(invoice({ status: 'READY_FOR_FAWTARA' })).service.recordFawtaraResult(
+        'invoice-1',
+        {
+          fawtaraStatus: 'SUBMITTED',
+          invoiceNumber: 'EINV-1',
+          qrPayload: 'raw',
+          acceptedAt: '2026-11-17',
+        },
+        context,
+      ),
+    ).rejects.toThrow('graphical QR');
+  });
+  it('requires an explicit reason to reconcile', async () => {
+    await expect(harness().service.reconcile('invoice-1', '', context)).rejects.toThrow('note');
+  });
+  it('audits reconciliation without rewriting draft amounts', async () => {
+    const h = harness(
+      invoice({
+        status: 'FAWTARA_ACCEPTED',
+        reconciliationRequired: true,
+        officialGrandTotal: amount('117.000'),
+        fawtaraQrImageDataUrl: 'data:image/png;base64,aA==',
+      }),
+    );
+    const result = await h.service.reconcile(
+      'invoice-1',
+      'Reviewed against official result',
+      context,
+    );
+    expect(result.grandTotal.toString()).toBe('116.000');
+    expect(result.officialGrandTotal?.toString()).toBe('117.000');
+    expect(result.finalPrintEnabled).toBe(true);
+    expect(h.audit.record).toHaveBeenCalledWith(
+      expect.objectContaining<Record<string, unknown>>({
+        eventKey: 'invoice.official_values_reconciled',
+        newState: expect.objectContaining<Record<string, unknown>>({
+          reconciliationNote: 'Reviewed against official result',
+          reconciledBy: 'user-1',
+        }),
+      }),
+      h.tx,
     );
   });
 });

@@ -3,6 +3,8 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
+  Equals,
   IsDateString,
   IsEnum,
   IsIn,
@@ -69,6 +71,15 @@ export class InvoiceLineInputDto {
 }
 
 export class UpdateInvoiceDraftDto {
+  @IsOptional()
+  @IsIn(['011', '021', '111', '121', '012', '022', '112', '122'])
+  invoiceTypeName?: string;
+  @IsOptional() @Matches(/^[A-Z]{2}$/) issuerCountryCode?: string;
+  @IsOptional() @Matches(/^[A-Z]{2}$/) buyerCountryCode?: string;
+  @IsOptional() @IsUUID() selectedConnectionId?: string | null;
+  @IsOptional() @IsString() @MaxLength(4000) issuerBankDetails?: string;
+  @IsOptional() @IsString() @MaxLength(500) issuerLegalNameAr?: string;
+
   @IsOptional()
   @IsDateString()
   invoiceDate?: string;
@@ -178,4 +189,16 @@ export class RecordFawtaraRejectionDto {
   @IsString()
   @Length(1, 4000)
   message!: string;
+}
+
+export class InvoiceReasonDto {
+  @IsString()
+  @Length(1, 4000)
+  reason!: string;
+}
+
+export class SubmitOfficialInvoiceDto {
+  @Equals('CREATE_REAL_JOFOTARA_INVOICE') confirmation!: string;
+  @IsOptional() @IsUUID() connectionId?: string;
+  @IsOptional() @IsBoolean() recoverUncertain?: boolean;
 }

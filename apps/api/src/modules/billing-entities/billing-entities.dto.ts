@@ -11,6 +11,7 @@ import {
 import { PaymentScope } from '../../generated/prisma/enums';
 
 export class CreateBillingEntityDto {
+  @IsOptional() @IsString() @MaxLength(4000) bankDetails?: string;
   @Transform(({ value }) => String(value).trim().toUpperCase())
   @IsString()
   @Length(2, 80)
@@ -52,6 +53,7 @@ export class CreateBillingEntityDto {
 }
 
 export class UpdateBillingEntityDto {
+  @IsOptional() @IsString() @MaxLength(4000) bankDetails?: string;
   @IsOptional()
   @IsString()
   @Length(2, 250)

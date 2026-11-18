@@ -34,7 +34,7 @@ export function InvoicesManager() {
       <PageHeading
         eyebrow="Financial operations"
         title="Invoices"
-        description="Manual-first invoice snapshots created from active subscriptions. A CRM draft is not an official JoFotara invoice."
+        description="Human-reviewed invoice snapshots created from active subscriptions. A CRM draft is not an official JoFotara invoice."
       />
       <Notice message={error} />
       <div className="filter-bar mt-6">
@@ -49,6 +49,7 @@ export function InvoicesManager() {
           <option value="READY_FOR_FAWTARA">READY FOR JOFOTARA</option>
           <option value="FAWTARA_ACCEPTED">JOFOTARA ACCEPTED</option>
           <option value="FAWTARA_REJECTED">JOFOTARA REJECTED</option>
+          <option value="CANCELLED">CANCELLED</option>
         </select>
       </div>
       <div className="table-wrap mt-5">
