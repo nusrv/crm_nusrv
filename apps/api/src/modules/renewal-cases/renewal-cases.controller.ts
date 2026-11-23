@@ -9,6 +9,7 @@ import { RenewalCasesService } from './renewal-cases.service';
 export class RenewalCasesController {
   constructor(private readonly renewalCases: RenewalCasesService, private readonly manual: ManualRenewalService) {}
 
+  @Roles('ADMIN')
   @Get(':id/reminder-preview')
   prepare(@Param('id') id: string) { return this.manual.prepare(id); }
   @Roles('ADMIN')
@@ -16,6 +17,7 @@ export class RenewalCasesController {
   send(@Param('id') id: string, @Body() input: unknown, @Req() req: AuthenticatedRequest) {
     return this.manual.send(id, input, req.user.id);
   }
+  @Roles('ADMIN')
   @Get(':id/replies')
   replies(@Param('id') id: string) { return this.manual.replies(id); }
   @Roles('ADMIN')
