@@ -106,6 +106,36 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
     })).rejects.toThrow();
   });
 
+  it('uses a database conditional update so only one racing cursor advance wins', async () => {
+    const row = await prisma.mailEvidenceFolderCheckpoint.findFirstOrThrow({
+      where: {
+        mailConfigurationId: configurationId,
+        folderIdentityKey: mailEvidenceFolderIdentityKey('Sent'),
+      },
+    });
+    await prisma.mailEvidenceFolderCheckpoint.update({
+      where: { id: row.id },
+      data: { uidValidity: 100n, lastUid: 42n },
+    });
+    const claims = await Promise.all([
+      prisma.mailEvidenceFolderCheckpoint.updateMany({
+        where: { id: row.id, uidValidity: 100n, lastUid: 42n },
+        data: { lastUid: 43n },
+      }),
+      prisma.mailEvidenceFolderCheckpoint.updateMany({
+        where: { id: row.id, uidValidity: 100n, lastUid: 42n },
+        data: { lastUid: 43n },
+      }),
+    ]);
+    expect(claims.map((result) => result.count).sort()).toEqual([0, 1]);
+    const persisted = await prisma.mailEvidenceFolderCheckpoint.findUniqueOrThrow({
+      where: { id: row.id },
+    });
+    expect(persisted.uidValidity).toBe(100n);
+    expect(persisted.lastUid).toBe(43n);
+    expect(persisted.syncEnabled).toBe(false);
+  });
+
   it('preserves and does not overwrite the legacy INBOX cursor', async () => {
     const config = await prisma.mailConfiguration.findUniqueOrThrow({
       where: { id: configurationId },
