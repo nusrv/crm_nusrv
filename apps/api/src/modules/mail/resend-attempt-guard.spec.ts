@@ -25,16 +25,16 @@ function harness(prototype: object, table: 'communicationOutbox' | 'operatorRepl
     calls.push('check-original-evidence');
     return acceptance ? [{ metadata: { acceptance: { source: 'smtp' } } }] : [];
   });
-  const updateMany = jest.fn(async () => {
-    calls.push('reserve-attempt');
+  const updateMany = jest.fn(async (input: { data: { status?: string } }) => {
+    calls.push(input.data.status === 'CANCELLED' ? 'cancel-superseded' : 'reserve-attempt');
     return { count: 1 };
   });
   const queryRaw = jest.fn(async () => {
     calls.push('lock-original');
     return [{ id: 'original-1' }];
   });
-  const record = jest.fn(async () => {
-    calls.push('audit-attempt');
+  const record = jest.fn(async (event: { eventKey: string }) => {
+    calls.push(event.eventKey.endsWith('.cancelled') ? 'audit-cancellation' : 'audit-attempt');
     return { id: 'audit-1' };
   });
   const tx = {
@@ -60,9 +60,10 @@ describe.each([
     const h = harness(prototype, table, true);
     const result = await h.service.markAttempt('resend-1', LEASE, EVIDENCE, { resendOfId: 'original-1' });
     expect(result).toBeNull();
-    expect(h.calls).toEqual(['lock-original', 'check-original-evidence']);
-    expect(h.updateMany).not.toHaveBeenCalled();
-    expect(h.record).not.toHaveBeenCalled();
+    expect(h.calls).toEqual(['lock-original', 'check-original-evidence', 'cancel-superseded', 'audit-cancellation']);
+    expect(h.updateMany).toHaveBeenCalledTimes(1);
+    expect(h.record).toHaveBeenCalledTimes(1);
+    expect(h.updateMany.mock.calls[0]![0].data.status).toBe('CANCELLED');
   });
 
   it('locks the original before starting an explicitly authorized resend with no acceptance evidence', async () => {
