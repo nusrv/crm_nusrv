@@ -1,0 +1,68 @@
+# Safe validation of the temporary NUSRV CRM recovery branch.
+# No real SMTP, JoFotara, production database or migration deploy occurs here.
+name: P1 recovery source validation
+
+on:
+  push:
+    branches:
+      - work/p1-chatgpt-recovery
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.base.json'
+      - '.github/workflows/p1-recovery-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p1-recovery-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-checks:
+    name: Typecheck and P1 unit checks (no database or outbound mail)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DATABASE_URL: mysql://example:example@127.0.0.1:3306/unconnected_ci
+      JWT_ACCESS_SECRET: ci-only-not-a-valid-production-secret-at-least-32-chars
+      JWT_REFRESH_SECRET: ci-only-different-not-a-valid-production-secret-32-plus
+      ENCRYPTION_KEY_BASE64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      SMTP_MODE: none
+      IMAP_MODE: none
+      AI_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Generate Prisma client (no database connection)
+        run: npm run db:generate
+      - name: Workspace TypeScript check
+        run: npm run typecheck
+      - name: Focused P1 unit tests
+        run: |
+          npm run test -w @cp/api -- --runTestsByPath \
+            src/modules/invoices/payment-money.spec.ts \
+            src/modules/invoices/payments.service.spec.ts \
+            src/modules/invoices/official-invoice-eligibility.spec.ts \
+            src/modules/invoices/invoice-qr-corrections.controller.spec.ts \
+            src/modules/renewal-cases/renewal-period.spec.ts \
+            src/modules/renewal-cases/renewal-mail-recipient.spec.ts \
+            src/modules/renewal-cases/accepted-renewal-invoice.spec.ts \
+            src/modules/renewal-cases/legacy-renewal-recovery.controller.spec.ts \
+            src/modules/renewal-cases/renewal-cases.controller.spec.ts \
+            src/modules/mail/resend-attempt-guard.spec.ts \
+            src/modules/invoices/invoices.service.spec.ts
+      - name: Receipt and company invoice static rendering checks
+        working-directory: apps/api
+        run: |
+          ../../node_modules/.bin/tsx ../web/tests/payment-receipt-renderer.check.tsx
+          ../../node_modules/.bin/tsx ../web/tests/invoice-branding-renderer.check.tsx
