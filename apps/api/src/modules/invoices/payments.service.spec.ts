@@ -136,6 +136,24 @@ describe('P1 PaymentsService — official-only collection and receipt integrity'
     expect(h.receiptCreate).toHaveBeenCalledTimes(1);
   });
 
+  it('replays the same payment key after an independently audited invoice revision change', async () => {
+    const h = harness();
+    await h.service.record('invoice-1', paymentRequest(), 'admin-1');
+    h.tx.invoice.findUnique.mockResolvedValueOnce({ ...officialInvoice(), revision: 3 });
+    const replay = await h.service.record('invoice-1', paymentRequest(), 'admin-1');
+    expect(replay.id).toBe('payment-1');
+    expect(h.paymentCreate).toHaveBeenCalledTimes(1);
+    expect(h.receiptCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not allow a NEW payment created from a stale invoice snapshot', async () => {
+    const h = harness();
+    h.tx.invoice.findUnique.mockResolvedValueOnce({ ...officialInvoice(), revision: 3 });
+    await expect(h.service.record('invoice-1', paymentRequest(), 'admin-1'))
+      .rejects.toThrow(ConflictException);
+    expect(h.paymentCreate).not.toHaveBeenCalled();
+  });
+
   it('rejects reuse of the same payment key for different values', async () => {
     const h = harness();
     await h.service.record('invoice-1', paymentRequest(), 'admin-1');
@@ -151,6 +169,16 @@ describe('P1 PaymentsService — official-only collection and receipt integrity'
     expect(receipt.id).toBe('receipt-1');
     expect(h.paymentCreate).not.toHaveBeenCalled();
     expect(h.receiptCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('reopens an existing receipt without a stale-snapshot conflict or creating another receipt', async () => {
+    const h = harness();
+    h.tx.invoice.findUnique.mockResolvedValueOnce({ ...officialInvoice(), revision: 3 });
+    h.tx.payment.findFirst.mockResolvedValueOnce(originalPayment);
+    h.tx.paymentReceipt.findUnique.mockResolvedValueOnce({ id: 'receipt-existing', paymentId: 'payment-1' });
+    const result = await h.service.receipt('invoice-1', 'payment-1', 'admin-1');
+    expect(result.id).toBe('receipt-existing');
+    expect(h.receiptCreate).not.toHaveBeenCalled();
   });
 
   it.each(['-1.000', '0.000'])(
