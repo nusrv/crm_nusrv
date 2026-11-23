@@ -96,7 +96,7 @@ liveDescribe('P1 actual MariaDB receipt constraints and effective balances (disp
     }
   });
 
-  function paymentInput(amount: string, key = randomUUID()) {
+  function paymentInput(amount: string, key: string = randomUUID()) {
     return {
       invoiceId, amount, currency, paymentDate: invoiceDate,
       method: 'BANK_TRANSFER', recordedBy: actor, idempotencyKey: key,
