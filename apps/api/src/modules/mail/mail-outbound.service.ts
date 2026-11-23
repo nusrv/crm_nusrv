@@ -514,6 +514,18 @@ export class MailOutboundService {
   ): Promise<string | null> {
     const attemptId = randomUUID();
     return this.prisma.$transaction(async (tx) => {
+      // Serialize a manually authorized resend with any late SMTP acceptance for the
+      // ORIGINAL message. recordSuccess() updates that original outbox and writes its
+      // acceptance evidence in one transaction; locking its row here makes evidence
+      // already committed before the attempt boundary impossible to overlook.
+      // A subsequent acceptance after the resend attempt starts remains the
+      // documented duplicate-delivery risk explicitly acknowledged by ADMIN.
+      if (row.resendOfId) {
+        await tx.$queryRaw`SELECT id FROM communication_outbox WHERE id = ${row.resendOfId} FOR UPDATE`;
+        if (await hasRecordedSmtpAcceptance(tx, 'CommunicationOutbox', row.resendOfId)) {
+          return null;
+        }
+      }
       const changed = await tx.communicationOutbox.updateMany({
         where: {
           id: outboxId, status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: lease,
