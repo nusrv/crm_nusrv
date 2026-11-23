@@ -94,6 +94,7 @@ export class PaymentsService {
     const document = await this.invoices.findOne(invoiceId);
     return this.write(async (tx) => {
       const official = await this.lockOfficial(tx, invoiceId);
+      this.assertDocumentRevision(document, official.revision);
       if (input.currency !== official.currency) throw new BadRequestException('Payment currency must match the official invoice.');
       const existing = await tx.payment.findUnique({ where: { idempotencyKey: key } });
       if (existing) {
@@ -122,6 +123,7 @@ export class PaymentsService {
     const document = await this.invoices.findOne(invoiceId);
     return this.write(async (tx) => {
       const official = await this.lockOfficial(tx, invoiceId);
+      this.assertDocumentRevision(document, official.revision);
       const payment = await tx.payment.findFirst({ where: { id: paymentId, invoiceId } });
       if (!payment) throw new NotFoundException('Select a recorded payment for this invoice.');
       if (payment.currency !== official.currency) throw new ConflictException('Review the payment currency before issuing a receipt.');
@@ -199,7 +201,19 @@ export class PaymentsService {
     if (!invoice) throw new NotFoundException('Invoice not found.');
     const official = officialInvoiceEvidence(invoice);
     if (!official) throw new ConflictException('Collection requires an officially recorded invoice.');
-    return official;
+    return { ...official, revision: invoice.revision };
+  }
+
+  /**
+   * The immutable receipt snapshot is constructed from findOne() before entering
+   * the collection transaction. Refuse to freeze a stale invoice/branding/QR
+   * version if another operator corrected the invoice before we acquired its
+   * FOR UPDATE lock; the caller can reload and retry instead.
+   */
+  private assertDocumentRevision(document: Awaited<ReturnType<InvoicesService['findOne']>>, revision: number) {
+    if (document.revision !== revision) {
+      throw new ConflictException('Invoice changed while preparing the receipt. Reload and retry.');
+    }
   }
 
   private async issue(
