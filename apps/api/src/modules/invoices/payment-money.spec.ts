@@ -66,6 +66,21 @@ describe('P1 financial balance rules (OD-4 / CL-1 / CL-2)', () => {
     });
   });
 
+  it('quarantines invalid legacy receipt amounts instead of failing all customer balances', () => {
+    const { amounts, unresolved } = effectiveReceiptAmounts([
+      payment(revision('-20.000')),
+      payment(revision('0.000')),
+      payment(revision('not-a-number')),
+      payment(revision('999999999999.000')),
+      payment(revision('5.000')),
+    ], 'JOD');
+    expect(unresolved).toBe(4);
+    expect(amounts).toEqual(['5.000']);
+    expect(paymentSummary('100.000', amounts)).toEqual({
+      total: '100.000', paid: '5.000', balance: '95.000', status: 'PARTIALLY_PAID',
+    });
+  });
+
   it('reports full collection and visible excess without silently allocating or refunding money', () => {
     expect(paymentSummary('100.000', ['100.000'])).toEqual({
       total: '100.000', paid: '100.000', balance: '0.000', status: 'PAID',
