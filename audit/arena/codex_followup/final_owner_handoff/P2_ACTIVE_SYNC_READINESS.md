@@ -53,3 +53,31 @@ The return value distinguishes each configured inbound IMAP folder's state as `D
 Added unit scenarios for fully configured, disabled, missing-credential and mock-deployment cases; stale previous inbound sync never implies Sent/DSN support. Added a controller-level role metadata regression check to keep the endpoint ADMIN/IT-scoped.
 
 **Not yet executed on CI since manual-only mode was selected; therefore P2.A remains source-implemented but unverified and P2 remains incomplete.**
+
+## P2.B source checkpoint — independent per-folder IMAP cursors (2026-11-23)
+
+### Added without activating mailbox synchronization
+
+- Prisma model `MailEvidenceFolderCheckpoint` and purely additive migration `20261123014000_p2_folder_scoped_evidence_cursors` introduce a *new* folder-scoped checkpoint table with a per-mailbox identity digest, source kind, optional UIDVALIDITY/UID cursor and capability metadata.
+- `syncEnabled` defaults **false**, `capability` defaults `UNPROBED`, and both cursor fields initially stay NULL. The new table has no automatic backfill or seed. No existing mailbox, subscription, customer, invoice or message row changes.
+- Existing `MailConfiguration.lastSyncUidValidity`, `lastSyncUid`, `lastSyncedAt`, `inboundSyncEnabled` and the current inbound worker remain unchanged. **The old INBOX cursor remains authoritative.** New folder checkpoint rows are *not* consulted by any running worker.
+- The folder identity helper reuses the frozen IMAP rule: only INBOX is case-insensitive; Sent/sent and whitespace-distinct folders get separate `v1:` + SHA-256 keys, scoped under the actual MailConfiguration ID. The hash, rather than a case-insensitive MariaDB collation on raw folder names, enforces uniqueness.
+- The pure cursor policy refuses automatic cursor bootstrap, partial cursor repair, UIDVALIDITY reset and nonmonotonic progression. Future implementation must perform actual updates via database compare-and-set.
+- New unit tests cover canonical folder distinctions, stable key, invalid names, uninitialized/inconsistent checkpoints and safe monotonic decisions.
+- New source-only migration checks verify no DML/alteration of legacy mailbox tables, default-off sync, SQL/Prisma names and MariaDB identifier lengths.
+- A disposable MariaDB fixture validates per-folder distinct rows, disabled defaults, unique index and FK constraints, without touching existing INBOX cursor. It is included only in the **manual-only** MariaDB workflow; no test was automatically triggered.
+
+### What was actually verified this turn
+
+A direct source inspection of the committed SQL and schema verified the table/name mappings, four explicit index/FK identifier lengths (all at most 64 characters), the default-off schema/DDL agreement, no existing table alteration, and two new-table-only SQL statements. This is **static evidence**, not `prisma validate`, `prisma migrate deploy`, a live database transaction or a successful Jest run. The environment cannot directly dispatch branch-only GitHub Actions through the current connected GitHub actions; the repository's workflows remain manual-only by owner instruction.
+
+### Required P2.B acceptance before any P2.C worker wiring
+
+1. Run Prisma Client generation, typecheck, lint and P2-focused Jest tests against this exact head SHA.
+2. Apply the new migration to an isolated fresh MariaDB and a representative upgrade snapshot, inspect `prisma migrate status` and verify legacy cursor values and enabled flags are byte-for-byte unchanged.
+3. Run the new DB uniqueness/default-off/cursor tests, including case-distinct names under the default case-insensitive table collation.
+4. Agree explicit Sent folder identification and first-observation bootstrap policy; NEVER assume all providers use `Sent` or silently reuse the existing INBOX cursor.
+5. Review old worker fencing, UIDVALIDITY failure/epoch remediation and per-folder CAS under two concurrent disposable workers before enabling new folder scans.
+6. Keep DSN evidence as untrusted until trusted source/attempt/recipient checks exist; no automatic re-send or new case transition.
+
+**Status: P2.B schema/helper/tests committed on the temporary branch, integration validation pending; no P2.C activation.**
