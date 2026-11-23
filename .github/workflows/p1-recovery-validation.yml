@@ -53,12 +53,21 @@ jobs:
             src/modules/renewal-cases/renewal-cases.controller.spec.ts \
             src/modules/mail/resend-attempt-guard.spec.ts \
             src/modules/invoices/invoices.service.spec.ts
+      - name: Focused P2 source-only evidence and cursor policies
+        run: |
+          npm run test -w @cp/api -- --runTestsByPath \
+            src/modules/mail/active-email-evidence.spec.ts \
+            src/modules/mail/mail-evidence-folder-identity.spec.ts \
+            src/modules/mail/integration-health.service.spec.ts \
+            src/modules/mail/integration-health.controller.spec.ts \
+            src/modules/communications/operator-reply.service.spec.ts
       - name: Complete API Jest regression (P0 + P1)
         run: npm run test -w @cp/api
       - name: P0 invariant Node tests (source only)
         run: |
           node --import tsx --test \
             apps/api/prisma/p01-additive-migrations.test.mjs \
+            apps/api/prisma/p2-folder-evidence-migration.test.mjs \
             apps/api/src/identity/session-policy.test.mjs \
             apps/api/src/modules/mail/smtp-attempt-policy.test.mjs \
             apps/web/lib/api.session.test.mjs
