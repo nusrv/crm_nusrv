@@ -15,14 +15,14 @@ export function signedMoney(units: bigint): string {
 }
 
 export function effectiveReceiptAmounts(
- payments: { receipt: { revisions: { amount: { toString(): string }; voided: boolean; currency: string }[] } | null }[],
+ payments: { currency: string; receipt: { revisions: { amount: { toString(): string }; voided: boolean; currency: string }[] } | null }[],
  currency: string,
 ) {
  const amounts: string[] = [];
  let unresolved = 0;
  for (const payment of payments) {
   const revision = payment.receipt?.revisions[0];
-  if (!revision || revision.currency !== currency) {
+  if (!revision || payment.currency !== currency || revision.currency !== currency) {
    unresolved += 1;
    continue;
   }
