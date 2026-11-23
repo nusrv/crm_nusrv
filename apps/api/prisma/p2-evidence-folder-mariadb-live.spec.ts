@@ -102,12 +102,22 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
     })).toBe(2);
   });
 
-  it('enforces unique exact-folder source identity and mailbox foreign key', async () => {
+  it('enforces unique exact-folder source identity and mailbox foreign key independently', async () => {
+    const name = 'Duplicate-key fixture';
+    const identity = mailEvidenceFolderIdentityKey(name);
+    await prisma.mailEvidenceFolderCheckpoint.create({
+      data: {
+        mailConfigurationId: configurationId,
+        folderName: name,
+        folderIdentityKey: identity,
+        sourceKind: 'SENT',
+      },
+    });
     await expect(prisma.mailEvidenceFolderCheckpoint.create({
       data: {
         mailConfigurationId: configurationId,
-        folderName: 'Sent',
-        folderIdentityKey: mailEvidenceFolderIdentityKey('Sent'),
+        folderName: name,
+        folderIdentityKey: identity,
         sourceKind: 'SENT',
       },
     })).rejects.toThrow();
@@ -122,11 +132,14 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
     })).rejects.toThrow();
   });
 
-  it('uses a database conditional update so only one racing cursor advance wins', async () => {
-    const row = await prisma.mailEvidenceFolderCheckpoint.findFirstOrThrow({
-      where: {
+  it('uses a database conditional update so only one racing cursor advance wins, in isolation', async () => {
+    const name = 'Cursor CAS fixture';
+    const row = await prisma.mailEvidenceFolderCheckpoint.create({
+      data: {
         mailConfigurationId: configurationId,
-        folderIdentityKey: mailEvidenceFolderIdentityKey('Sent'),
+        folderName: name,
+        folderIdentityKey: mailEvidenceFolderIdentityKey(name),
+        sourceKind: 'SENT',
       },
     });
     await prisma.mailEvidenceFolderCheckpoint.update({
