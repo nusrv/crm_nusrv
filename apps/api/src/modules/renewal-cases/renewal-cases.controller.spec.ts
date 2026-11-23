@@ -7,8 +7,11 @@ import { RenewalCasesController } from './renewal-cases.controller';
 type ReadHandler = 'prepare' | 'replies' | 'evidence';
 
 function readContext(handler: ReadHandler, roles: string[]): ExecutionContext {
+  // Inspect the undecorated prototype method descriptor without extracting an
+  // unbound instance method (ESLint's unbound-method rule).
+  const method: unknown = Object.getOwnPropertyDescriptor(RenewalCasesController.prototype, handler)?.value;
   return {
-    getHandler: () => RenewalCasesController.prototype[handler],
+    getHandler: () => method,
     getClass: () => RenewalCasesController,
     switchToHttp: () => ({
       getRequest: () => ({ method: 'GET', user: { roles } }),
