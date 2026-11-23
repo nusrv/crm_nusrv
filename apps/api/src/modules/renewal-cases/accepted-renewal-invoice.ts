@@ -15,7 +15,16 @@ export function acceptedRenewalPeriod(renewal: RenewalInvoiceCase) {
   if (renewal.status !== 'ACCEPTED' || renewal.customerDecision !== 'ACCEPTED') {
     throw new ConflictException('Customer acceptance is required for this renewal.');
   }
-  if (!start || !end || !next || start < dueDate || !(start < end && end < next)) {
+  // A prospective cycle begins on the subscription's current renewal date.
+  // Both the official invoice and the tracking update must use one contiguous
+  // period: the next renewal date is exactly one calendar day after its end.
+  // A merely increasing but gapped/shifted sequence is not safe to fulfill.
+  const day = 86_400_000;
+  if (!start || !end || !next ||
+      ![dueDate, start, end, next].every((date) => Number.isFinite(date.getTime())) ||
+      start.getTime() !== dueDate.getTime() ||
+      !(start < end) ||
+      next.getTime() !== end.getTime() + day) {
     throw new ConflictException('Review or correct the proposed renewal period first.');
   }
   return { start, end, next };
