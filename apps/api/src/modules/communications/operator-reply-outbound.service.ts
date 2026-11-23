@@ -156,7 +156,7 @@ export class OperatorReplyOutboundService {
           mailConfigurationId: eligibility.mailConfiguration.id,
           recipient: currentRecipient,
           authorizedBy: row.actorId,
-        }),
+        }, row),
         () => this.transport.send(
           {
             messageId: row.emailMessage.externalMessageId ?? row.emailMessage.id,
@@ -370,9 +370,19 @@ export class OperatorReplyOutboundService {
     outboxId: string,
     lease: Date,
     evidence: { messageId: string; mailConfigurationId: string; recipient: string; authorizedBy: string },
+    row: OutboxContext,
   ): Promise<string | null> {
     const attemptId = randomUUID();
     return this.prisma.$transaction(async (tx) => {
+      // Pair the original reply row lock with its acceptance evidence check. A late
+      // original acceptance committed BEFORE this attempt cannot be overlooked;
+      // a genuinely later acceptance remains the warned duplicate-delivery risk.
+      if (row.resendOfId) {
+        await tx.$queryRaw`SELECT id FROM operator_reply_outbox WHERE id = ${row.resendOfId} FOR UPDATE`;
+        if (await hasRecordedSmtpAcceptance(tx, 'OperatorReplyOutbox', row.resendOfId)) {
+          return null;
+        }
+      }
       const changed = await tx.operatorReplyOutbox.updateMany({
         where: { id: outboxId, status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: lease },
         data: { attempts: { increment: 1 }, smtpRetrySafe: false },
