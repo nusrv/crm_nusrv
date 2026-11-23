@@ -73,6 +73,9 @@ jobs:
       - name: Verify all Prisma migrations applied
         working-directory: apps/api
         run: ../../node_modules/.bin/prisma migrate status
-      - name: Existing MariaDB integration regression (isolated fixtures, destructive)
+      - name: Focused P1 finance invariants on real disposable MariaDB
+        working-directory: apps/api
+        run: node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --runInBand prisma/p1-finance-mariadb-live.spec.ts
+      - name: Existing historical MariaDB integration regression (isolated fixtures, destructive)
         working-directory: apps/api
         run: node scripts/run-mariadb-integration.mjs
