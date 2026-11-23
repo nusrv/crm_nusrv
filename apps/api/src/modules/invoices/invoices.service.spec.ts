@@ -563,7 +563,12 @@ describe('InvoicesService manual JoFotara officialization', () => {
       invoice: { findUnique: jest.fn(() => Promise.resolve(ready)) },
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
-    const { service, audit } = serviceWith(prisma);
+    // This case exercises the successful officialization path. The generic
+    // harness's preflight spy intentionally has no default result; supply a
+    // successful issuer/document preflight explicitly for this fixture.
+    const { service, audit } = serviceWith(prisma, {
+      validate: jest.fn(() => ({ valid: true, checks: [] })),
+    });
 
     const result = await service.recordFawtaraResult(
       ready.id,
