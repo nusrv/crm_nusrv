@@ -61,6 +61,7 @@ export function classifyFolderCursor(cursor: FolderCursor): FolderCursorState {
 export type FolderCursorAdvanceDecision =
   | 'BASELINE_REQUIRES_EXPLICIT_POLICY'
   | 'INCONSISTENT_REQUIRES_REVIEW'
+  | 'INVALID_UID_REQUIRES_REVIEW'
   | 'UIDVALIDITY_CHANGED_REQUIRES_REVIEW'
   | 'ALREADY_OBSERVED'
   | 'ADVANCE_WITH_CAS';
@@ -72,6 +73,14 @@ export function decideFolderCursorAdvance(
 ): FolderCursorAdvanceDecision {
   const status = classifyFolderCursor(cursor);
   if (status === 'INCONSISTENT') return 'INCONSISTENT_REQUIRES_REVIEW';
+  // UIDs must be strictly positive and UIDVALIDITY never zero. Persisted
+  // lastUid may be zero only for a deliberately established empty baseline.
+  // Invalid data must not be treated as an already-seen message.
+  if (observedUidValidity <= 0n || observedUid <= 0n ||
+      (cursor.uidValidity !== null && cursor.uidValidity <= 0n) ||
+      (cursor.lastUid !== null && cursor.lastUid < 0n)) {
+    return 'INVALID_UID_REQUIRES_REVIEW';
+  }
   if (status === 'UNINITIALIZED') return 'BASELINE_REQUIRES_EXPLICIT_POLICY';
   if (observedUidValidity !== cursor.uidValidity) return 'UIDVALIDITY_CHANGED_REQUIRES_REVIEW';
   if (observedUid <= cursor.lastUid!) return 'ALREADY_OBSERVED';
