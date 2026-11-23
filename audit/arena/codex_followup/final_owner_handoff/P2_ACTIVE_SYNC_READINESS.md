@@ -43,3 +43,13 @@ The module deliberately contains no network/mailbox calls, no worker integration
 Unit tests cover Sent-not-delivered, hard/ambiguous DSN-not-authoritative, case-sensitive identifiers, recipient/attempt/mailbox mismatch, missing source identities, provider-without-IMAP-folder, and untrusted general inbound observations.
 
 **Not yet executed after this checkpoint**: current workflow triggers are intentionally manual-only for this repository; no tests, database or mail were run by adding these files. P2.A is partially authored, not accepted or activated.
+
+## P2.A operational inventory endpoint — source checkpoint
+
+Added `GET /settings/health/evidence-sources` under existing `IntegrationHealthController`, requiring the same **ADMIN/IT** read access as integration health. It calls `IntegrationHealthService.getEvidenceSources()`, which only performs a selected `MailConfiguration.findMany` query. It does not decrypt or emit credentials, read mailbox contents, test provider connections, advance cursors or write records.
+
+The return value distinguishes each configured inbound IMAP folder's state as `DISABLED`, `NOT_CONFIGURED`, `BLOCKED_BY_DEPLOYMENT` or `CONFIGURED_ONLY`. The last state is a **configuration inventory**, not proof of reachability or message evidence. Sent folder, provider events and DSN correlation explicitly say `NOT_IMPLEMENTED` for every mailbox rather than fabricating support or confusing 'no access' with 'no events'. Source date `lastInboundSyncAt` is an existing last-sync observation only.
+
+Added unit scenarios for fully configured, disabled, missing-credential and mock-deployment cases; stale previous inbound sync never implies Sent/DSN support. Added a controller-level role metadata regression check to keep the endpoint ADMIN/IT-scoped.
+
+**Not yet executed on CI since manual-only mode was selected; therefore P2.A remains source-implemented but unverified and P2 remains incomplete.**
