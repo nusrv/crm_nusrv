@@ -1,5 +1,9 @@
 'use client';
 
+// Next uses the automatic JSX runtime; standalone TSX receipt/branding checks
+// also support the classic JSX transform and therefore need React in scope.
+import React from 'react';
+
 export interface ReceiptRevisionView {
   version: number;
   amount: string;
