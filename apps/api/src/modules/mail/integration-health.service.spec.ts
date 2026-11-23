@@ -9,6 +9,11 @@ function baseConfigRow(overrides: Record<string, unknown> = {}) {
     enabled: true,
     outboundSendEnabled: true,
     inboundSyncEnabled: true,
+    imapHost: 'imap.example.test',
+    imapUsername: 'operator@example.test',
+    imapFolder: 'INBOX',
+    imapCredentialsCiphertext: 'v1.imap-ciphertext',
+    lastSyncedAt: null,
     smtpCredentialsCiphertext: 'v1.ciphertext',
     lastHealthStatus: 'HEALTHY',
     lastHealthCheckedAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -105,5 +110,54 @@ describe('IntegrationHealthService.getOverview — §L effective AI provider/mod
     const overview = await service.getOverview();
     expect(overview.ai.provider).toBe('OPENAI');
     expect(overview.ai.model).toBeNull();
+  });
+});
+
+
+describe('P2.A read-only evidence-source inventory', () => {
+  it('reports only configured current inbound source without asserting message delivery', async () => {
+    const { service, prisma } = harness({ configValues: { IMAP_MODE: 'real' } });
+    const rows = await service.getEvidenceSources();
+    expect(rows).toEqual([{
+      mailConfigurationId: 'mc-1',
+      scope: 'GLOBAL',
+      label: 'Global',
+      configuredInboundFolder: 'INBOX',
+      lastInboundSyncAt: null,
+      inboundFolder: 'CONFIGURED_ONLY',
+      sentFolder: 'NOT_IMPLEMENTED',
+      providerEvents: 'NOT_IMPLEMENTED',
+      dsnCorrelation: 'NOT_IMPLEMENTED',
+    }]);
+    expect(prisma.mailConfiguration.findMany).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(rows)).not.toContain('v1.imap-ciphertext');
+  });
+
+  it('distinguishes disabled mailbox from missing credentials and mock adapter', async () => {
+    const disabled = harness({
+      configRow: baseConfigRow({ inboundSyncEnabled: false }),
+      configValues: { IMAP_MODE: 'real' },
+    });
+    expect((await disabled.service.getEvidenceSources())[0]?.inboundFolder).toBe('DISABLED');
+
+    const missing = harness({
+      configRow: baseConfigRow({ imapCredentialsCiphertext: null }),
+      configValues: { IMAP_MODE: 'real' },
+    });
+    expect((await missing.service.getEvidenceSources())[0]?.inboundFolder).toBe('NOT_CONFIGURED');
+
+    const blocked = harness({ configValues: { IMAP_MODE: 'mock' } });
+    expect((await blocked.service.getEvidenceSources())[0]?.inboundFolder).toBe('BLOCKED_BY_DEPLOYMENT');
+  });
+
+  it('does not infer Sent or DSN capability from an earlier successful inbound sync timestamp', async () => {
+    const { service } = harness({
+      configRow: baseConfigRow({ lastSyncedAt: new Date('2026-11-23T12:00:00.000Z') }),
+      configValues: { IMAP_MODE: 'real' },
+    });
+    const row = (await service.getEvidenceSources())[0];
+    expect(row?.lastInboundSyncAt).toEqual(new Date('2026-11-23T12:00:00.000Z'));
+    expect(row?.sentFolder).toBe('NOT_IMPLEMENTED');
+    expect(row?.dsnCorrelation).toBe('NOT_IMPLEMENTED');
   });
 });
