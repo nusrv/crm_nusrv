@@ -30,14 +30,14 @@ function invoice(changes: Record<string, unknown> = {}) {
 }
 
 function harness(source = invoice(), changed = 1) {
-  const updateMany = jest.fn(async (_input: unknown) => ({ count: changed }));
-  const create = jest.fn(async ({ data }: { data: Record<string, unknown> }) =>
-    ({ id: 'correction-1', ...data }));
+  const updateMany = jest.fn((input: unknown) => { void input; return Promise.resolve({ count: changed }); });
+  const create = jest.fn(({ data }: { data: Record<string, unknown> }) =>
+    Promise.resolve({ id: 'correction-1', ...data }));
   const tx = {
-    invoice: { findUnique: jest.fn(async (_input: unknown) => source), updateMany },
+    invoice: { findUnique: jest.fn((input: unknown) => { void input; return Promise.resolve(source); }), updateMany },
     invoiceQrCorrection: { create },
   };
-  const auditRecord = jest.fn(async (_event: unknown, _tx: unknown) => ({ id: 'audit-1' }));
+  const auditRecord = jest.fn((event: unknown, tx: unknown) => { void event; void tx; return Promise.resolve({ id: 'audit-1' }); });
   const prisma = {
     $transaction: async <T>(fn: (value: typeof tx) => Promise<T>): Promise<T> => fn(tx),
   };
