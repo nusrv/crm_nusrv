@@ -21,21 +21,21 @@ type WorkerAttempt = {
 
 function harness(prototype: object, table: 'communicationOutbox' | 'operatorReplyOutbox', acceptance: boolean) {
   const calls: string[] = [];
-  const findMany = jest.fn(async () => {
+  const findMany = jest.fn(() => {
     calls.push('check-original-evidence');
-    return acceptance ? [{ metadata: { acceptance: { source: 'smtp' } } }] : [];
+    return Promise.resolve(acceptance ? [{ metadata: { acceptance: { source: 'smtp' } } }] : []);
   });
-  const updateMany = jest.fn(async (input: { data: { status?: string } }) => {
+  const updateMany = jest.fn((input: { data: { status?: string } }) => {
     calls.push(input.data.status === 'CANCELLED' ? 'cancel-superseded' : 'reserve-attempt');
-    return { count: 1 };
+    return Promise.resolve({ count: 1 });
   });
-  const queryRaw = jest.fn(async () => {
+  const queryRaw = jest.fn(() => {
     calls.push('lock-original');
-    return [{ id: 'original-1' }];
+    return Promise.resolve([{ id: 'original-1' }]);
   });
-  const record = jest.fn(async (event: { eventKey: string }) => {
+  const record = jest.fn((event: { eventKey: string }) => {
     calls.push(event.eventKey.endsWith('.cancelled') ? 'audit-cancellation' : 'audit-attempt');
-    return { id: 'audit-1' };
+    return Promise.resolve({ id: 'audit-1' });
   });
   const tx = {
     $queryRaw: queryRaw,
@@ -44,7 +44,7 @@ function harness(prototype: object, table: 'communicationOutbox' | 'operatorRepl
     operatorReplyOutbox: { updateMany },
   };
   const prisma = {
-    $transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>): Promise<T> => callback(tx),
+    $transaction: <T>(callback: (transaction: typeof tx) => Promise<T>): Promise<T> => callback(tx),
   };
   const service = Object.assign(Object.create(prototype) as object, {
     prisma, audit: { record },
@@ -97,28 +97,28 @@ describe.each([
 ] as const)('P1 late original SMTP acceptance serialization — %s', (_label, prototype, table) => {
   it('locks the original row before recording acceptance even after ownership was lost', async () => {
     const events: string[] = [];
-    const updateMany = jest.fn(async () => {
+    const updateMany = jest.fn(() => {
       events.push('update-original');
-      return { count: 0 };
+      return Promise.resolve({ count: 0 });
     });
-    const record = jest.fn(async (event: { eventKey: string }) => {
+    const record = jest.fn((event: { eventKey: string }) => {
       events.push(event.eventKey === 'mail.send.ownership_lost_after_transmission' ||
         event.eventKey === 'communication.reply.ownership_lost_after_transmission'
         ? 'audit-late-ownership' : 'audit-original-acceptance');
-      return { id: 'audit-1' };
+      return Promise.resolve({ id: 'audit-1' });
     });
     const tx = {
-      $queryRaw: jest.fn(async () => {
+      $queryRaw: jest.fn(() => {
         events.push('lock-original');
-        return [{ id: 'original-1' }];
+        return Promise.resolve([{ id: 'original-1' }]);
       }),
       communicationOutbox: { updateMany },
       operatorReplyOutbox: { updateMany },
     };
     const service = Object.assign(Object.create(prototype) as object, {
-      prisma: { $transaction: async <T>(callback: (client: typeof tx) => Promise<T>): Promise<T> => callback(tx) },
+      prisma: { $transaction: <T>(callback: (client: typeof tx) => Promise<T>): Promise<T> => callback(tx) },
       audit: { record },
-      health: { record: jest.fn(async () => undefined) },
+      health: { record: jest.fn(() => Promise.resolve(undefined)) },
     }) as unknown as {
       recordSuccess(...args: unknown[]): Promise<boolean>;
     };
