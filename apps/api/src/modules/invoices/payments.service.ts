@@ -94,7 +94,6 @@ export class PaymentsService {
     const document = await this.invoices.findOne(invoiceId);
     return this.write(async (tx) => {
       const official = await this.lockOfficial(tx, invoiceId);
-      this.assertDocumentRevision(document, official.revision);
       if (input.currency !== official.currency) throw new BadRequestException('Payment currency must match the official invoice.');
       const existing = await tx.payment.findUnique({ where: { idempotencyKey: key } });
       if (existing) {
@@ -107,6 +106,10 @@ export class PaymentsService {
         }
         return existing;
       }
+      // Do not reject a genuine idempotent replay merely because a later QR
+      // correction or another permitted invoice revision advanced the version.
+      // Snapshot freshness is necessary only before a NEW payment/receipt write.
+      this.assertDocumentRevision(document, official.revision);
       const payment = await tx.payment.create({
         data: { ...normalized, invoiceId, currency: input.currency, recordedBy: actorId, idempotencyKey: key },
       });
@@ -123,9 +126,13 @@ export class PaymentsService {
     const document = await this.invoices.findOne(invoiceId);
     return this.write(async (tx) => {
       const official = await this.lockOfficial(tx, invoiceId);
-      this.assertDocumentRevision(document, official.revision);
       const payment = await tx.payment.findFirst({ where: { id: paymentId, invoiceId } });
       if (!payment) throw new NotFoundException('Select a recorded payment for this invoice.');
+      // Reopening an already issued receipt must be idempotent, even if the
+      // official invoice received a subsequent audited QR correction.
+      const existingReceipt = await tx.paymentReceipt.findUnique({ where: { paymentId: payment.id } });
+      if (existingReceipt) return existingReceipt;
+      this.assertDocumentRevision(document, official.revision);
       if (payment.currency !== official.currency) throw new ConflictException('Review the payment currency before issuing a receipt.');
       if (!validPositiveAmount(payment.amount.toString())) {
         throw new ConflictException('The historical payment amount needs review before a receipt can be issued.');
