@@ -135,7 +135,8 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
               <td>{l.unitPrice}</td>
               <td>{l.discountAmount}</td>
               <td>
-                {l.taxRate}%<small>{l.taxAmount}</small>
+                {l.taxRate === null ? 'Tax review required' : `${l.taxRate}%`}
+                <small>{l.taxAmount}</small>
               </td>
               <td>{money(l.lineTotal, invoice.currencyCode)}</td>
             </tr>
