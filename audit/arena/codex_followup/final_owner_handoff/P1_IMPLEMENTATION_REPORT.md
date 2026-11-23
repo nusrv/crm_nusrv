@@ -141,3 +141,27 @@ The source Payment record and every receipt revision remain unmodified. No curre
 - Preserve the P0 browser restart and MariaDB release gates; do not interpret source review as P1 completion.
 
 **Verdict remains: P1 source hardening in progress, release not authorized.**
+
+## Recovery checkpoint 5 — plan review, independent invoices and replay semantics (2026-11-23)
+
+See `P1_P2_PLAN_GAP_REVIEW.md` for the requirement-by-requirement gap matrix and the order of the remaining mandatory verification/P2 work.
+
+### P1.1 independent invoices
+
+The checked-in `InvoiceView.sourceSubscription` is nullable, matching the approved one-time invoice model, but the invoice list dereferenced `invoice.sourceSubscription.name` and `.subscriptionCode` unconditionally. An independently issued invoice would crash the list. The list now handles null and labels independent/one-time invoices explicitly.
+
+The API already exposed `POST /invoices/manual-draft` with nullable customer/subscription sources; there was no discoverable corresponding control on the invoice list. Added `ManualInvoiceDraftForm`, available to ADMIN, that selects an active COMPANY issuer and prepares a one-time buyer, dates, currency and one draft line. The same existing invoice editor handles further line/tax review. The new form never calls external JoFotara, changes renewal state or creates a payment. INDIVIDUAL issuer presentation remains blocked pending the approved template. Existing-customer manual selection is not yet a dedicated UI flow.
+
+Added focused `InvoicesService` tests for independent creation with null customer and subscription, zero-price draft, inactive issuer and invalid period. **Not yet executed.**
+
+### P1.2 exact idempotent replay
+
+Source review found `PaymentsService.record()` tested the current invoice revision *before* checking whether the same idempotency key and payload had already been recorded. Thus a legitimate retry of an existing payment could wrongly conflict after the official invoice received a separate, audited QR revision. The service now checks the persisted idempotency record and its exact payload first; only a genuinely new payment requires the current invoice revision to match the prepared receipt snapshot. Likewise, re-opening an existing receipt does not attempt issuance or fail merely due to a later invoice revision. Stale documents still cannot authorize fresh financial writes.
+
+Added regression scenarios for safe repeated payment/reopening and fresh-write rejection with stale snapshot. **Not yet executed.**
+
+### P2 remains mandatory
+
+Active Email Sync and the common COMPANY template are required under the approved roadmap, but activating either without P0 mail/schema and P1 transaction evidence would violate the release order. No live mail/provider/DB operations were performed here.
+
+**Verdict:** additional P1 source defects corrected, but no build/CI/browser/DB acceptance evidence yet.
