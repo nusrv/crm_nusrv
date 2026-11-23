@@ -27,7 +27,7 @@ function officialInvoice(status = 'FAWTARA_ACCEPTED') {
     fawtaraStatus: 'SUBMITTED', fawtaraInvoiceNumber: 'NS-2026-500',
     fawtaraAcceptedAt: new Date('2026-11-22'), fawtaraQrImageDataUrl: QR,
     officialCurrencyCode: 'JOD', officialGrandTotal: AMOUNT('100.000'),
-    issuerLegalNameSnapshot: 'NUSRV',
+    issuerLegalNameSnapshot: 'NUSRV', revision: 2,
   };
 }
 
@@ -72,6 +72,7 @@ function harness(status = 'FAWTARA_ACCEPTED') {
   const invoices = {
     findOne: jest.fn(async () => ({
       id: invoice.id,
+      revision: 2,
       issuerLogoDataUrl: null,
       billingEntityId: 'issuer-1',
       issuerLegalNameSnapshot: 'NUSRV',
@@ -93,6 +94,15 @@ describe('P1 PaymentsService — official-only collection and receipt integrity'
   it('refuses to record a payment or receipt before officialization', async () => {
     const h = harness('DRAFT');
     await expect(h.service.record('invoice-1', paymentRequest(), 'admin-1')).rejects.toThrow(ConflictException);
+    expect(h.paymentCreate).not.toHaveBeenCalled();
+    expect(h.receiptCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a receipt snapshot prepared from an older invoice revision', async () => {
+    const h = harness();
+    h.tx.invoice.findUnique.mockResolvedValueOnce({ ...officialInvoice(), revision: 3 });
+    await expect(h.service.record('invoice-1', paymentRequest(), 'admin-1'))
+      .rejects.toThrow(ConflictException);
     expect(h.paymentCreate).not.toHaveBeenCalled();
     expect(h.receiptCreate).not.toHaveBeenCalled();
   });
