@@ -328,6 +328,7 @@ export class RenewalCasesService {
       });
       if (changed.count !== 1) throw new ConflictException('Subscription tracking date changed; review before fulfillment.');
       const { subscription: _subscription, ...caseRow } = current;
+      void _subscription; // Preserve the flat RenewalCase payload for the shared CAS primitive.
       const result = await applyRenewalCaseTransition(tx, this.audit, {
         id, currentRow: caseRow, toStatus: RenewalCaseStatus.FULFILLED,
         extraData: { fulfilledAt: this.clock.now(), clarificationPending: false,
