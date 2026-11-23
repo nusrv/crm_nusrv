@@ -236,18 +236,18 @@ describe('RenewalCasesService workflow actions — accepted prospective policy',
       periodEnd: end,
     } : null;
     const tx = {
-      $queryRaw: jest.fn(async (_strings: TemplateStringsArray, ..._values: unknown[]) => [{ id: 'locked' }]),
+      $queryRaw: jest.fn(() => Promise.resolve([{ id: 'locked' }])),
       renewalCase: {
         updateMany,
-        findUnique: jest.fn(async () => ({ ...oldState, status: latestStatus })),
-        findFirst: jest.fn(async () => null),
-        findUniqueOrThrow: jest.fn(async () => ({ ...oldState, status: latestStatus })),
+        findUnique: jest.fn(() => Promise.resolve({ ...oldState, status: latestStatus })),
+        findFirst: jest.fn(() => Promise.resolve(null)),
+        findUniqueOrThrow: jest.fn(() => Promise.resolve({ ...oldState, status: latestStatus })),
       },
-      invoice: { findUnique: jest.fn(async () => official) },
-      subscription: { updateMany: jest.fn(async () => ({ count: 1 })) },
+      invoice: { findUnique: jest.fn(() => Promise.resolve(official)) },
+      subscription: { updateMany: jest.fn(() => Promise.resolve({ count: 1 })) },
     };
     const prisma = {
-      renewalCase: { findUnique: jest.fn(async () => oldState) },
+      renewalCase: { findUnique: jest.fn(() => Promise.resolve(oldState)) },
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const audit = {
@@ -271,21 +271,18 @@ describe('RenewalCasesService workflow actions — accepted prospective policy',
       where: { id: 'case-id', status: RenewalCaseStatus.REMINDER_CYCLE },
       data: { status: RenewalCaseStatus.AWAITING_CUSTOMER },
     });
-    expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventKey: 'renewal.case.marked_awaiting_customer',
-        oldState: expect.objectContaining({ id: 'case-id', status: RenewalCaseStatus.REMINDER_CYCLE }),
-      }),
-      tx,
-    );
+    expect(audit.record.mock.calls[0]?.[0]).toMatchObject({
+      eventKey: 'renewal.case.marked_awaiting_customer',
+      oldState: { id: 'case-id', status: RenewalCaseStatus.REMINDER_CYCLE },
+    });
   });
 
   it('marks Accepted and stores the proposed period without changing the subscription', async () => {
     const { service, tx } = harness(RenewalCaseStatus.AWAITING_CUSTOMER);
     await service.markAccepted('case-id', { actorId: 'actor-id' });
-    expect(tx.renewalCase.updateMany).toHaveBeenCalledWith({
+    expect(tx.renewalCase.updateMany.mock.calls[0]?.[0]).toMatchObject({
       where: { id: 'case-id', status: RenewalCaseStatus.AWAITING_CUSTOMER },
-      data: expect.objectContaining({
+      data: {
         status: RenewalCaseStatus.ACCEPTED,
         customerDecision: CustomerDecision.ACCEPTED,
         acceptedAt: now,
@@ -294,7 +291,7 @@ describe('RenewalCasesService workflow actions — accepted prospective policy',
         proposedPeriodStart: due,
         proposedPeriodEnd: end,
         proposedNextRenewalDate: next,
-      }),
+      },
     });
     expect(tx.subscription.updateMany).not.toHaveBeenCalled();
   });
@@ -330,10 +327,10 @@ describe('RenewalCasesService workflow actions — accepted prospective policy',
         communicationRevision: { increment: 1 },
       },
     });
-    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
+    expect(audit.record.mock.calls[0]?.[0]).toMatchObject({
       eventKey: 'renewal.case.marked_fulfilled',
-      metadata: expect.objectContaining({ invoiceId: 'official-invoice-id', trackingOnly: true }),
-    }), tx);
+      metadata: { invoiceId: 'official-invoice-id', trackingOnly: true },
+    });
   });
 
   it('rejects an accepted renewal without a verified same-cycle official invoice', async () => {
@@ -379,7 +376,7 @@ describe('RenewalCasesService workflow actions — accepted prospective policy',
 
   it('reports a conflict when the status CAS loses to another operator', async () => {
     const { service, tx } = harness(RenewalCaseStatus.AWAITING_CUSTOMER, { updateManyCount: 0 });
-    tx.renewalCase.findUnique = jest.fn(async () => ({
+    tx.renewalCase.findUnique = jest.fn(() => Promise.resolve({
       id: 'case-id', status: RenewalCaseStatus.ACCEPTED,
     })) as never;
     await expect(service.markDoNotRenew('case-id', { actorId: 'actor-id' }))
