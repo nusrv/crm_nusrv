@@ -71,12 +71,12 @@ describe('P1 historical invoice QR correction (OD-8)', () => {
 
   it('rejects a missing reason, malformed replacement and repeated identical image', async () => {
     const h = harness();
-    await expect(h.controller.replace('invoice-1', {
+    expect(() => h.controller.replace('invoice-1', {
       ...REQUEST, reason: '',
-    }, USER as never)).rejects.toThrow(BadRequestException);
-    await expect(h.controller.replace('invoice-1', {
+    }, USER as never)).toThrow(BadRequestException);
+    expect(() => h.controller.replace('invoice-1', {
       ...REQUEST, qrImageDataUrl: 'data:image/png;base64,AAAA',
-    }, USER as never)).rejects.toThrow(BadRequestException);
+    }, USER as never)).toThrow(BadRequestException);
     const identical = harness(invoice({ fawtaraQrImageDataUrl: VALID_QR_IMAGE }));
     await expect(identical.controller.replace('invoice-1', REQUEST, USER as never))
       .rejects.toThrow(ConflictException);
