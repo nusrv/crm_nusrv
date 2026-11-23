@@ -153,6 +153,49 @@ const logoOff = render(
 );
 assert(!logoOff.includes(nusrvLogo));
 assert(!logoOff.includes('class="nusrv-logo"'));
+// A third COMPANY issuer must use the SAME template without importing NUSRV or
+// Future Foresight data from today's brand presets.
+const otherCompany = render(view({
+  customerId: null,
+  sourceSubscriptionId: null,
+  sourceSubscription: null,
+  issuerCodeSnapshot: 'THIRD_COMPANY',
+  issuerLegalNameSnapshot: 'Third Example Company LLC',
+  issuerTaxNumberSnapshot: 'THIRD-TAX-123',
+  issuerAddressSnapshot: 'Third issuer registered address',
+  issuerLogoDataUrl: null,
+  customerCodeSnapshot: 'ONE-TIME',
+  customerNameEnSnapshot: 'Independent one-time buyer',
+  issuerPresentationSnapshot: {
+    ...p,
+    issuerType: 'COMPANY',
+    logoAssetId: null,
+    details: { bankName: 'Third Bank', jodIban: 'JO00-THIRD-IBAN' },
+  },
+}));
+assert(otherCompany.includes('Third Example Company LLC'));
+assert(otherCompany.includes('THIRD-TAX-123'));
+assert(otherCompany.includes('Independent one-time buyer'));
+assert(otherCompany.includes('JO00-THIRD-IBAN'));
+assert(!otherCompany.includes('NEW SERVE LOCAL'));
+assert(!otherCompany.includes('FUTURE FORESIGHT INTERNATIONAL'));
+assert(!otherCompany.includes('class="nusrv-logo"'));
+
+// A draft with an unresolved tax rate is NOT a zero-rate assertion. The
+// currently provisionally zero arithmetic must never render a bare "%".
+const independentDraft = render(view({
+  status: 'DRAFT',
+  sourceSubscriptionId: null,
+  sourceSubscription: null,
+  customerId: null,
+  customerCodeSnapshot: 'ONE-TIME',
+  customerNameEnSnapshot: 'Draft one-time buyer',
+  lines: [{ ...view().lines[0]!, taxRate: null }],
+}));
+assert(independentDraft.includes('Tax review required'));
+assert(independentDraft.includes('DRAFT / NOT OFFICIAL'));
+assert(!independentDraft.includes('Official JoFotara QR'));
+
 const historical = view({
   issuerLogoDataUrl: futureLogo,
   issuerLegalNameSnapshot: 'Historical issuer',
