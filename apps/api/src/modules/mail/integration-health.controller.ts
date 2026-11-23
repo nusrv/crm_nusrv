@@ -13,4 +13,14 @@ export class IntegrationHealthController {
   getOverview() {
     return this.health.getOverview();
   }
+
+  /**
+   * P2.A informational only: no IMAP/provider probe, no new Sent/DSN sync,
+   * and no cursor or delivery-state mutations.
+   */
+  @Roles('ADMIN', 'IT')
+  @Get('evidence-sources')
+  getEvidenceSources() {
+    return this.health.getEvidenceSources();
+  }
 }
