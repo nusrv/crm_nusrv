@@ -129,7 +129,7 @@ export class IntegrationHealthService {
       },
     });
     const adapter = resolveImapAdapterCapability(this.config);
-    return configs.map((item) => {
+    return configs.map((item): EvidenceSourceInventory => {
       let inboundFolder: EvidenceSourceState;
       if (!item.enabled || !item.inboundSyncEnabled) {
         inboundFolder = 'DISABLED';
