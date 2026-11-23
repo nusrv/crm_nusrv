@@ -570,6 +570,11 @@ export class MailOutboundService {
     row: OutboxContext,
   ): Promise<boolean> {
     const guarded = await this.prisma.$transaction(async (tx) => {
+      // Lock the original row even after a stale lease was quarantined.
+      // A conditional UPDATE can match zero rows, which must not permit
+      // a concurrent manual resend to miss acceptance evidence recorded
+      // by this transaction.
+      await tx.$queryRaw`SELECT id FROM communication_outbox WHERE id = ${outboxId} FOR UPDATE`;
       const result = await tx.communicationOutbox.updateMany({
         where: { id: outboxId, status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: expectedLeaseTimestamp },
         data: { status: CommunicationOutboxStatus.DELIVERED, smtpRetrySafe: false, lastError: null, nextAttemptAt: null },
