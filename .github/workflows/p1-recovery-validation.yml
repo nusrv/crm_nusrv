@@ -61,6 +61,15 @@ jobs:
             src/modules/renewal-cases/renewal-cases.controller.spec.ts \
             src/modules/mail/resend-attempt-guard.spec.ts \
             src/modules/invoices/invoices.service.spec.ts
+      - name: Complete API Jest regression (P0 + P1)
+        run: npm run test -w @cp/api
+      - name: P0 invariant Node tests (source only)
+        run: |
+          node --import tsx --test \
+            apps/api/prisma/p01-additive-migrations.test.mjs \
+            apps/api/src/identity/session-policy.test.mjs \
+            apps/api/src/modules/mail/smtp-attempt-policy.test.mjs \
+            apps/web/lib/api.session.test.mjs
       - name: Receipt and company invoice static rendering checks
         working-directory: apps/api
         run: |
