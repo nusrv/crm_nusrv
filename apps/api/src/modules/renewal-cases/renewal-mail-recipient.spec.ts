@@ -55,7 +55,7 @@ describe('P1 registered renewal recipients (OD-1)', () => {
       contact('valid-1', 'TECHNICAL', 'valid@example.test'),
     ], null);
     const result = await renewalRecipients(h.db as never, h.emails as never, 'customer-1');
-    expect(result.defaultRecipient).toBeUndefined();
+    expect(result.defaultRecipient).toBeNull();
     expect(result.options).toHaveLength(1);
     expect(result.options[0]?.email).toBe('valid@example.test');
   });
