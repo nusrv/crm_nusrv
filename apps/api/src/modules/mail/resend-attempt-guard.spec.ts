@@ -84,3 +84,58 @@ describe.each([
     expect(h.findMany).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * This tests the opposite side of the resend barrier. Even when the original
+ * lease has been quarantined, its SMTP acceptance audit must commit under the
+ * same original-row lock that markAttempt() uses for a proposed resend.
+ * Synthetic transaction mock: isolated MariaDB must still prove lock ordering.
+ */
+describe.each([
+  ['renewal customer outbox', MailOutboundService.prototype, 'communicationOutbox'],
+  ['operator reply outbox', OperatorReplyOutboundService.prototype, 'operatorReplyOutbox'],
+] as const)('P1 late original SMTP acceptance serialization — %s', (_label, prototype, table) => {
+  it('locks the original row before recording acceptance even after ownership was lost', async () => {
+    const events: string[] = [];
+    const updateMany = jest.fn(async () => {
+      events.push('update-original');
+      return { count: 0 };
+    });
+    const record = jest.fn(async (event: { eventKey: string }) => {
+      events.push(event.eventKey === 'mail.send.ownership_lost_after_transmission' ||
+        event.eventKey === 'communication.reply.ownership_lost_after_transmission'
+        ? 'audit-late-ownership' : 'audit-original-acceptance');
+      return { id: 'audit-1' };
+    });
+    const tx = {
+      $queryRaw: jest.fn(async () => {
+        events.push('lock-original');
+        return [{ id: 'original-1' }];
+      }),
+      communicationOutbox: { updateMany },
+      operatorReplyOutbox: { updateMany },
+    };
+    const service = Object.assign(Object.create(prototype) as object, {
+      prisma: { $transaction: async <T>(callback: (client: typeof tx) => Promise<T>): Promise<T> => callback(tx) },
+      audit: { record },
+      health: { record: jest.fn(async () => undefined) },
+    }) as unknown as {
+      recordSuccess(...args: unknown[]): Promise<boolean>;
+    };
+    const accepted = { source: 'smtp', responseCode: 250 };
+    const args: unknown[] = ['original-1', 'mail-1', LEASE, 'attempt-1', accepted];
+    if (table === 'communicationOutbox') {
+      args.push({ purpose: 'REMINDER', caseRevision: null, renewalCaseId: 'case-1' });
+    }
+    const result = await service.recordSuccess(...args);
+    expect(result).toBe(false);
+    expect(events[0]).toBe('lock-original');
+    expect(events[1]).toBe('update-original');
+    expect(events[2]).toBe('audit-original-acceptance');
+    const acceptedAudit = record.mock.calls.find(([event]) => event.eventKey ===
+      (table === 'communicationOutbox' ? 'mail.send.succeeded' : 'communication.reply.delivered'));
+    expect(acceptedAudit?.[0]).toMatchObject({
+      metadata: { acceptance: { source: 'smtp', responseCode: 250 }, applied: false },
+    });
+  });
+});
