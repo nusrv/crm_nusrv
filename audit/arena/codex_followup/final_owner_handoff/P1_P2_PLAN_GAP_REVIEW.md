@@ -45,3 +45,11 @@ P3 remains gated: INDIVIDUAL/PERSONAL approved visual template reference, histor
 
 **P1 engineering progressed, not acceptance-complete. P2 remains pending and mandatory.**
 Do not claim successful builds, Jest/Node tests, MariaDB transactions, UI printing or deployment until results have actually been obtained and archived.
+
+## Checkpoint 6 — invoice presentation consistency
+
+A separate review of the current `InvoiceRenderer` found that a draft line with an unset tax rate rendered a dangling percent sign. The renderer now displays `Tax review required` for missing tax treatment, preserving the draft's deliberately provisional zero arithmetic without implying an approved 0% tax rate.
+
+The existing multi-issuer rendering check now also includes a third distinct COMPANY issuer with one-time buyer, retained legal/tax/bank identity and no borrowed branding, plus a draft with no subscription and unset tax. This increases source-level regression coverage for both P1.1 and the mandatory P2 company-layout work.
+
+**These renderer fixtures are written, not executed.** Full PDF/print/branding acceptance still requires the actual browser and current CSS build.
