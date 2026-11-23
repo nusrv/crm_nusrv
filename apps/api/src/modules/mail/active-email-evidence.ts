@@ -34,7 +34,7 @@ export interface ObservedMailEvidence {
 export type EvidenceReviewResult =
   | { kind: 'UNMATCHED'; reason: 'SOURCE_INCOMPLETE' | 'SOURCE_SCOPE_MISMATCH' | 'IDENTITY_MISMATCH' }
   | { kind: 'OBSERVED_SENT'; deliveryStatus: 'UNKNOWN'; sourceObjectId: string }
-  | { kind: 'POSSIBLE_REPLY'; deliveryStatus: 'UNKNOWN'; sourceObjectId: string }
+  | { kind: 'INBOUND_OBSERVATION'; deliveryStatus: 'UNKNOWN'; sourceObjectId: string }
   | { kind: 'CANDIDATE_DSN'; disposition: DsnDisposition; deliveryStatus: 'UNKNOWN'; sourceObjectId: string }
   | { kind: 'PROVIDER_OBSERVATION'; deliveryStatus: 'UNKNOWN'; sourceObjectId: string };
 
@@ -45,7 +45,7 @@ export function classifyObservedMailEvidence(
 ): EvidenceReviewResult {
   const sourceObjectId = observed.sourceObjectId.trim();
 
-  if (!sourceObjectId || !observed.folder?.trim() && observed.stream !== 'PROVIDER' ||
+  if (!sourceObjectId || (!observed.folder?.trim() && observed.stream !== 'PROVIDER') ||
       !observed.mailConfigurationId.trim() || !expected.mailConfigurationId.trim() ||
       !observed.messageId?.trim() || !observed.envelopeRecipient?.trim() ||
       !observed.attemptId?.trim() || !expected.attemptId.trim() ||
@@ -76,6 +76,6 @@ export function classifyObservedMailEvidence(
     case 'PROVIDER':
       return { kind: 'PROVIDER_OBSERVATION', deliveryStatus: 'UNKNOWN', sourceObjectId };
     case 'INBOX':
-      return { kind: 'POSSIBLE_REPLY', deliveryStatus: 'UNKNOWN', sourceObjectId };
+      return { kind: 'INBOUND_OBSERVATION', deliveryStatus: 'UNKNOWN', sourceObjectId };
   }
 }
