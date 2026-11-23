@@ -2,17 +2,9 @@
 # No real SMTP, JoFotara, production database or migration deploy occurs here.
 name: P1 recovery source validation
 
+# Manually triggered only for this NUSRV CRM recovery workflow.
+# Do not run on every commit/push to the recovery branch.
 on:
-  push:
-    branches:
-      - work/p1-chatgpt-recovery
-    paths:
-      - 'apps/**'
-      - 'packages/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig.base.json'
-      - '.github/workflows/p1-recovery-validation.yml'
   workflow_dispatch:
 
 permissions:
