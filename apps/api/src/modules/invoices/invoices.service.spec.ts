@@ -308,6 +308,115 @@ describe('InvoicesService creation', () => {
   });
 });
 
+describe('InvoicesService independent manual drafts (P1.1)', () => {
+  function manualHarness(active = true) {
+    const issuer = {
+      ...subscription().customer.billingEntity,
+      active,
+      issuerType: 'COMPANY',
+      legalNameAr: null,
+      countryCode: 'JO',
+      invoiceBranding: null,
+      bankDetailsCiphertext: null,
+      lastInvoiceCounter: 2n,
+    };
+    const create = jest.fn(({ data }: { data: Record<string, unknown> }) => {
+      const lines = (data.lines as { create: Array<Record<string, unknown>> }).create;
+      return Promise.resolve(invoice({
+        ...data,
+        id: 'manual-invoice-1',
+        status: InvoiceStatus.DRAFT,
+        sourceSubscriptionId: null,
+        sourceRenewalCaseId: null,
+        customerId: null,
+        sourceSubscription: null,
+        customer: null,
+        billingEntity: issuer,
+        lines: lines.map((line, index) => ({
+          id: `manual-line-${index + 1}`,
+          invoiceId: 'manual-invoice-1',
+          ...line,
+        })),
+      }));
+    });
+    const tx = {
+      invoiceSequence: { upsert: jest.fn(() => Promise.resolve({ year: 2026, lastValue: 2 })) },
+      billingEntity: { update: jest.fn(() => Promise.resolve(issuer)) },
+      invoice: { create },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    return { ...serviceWith(prisma), create, tx };
+  }
+
+  const oneTimeInput = {
+    billingEntityId: 'entity-1',
+    currencyCode: 'JOD',
+    invoiceDate: '2026-11-23',
+    periodStart: '2026-11-23',
+    periodEnd: '2026-11-24',
+    customerNameEn: 'One-time buyer',
+    customerAddress: 'Customer billing address',
+    customerCountry: 'Jordan',
+    lines: [{
+      description: 'One-time consulting service',
+      quantity: '1',
+      unitPrice: '45.000',
+      discountAmount: '0',
+    }],
+  };
+
+  it('creates an unaffiliated DRAFT without a customer, subscription or renewal case', async () => {
+    const h = manualHarness();
+    const result = await h.service.createManualDraft(oneTimeInput, context);
+    expect(result.id).toBe('manual-invoice-1');
+    expect(result.status).toBe(InvoiceStatus.DRAFT);
+    expect(result.customerId).toBeNull();
+    expect(result.sourceSubscriptionId).toBeNull();
+    expect(result.sourceRenewalCaseId).toBeNull();
+    expect(result.customerNameEnSnapshot).toBe('One-time buyer');
+    expect(result.customerCodeSnapshot).toBe('ONE-TIME');
+    expect(result.grandTotal).toBe('45.000');
+    expect(result.lines[0]?.description).toBe('One-time consulting service');
+    expect(result.lines[0]?.taxRate).toBeNull();
+    expect(h.create).toHaveBeenCalledTimes(1);
+    const input = h.create.mock.calls[0]![0].data;
+    expect(input).not.toHaveProperty('sourceSubscriptionId');
+    expect(input).not.toHaveProperty('sourceRenewalCaseId');
+    expect(h.audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ eventKey: 'invoice.manual_draft_created' }),
+      expect.anything(),
+    );
+  });
+
+  it('does not officialize or collect a zero-priced draft on creation', async () => {
+    const h = manualHarness();
+    const result = await h.service.createManualDraft({
+      ...oneTimeInput,
+      lines: [{ ...oneTimeInput.lines[0]!, unitPrice: '0.000' }],
+    }, context);
+    expect(result.grandTotal).toBe('0.000');
+    expect(result.status).toBe(InvoiceStatus.DRAFT);
+    expect(result.verifiedOfficial).toBe(false);
+  });
+
+  it('refuses an inactive legal issuer before persisting an invoice', async () => {
+    const h = manualHarness(false);
+    await expect(h.service.createManualDraft(oneTimeInput, context))
+      .rejects.toThrow(BadRequestException);
+    expect(h.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects reversed periods without opening a database transaction', async () => {
+    const h = manualHarness();
+    await expect(h.service.createManualDraft({
+      ...oneTimeInput, periodEnd: '2026-11-22',
+    }, context)).rejects.toThrow(BadRequestException);
+    expect(h.tx.invoice.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('InvoicesService draft/preflight transitions', () => {
   it('recalculates draft line and invoice totals on the server', async () => {
     const old = invoice();
