@@ -328,6 +328,7 @@ describe('InvoicesService independent manual drafts (P1.1)', () => {
         status: InvoiceStatus.DRAFT,
         sourceSubscriptionId: null,
         sourceRenewalCaseId: null,
+        activeDraftKey: null,
         customerId: null,
         sourceSubscription: null,
         customer: null,
