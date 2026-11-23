@@ -6,10 +6,11 @@ function contact(id: string, role: string, email: string | null) {
 }
 
 function harness(contacts: ReturnType<typeof contact>[], fallback: string | null) {
-  const findMany = jest.fn(async (_query: unknown) => contacts);
-  const resolvePrimaryRecipient = jest.fn(async (_customerId: string, _tx: unknown) =>
-    fallback ? { email: fallback } : null,
-  );
+  const findMany = jest.fn((query: unknown) => { void query; return Promise.resolve(contacts); });
+  const resolvePrimaryRecipient = jest.fn((customerId: string, tx: unknown) => {
+    void customerId; void tx;
+    return Promise.resolve(fallback ? { email: fallback } : null);
+  });
   return {
     db: { customerContact: { findMany } },
     emails: { resolvePrimaryRecipient },
