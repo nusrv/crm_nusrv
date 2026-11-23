@@ -25,9 +25,9 @@ function accepted(overrides: Record<string, unknown> = {}) {
 }
 
 function harness(row = accepted(), newer = false) {
-  const findUnique = jest.fn(async () => row);
-  const findFirst = jest.fn(async () => newer ? { id: 'renewal-2' } : null);
-  const lock = jest.fn(async () => [{ id: 'locked' }]);
+  const findUnique = jest.fn(() => Promise.resolve(row));
+  const findFirst = jest.fn(() => Promise.resolve(newer ? { id: 'renewal-2' } : null));
+  const lock = jest.fn(() => Promise.resolve([{ id: 'locked' }]));
   return { tx: { $queryRaw: lock, renewalCase: { findUnique, findFirst } }, findUnique, findFirst, lock };
 }
 
