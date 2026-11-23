@@ -38,6 +38,8 @@ export class InvoicesController {
     @Req() req: AuthenticatedRequest,
     @Ip() ip: string,
   ) {
+    // Retain the route contract for compatibility while blocking all outbound submission.
+    void id; void input; void req; void ip;
     throw new BadRequestException('JoFotara API submission is deferred. Record the externally issued official invoice instead.');
   }
 
