@@ -35,9 +35,10 @@ describe('AuthService', () => {
       },
     };
     const jwt = {
-      signAsync: jest.fn((payload: { type: string; sid?: string }, _options?: { expiresIn: number }) =>
-        Promise.resolve(payload.type === 'refresh' ? 'refresh-token' : 'access-token'),
-      ),
+      signAsync: jest.fn((payload: { type: string; sid?: string }, options?: { expiresIn: number }) => {
+        void options; // Authentication test does not depend on JWT signing library options.
+        return Promise.resolve(payload.type === 'refresh' ? 'refresh-token' : 'access-token');
+      }),
       decode: jest.fn(() => ({ exp: Math.floor(Date.now() / 1_000) + 3_600 })),
     };
     const config = new ConfigService({
