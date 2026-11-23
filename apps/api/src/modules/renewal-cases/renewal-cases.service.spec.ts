@@ -332,7 +332,7 @@ describe('RenewalCasesService workflow actions — accepted prospective policy',
     });
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
       eventKey: 'renewal.case.marked_fulfilled',
-      auditMetadata: expect.anything(),
+      metadata: expect.objectContaining({ invoiceId: 'official-invoice-id', trackingOnly: true }),
     }), tx);
   });
 
