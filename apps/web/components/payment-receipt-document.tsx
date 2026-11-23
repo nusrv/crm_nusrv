@@ -64,7 +64,10 @@ export function PaymentReceiptDocument({ receipt }: { receipt: PaymentReceiptVie
     {!effective && <p role="alert">No effective receipt revision is recorded. Review this legacy record before printing.</p>}
     <div className="payment-receipt-print">
       <header className="payment-receipt-header">
-        {receipt.issuerLogoDataUrl && <img className="payment-receipt-logo" src={receipt.issuerLogoDataUrl} alt="Issuer logo" />}
+        {receipt.issuerLogoDataUrl && (
+          /* eslint-disable-next-line @next/next/no-img-element -- immutable historical data URL, not a Next optimized asset */
+          <img className="payment-receipt-logo" src={receipt.issuerLogoDataUrl} alt="Issuer logo" />
+        )}
         <div>
           <h2>PAYMENT RECEIPT</h2>
           <p lang="ar" dir="rtl">سند قبض</p>
@@ -104,7 +107,7 @@ export function PaymentReceiptDocument({ receipt }: { receipt: PaymentReceiptVie
 
       <footer className="payment-receipt-footer">
         This document acknowledges a payment against the official invoice shown above.
-        It is not a tax invoice and does not replace the issuer's official invoice.
+        It is not a tax invoice and does not replace the issuer&apos;s official invoice.
         {effective?.voided ? ' VOID — NOT VALID AS PAYMENT ACKNOWLEDGEMENT.' : ''}
       </footer>
     </div>
