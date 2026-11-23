@@ -420,6 +420,9 @@ export class OperatorReplyOutboundService {
     acceptance: MailAcceptance,
   ): Promise<boolean> {
     const guarded = await this.prisma.$transaction(async (tx) => {
+      // Synchronize late original SMTP acceptance with a resend's
+      // markAttempt() lock, including after lease quarantine.
+      await tx.$queryRaw`SELECT id FROM operator_reply_outbox WHERE id = ${outboxId} FOR UPDATE`;
       const result = await tx.operatorReplyOutbox.updateMany({
         where: { id: outboxId, status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: expectedLeaseTimestamp },
         // §3 (contract audit) — no stale operator-visible error survives a later successful send,
