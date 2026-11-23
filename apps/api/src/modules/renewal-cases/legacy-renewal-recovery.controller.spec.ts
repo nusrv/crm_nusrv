@@ -21,17 +21,17 @@ function harness(overrides: Record<string, unknown> = {}, newer = false) {
     proposedNextRenewalDate: null as Date | null,
     ...overrides,
   };
-  const updateMany = jest.fn(async (_input: unknown) => ({ count: 1 }));
-  const findFirst = jest.fn(async (_input: unknown) => newer ? { id: 'newer-case' } : null);
+  const updateMany = jest.fn((input: unknown) => { void input; return Promise.resolve({ count: 1 }); });
+  const findFirst = jest.fn((input: unknown) => { void input; return Promise.resolve(newer ? { id: 'newer-case' } : null); });
   const tx = {
-    $queryRaw: jest.fn(async () => [{ id: 'locked' }]),
+    $queryRaw: jest.fn(() => Promise.resolve([{ id: 'locked' }])), 
     renewalCase: {
-      findUnique: jest.fn(async (_input: unknown) => row),
+      findUnique: jest.fn((input: unknown) => { void input; return Promise.resolve(row); }),
       findFirst,
       updateMany,
     },
   };
-  const auditRecord = jest.fn(async (_event: unknown, _tx: unknown) => ({ id: 'audit-1' }));
+  const auditRecord = jest.fn((event: unknown, client: unknown) => { void event; void client; return Promise.resolve({ id: 'audit-1' }); });
   const prisma = {
     $transaction: async <T>(callback: (t: typeof tx) => Promise<T>): Promise<T> => callback(tx),
   };
