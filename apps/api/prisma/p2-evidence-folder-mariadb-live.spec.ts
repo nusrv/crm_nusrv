@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import { PrismaClient } from '../src/generated/prisma/client';
+import { PaymentScope } from '../src/generated/prisma/enums';
 import { toMariaDbDriverUrl } from '../src/database/mariadb-url';
 import { mailEvidenceFolderIdentityKey } from '../src/modules/mail/mail-evidence-folder-identity';
 
@@ -19,15 +20,29 @@ function disposableDatabase(input: string): string {
 
 run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
   let prisma: PrismaClient;
+  let issuerId: string;
   let configurationId: string;
 
   beforeAll(async () => {
     prisma = new PrismaClient({
       adapter: new PrismaMariaDb(toMariaDbDriverUrl(disposableDatabase(testUrl!))),
     });
+    // Scope keys are generated from a real issuer; never invent an invalid
+    // configuration scope even inside integration fixtures.
+    const issuer = await prisma.billingEntity.create({
+      data: {
+        code: `P2CI-${randomUUID()}`,
+        customerCodePrefix: `P${randomUUID().slice(0, 6).toUpperCase()}`,
+        name: 'P2 Disposable Issuer',
+        legalName: 'P2 Disposable Issuer LLC',
+        paymentScope: PaymentScope.LOCAL,
+      },
+    });
+    issuerId = issuer.id;
     const row = await prisma.mailConfiguration.create({
       data: {
-        scopeKey: `P2_TEST:${randomUUID()}`,
+        billingEntityId: issuerId,
+        scopeKey: `BILLING_ENTITY:${issuerId}`,
         label: 'P2 disposal-only mailbox',
         environment: 'SANDBOX',
         enabled: false,
@@ -54,6 +69,7 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
         });
         await prisma.mailConfiguration.delete({ where: { id: configurationId } });
       }
+      if (issuerId) await prisma.billingEntity.delete({ where: { id: issuerId } });
       await prisma.$disconnect();
     }
   });
