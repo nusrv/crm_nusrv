@@ -71,6 +71,9 @@ jobs:
       - name: Focused P1 finance invariants on real disposable MariaDB
         working-directory: apps/api
         run: node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --runInBand prisma/p1-finance-mariadb-live.spec.ts
+      - name: P2 independent folder cursor guard on disposable MariaDB
+        working-directory: apps/api
+        run: node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --runInBand prisma/p2-evidence-folder-mariadb-live.spec.ts
       - name: Existing historical MariaDB integration regression (isolated fixtures, destructive)
         working-directory: apps/api
         run: node scripts/run-mariadb-integration.mjs
