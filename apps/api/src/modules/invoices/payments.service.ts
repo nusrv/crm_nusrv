@@ -145,7 +145,10 @@ export class PaymentsService {
     const parsed = (voided ? voidSchema : correctionSchema).safeParse(value);
     if (!parsed.success) throw new BadRequestException('Valid receipt details, revision, reason and request identity are required.');
     const input = parsed.data;
-    const changed = 'amount' in input ? normalizedPayment(input) : null;
+    // The void and correction payloads are different validated Zod shapes;
+    // narrowing on an optional property alone does not establish that the
+    // parsed payload contains all required payment fields.
+    const changed = voided ? null : normalizedPayment(correctionSchema.parse(value));
     const requestKey = `${actorId}:${input.idempotencyKey}`;
     const requestHash = createHash('sha256')
       .update(JSON.stringify({ invoiceId, paymentId, voided, expected: input.expectedVersion, reason: input.reason, changed }))
