@@ -1,5 +1,24 @@
 # P1 implementation recovery — first engineering checkpoint
 
+## Latest verified source CI checkpoint — 2026-11-23
+
+**Validated commit:** `4595d432d3f7d1ee0a4fba952ab4152eed333547`  
+**GitHub Actions run:** https://github.com/nusrv/crm_nusrv/actions/runs/45190468453  
+**Result:** SUCCESS.
+
+- Locked dependency installation: PASS.
+- Prisma Client generation without DB connection: PASS.
+- Workspace TypeScript typecheck: PASS.
+- Focused P1 Jest tests: **108 passed / 108 total** (11 suites).
+- Full API Jest: **1,307 passed; 129 skipped** (143 suites passed, 14 skipped).
+- P0 policy/migration/session/mail Node invariants: **17 passed / 17 total**.
+- Standalone payment-receipt and multi-company invoice static markup rendering: PASS.
+
+These results supersede the **test-not-executed** statements in the earlier chronological recovery checkpoints below. They validate source-level behavior only, **not** MariaDB migrations, transactional concurrency, real SMTP/IMAP, live JoFotara, browser-process restart, visual print fidelity, operational deployment or production schema drift. No release approval has been issued.
+
+The reconciliation work also updated legacy tests to the controlling policy: automated customer renewal sends remain prohibited (OD-6); an ACCEPTED renewal needs a verified same-cycle official invoice for fulfillment (OD-3), but **does not need payment**; P0/Phase 4A wording tests now require the explicit officialization action, not an obsolete label. No prohibited behavior was reenabled for test convenience.
+
+
 Date: 2026-11-23
 Branch: `work/p1-chatgpt-recovery`
 Original interrupted Codex checkpoint: `00700968b84b829d9ef00b86519ae389df97b417`
