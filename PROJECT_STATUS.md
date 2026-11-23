@@ -2,6 +2,8 @@
 
 ## Current status
 
+- **P1 interrupted-run recovery (2026-11-23; branch `work/p1-chatgpt-recovery`):** saved Codex source checkpoint `0070096`; subsequently hardened finance receipt revisions/snapshot consistency, printable stamp-free receipt UI, audited original-acceptance resend suppression in both mail outboxes, and accepted renewal-period adjacency. Added focused P1 tests and source review report. **P1 is not integration-verified**: new tests have not been run here, disposable MariaDB/real browser verification remain open, and no operational migration/deployment was authorized. See `audit/arena/codex_followup/final_owner_handoff/P1_IMPLEMENTATION_REPORT.md`.
+
 - Final owner handoff P0 is partially verified. The worker startup schema gate, 848 API tests, workspace typecheck and actual Next fresh-document recovery passed. Full Chrome restart failed the independent persistent-cookie control. Disposable MariaDB rehearsal and target schema verification remain open. Operational rollout requires separate approval and a verified old-worker cutover. [P0 final validation](audit/arena/codex_followup/final_owner_handoff/P0_FINAL_VALIDATION.md)
 - Phase 0: COMPLETE / OWNER APPROVED
 - Phase 1: COMPLETE / OWNER APPROVED
