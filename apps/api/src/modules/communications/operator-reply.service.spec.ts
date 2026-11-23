@@ -123,7 +123,7 @@ function harness(overrides: {
   };
 
   const service = new OperatorReplyService(prisma as never, audit as never, clock, mailConfigResolver as never, emailResolution as never);
-  return { service, emailMessageCreate, outboxCreate, auditRecord, communicationThreadUpdate, operatorReplyOutboxFindUnique };
+  return { service, mailConfigResolver, emailMessageCreate, outboxCreate, auditRecord, communicationThreadUpdate, operatorReplyOutboxFindUnique };
 }
 
 describe('OperatorReplyService (§8-§11/§15/§16)', () => {
@@ -146,6 +146,21 @@ describe('OperatorReplyService (§8-§11/§15/§16)', () => {
     expect(emailData.renewalCaseId).toBe('case-1');
     const auditCall = auditRecord.mock.calls[0]![0];
     expect(auditCall.eventKey).toBe('communication.reply.queued');
+  });
+
+  it('P1 manual reply creation ignores automatic-send cutover while still resolving its pinned mailbox', async () => {
+    const { service, mailConfigResolver, outboxCreate } = harness();
+    await service.queueReply({
+      threadId: 'thread-1',
+      actorId: 'user-1',
+      idempotencyKey: 'manual-no-automatic-cutover',
+      bodyText: 'Human-authorized reply',
+    });
+    expect(mailConfigResolver.resolvePinned).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'mc-1' }),
+      { checkCutover: false },
+    );
+    expect(outboxCreate).toHaveBeenCalledTimes(1);
   });
 
   it('B — a double-submit with the SAME actor + idempotencyKey + SAME body short-circuits without creating anything new', async () => {
