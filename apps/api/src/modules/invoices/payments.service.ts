@@ -7,7 +7,7 @@ import type { Payment, Prisma } from '../../generated/prisma/client';
 import { ActorType } from '../../generated/prisma/enums';
 import { InvoicesService } from './invoices.service';
 import { officialInvoiceEvidence } from './official-invoice-eligibility';
-import { effectiveReceiptAmounts, paymentSummary, paymentUnits, signedMoney } from './payment-money';
+import { effectiveReceiptAmounts, paymentSummary, paymentUnits, signedMoney, validPositiveAmount } from './payment-money';
 
 const paymentValues = z.object({
   amount: z.string().regex(/^\d{1,11}(?:\.\d{1,3})?$/),
@@ -127,6 +127,9 @@ export class PaymentsService {
       const payment = await tx.payment.findFirst({ where: { id: paymentId, invoiceId } });
       if (!payment) throw new NotFoundException('Select a recorded payment for this invoice.');
       if (payment.currency !== official.currency) throw new ConflictException('Review the payment currency before issuing a receipt.');
+      if (!validPositiveAmount(payment.amount.toString())) {
+        throw new ConflictException('The historical payment amount needs review before a receipt can be issued.');
+      }
       return this.issue(tx, payment, document, official.invoiceNumber, actorId);
     });
   }
