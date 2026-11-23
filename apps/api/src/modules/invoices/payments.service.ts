@@ -239,6 +239,7 @@ export class PaymentsService {
     const existing = await tx.paymentReceipt.findUnique({ where: { paymentId: payment.id } });
     if (existing) return existing;
     const { issuerLogoDataUrl: _logo, ...document } = invoice;
+    void _logo; // Omit the data URL from immutable receipt JSON; asset remains separately versioned.
     const snapshot = JSON.parse(JSON.stringify({ invoiceNumber, invoice: document, payment })) as Prisma.InputJsonValue;
     const receipt = await tx.paymentReceipt.create({
       data: {
