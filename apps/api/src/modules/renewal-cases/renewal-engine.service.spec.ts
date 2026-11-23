@@ -8,7 +8,7 @@ import { RenewalTemplateRenderer } from './renewal-template.renderer';
 // primary channel must never receive a queued CommunicationOutbox row, even though its subscription
 // is otherwise fully eligible for a D-30 reminder today.
 describe('RenewalEngineService — authoritative recipient resolution', () => {
-  it('does not queue a customer reminder, and does not fall back to the scalar, when the resolver finds no valid recipient', async () => {
+  it('does not even resolve a customer recipient when automatic customer reminders are prohibited', async () => {
     const asOf = new Date('2026-08-24T08:00:00.000Z');
     const businessTime = new BusinessTimeService({ getOrThrow: () => 'Asia/Amman' } as never);
 
@@ -87,12 +87,12 @@ describe('RenewalEngineService — authoritative recipient resolution', () => {
 
     const summary = await engine.evaluateAll({ asOf, trigger: 'manual' });
 
-    expect(emailResolution.resolvePrimaryRecipient).toHaveBeenCalledWith('customer-id');
+    expect(emailResolution.resolvePrimaryRecipient).not.toHaveBeenCalled();
     // No CommunicationOutbox row was ever created for this reminder.
     expect(communicationOutboxCreate).not.toHaveBeenCalled();
     expect(summary.customerRemindersQueued).toBe(0);
-    expect(summary.customerRemindersSkippedNoRecipient).toBe(1);
-    expect(auditRecord).toHaveBeenCalledWith(
+    expect(summary.customerRemindersSkippedNoRecipient).toBe(0);
+    expect(auditRecord).not.toHaveBeenCalledWith(
       expect.objectContaining({ eventKey: 'renewal.reminder.skipped.no_recipient' }),
     );
   });
