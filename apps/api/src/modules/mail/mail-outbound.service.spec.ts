@@ -212,6 +212,7 @@ function buildHarness(options: HarnessOptions = {}) {
   });
 
   const txLike = {
+    $queryRaw: jest.fn(() => Promise.resolve([{ id: persisted.id }])),
     communicationOutbox: { updateMany: communicationOutboxUpdateMany },
     emailMessage: { create: emailMessageCreate, update: emailMessageUpdate },
     integrationHealthEvent: { create: integrationHealthEventCreate },
