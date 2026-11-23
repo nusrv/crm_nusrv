@@ -58,6 +58,7 @@ jobs:
           npm run test -w @cp/api -- --runTestsByPath \
             src/modules/mail/active-email-evidence.spec.ts \
             src/modules/mail/mail-evidence-folder-identity.spec.ts \
+            src/modules/mail/mail-evidence-sent-preview.spec.ts \
             src/modules/mail/integration-health.service.spec.ts \
             src/modules/mail/integration-health.controller.spec.ts \
             src/modules/communications/operator-reply.service.spec.ts
