@@ -1400,11 +1400,42 @@ model MailConfiguration {
   emailMessages             EmailMessage[]
   healthEvents              IntegrationHealthEvent[]
   operatorReplyOutbox       OperatorReplyOutbox[]
+  evidenceFolderCheckpoints MailEvidenceFolderCheckpoint[]
 
   @@index([billingEntityId])
   @@index([environment])
   @@index([enabled])
   @@map("mail_configurations")
+}
+
+// P2.B: new folder-scoped checkpoint storage, NOT yet a worker cursor. Existing
+// MailConfiguration.lastSyncUidValidity/lastSyncUid remain authoritative for
+// current INBOX ingestion until owner-approved migration/cutover. No implicit
+// Sent/DSN folder discovery, no automatic seeding, and syncEnabled defaults false.
+// folderIdentityKey is a SHA-256 of the exact canonical IMAP folder (INBOX alone
+// is case-insensitive); unique identity does NOT rely on MariaDB's default
+// case-insensitive collation for folderName.
+model MailEvidenceFolderCheckpoint {
+  id                  String             @id @default(uuid()) @db.VarChar(36)
+  mailConfigurationId String             @map("mail_configuration_id") @db.VarChar(36)
+  folderName          String             @map("folder_name") @db.VarChar(255)
+  folderIdentityKey   String             @map("folder_identity_key") @db.VarChar(67)
+  sourceKind          String             @map("source_kind") @db.VarChar(24)
+  syncEnabled         Boolean            @default(false) @map("sync_enabled")
+  uidValidity         BigInt?            @map("uid_validity")
+  lastUid             BigInt?            @map("last_uid")
+  capability          String             @default("UNPROBED") @db.VarChar(24)
+  lastProbeAt         DateTime?          @map("last_probe_at")
+  lastObservedAt      DateTime?          @map("last_observed_at")
+  lastError           String?            @map("last_error") @db.VarChar(1000)
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+  mailConfiguration   MailConfiguration  @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
+
+  @@unique([mailConfigurationId, folderIdentityKey], map: "mail_evidence_folder_checkpoints_config_identity_uq")
+  @@index([mailConfigurationId, sourceKind], map: "mail_evidence_folder_checkpoints_config_kind_idx")
+  @@index([syncEnabled], map: "mail_evidence_folder_checkpoints_sync_enabled_idx")
+  @@map("mail_evidence_folder_checkpoints")
 }
 
 // Immutable event/signal log — NOT the future Phase 6/7 incident/action queue. Recovery is
