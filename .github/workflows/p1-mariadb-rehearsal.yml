@@ -1,13 +1,8 @@
 name: P1 isolated MariaDB migration rehearsal
 
+# Manually triggered only for this NUSRV CRM disposable database workflow.
+# Do not run on every commit/push to the recovery branch.
 on:
-  push:
-    branches:
-      - work/p1-chatgpt-recovery
-    paths:
-      - 'apps/api/prisma/**'
-      - 'apps/api/scripts/run-mariadb-integration.mjs'
-      - '.github/workflows/p1-mariadb-rehearsal.yml'
   workflow_dispatch:
 
 permissions:
