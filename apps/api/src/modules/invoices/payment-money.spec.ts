@@ -8,6 +8,7 @@ const revision = (amount: string, voided = false, currency = 'JOD') => ({
 });
 
 const payment = (...revisions: ReturnType<typeof revision>[]) => ({
+  amount: { toString: () => '40.000' },
   currency: 'JOD',
   receipt: { revisions },
 });
@@ -57,7 +58,7 @@ describe('P1 financial balance rules (OD-4 / CL-1 / CL-2)', () => {
 
   it('does not use original Payment amounts when a receipt is missing or mismatched', () => {
     const { amounts, unresolved } = effectiveReceiptAmounts([
-      { currency: 'JOD', receipt: null },
+      { amount: { toString: () => '40.000' }, currency: 'JOD', receipt: null },
       payment(revision('5.000', false, 'USD')),
       { ...payment(revision('20.000')), currency: 'USD' },
       payment(revision('12.500')),
@@ -81,6 +82,16 @@ describe('P1 financial balance rules (OD-4 / CL-1 / CL-2)', () => {
     expect(paymentSummary('100.000', amounts)).toEqual({
       total: '100.000', paid: '5.000', balance: '95.000', status: 'PARTIALLY_PAID',
     });
+  });
+
+  it('quarantines a negative or zero historical Payment even when its receipt appears valid', () => {
+    const { amounts, unresolved } = effectiveReceiptAmounts([
+      { ...payment(revision('10.000')), amount: { toString: () => '-10.000' } },
+      { ...payment(revision('11.000')), amount: { toString: () => '0.000' } },
+      payment(revision('12.000')),
+    ], 'JOD');
+    expect(unresolved).toBe(2);
+    expect(amounts).toEqual(['12.000']);
   });
 
   it('reports full collection and visible excess without silently allocating or refunding money', () => {
