@@ -144,6 +144,29 @@ describe('P1 PaymentsService — official-only collection and receipt integrity'
     expect(h.paymentCreate).toHaveBeenCalledTimes(1);
   });
 
+  it('can issue a first receipt for a verified historical payment without recording a second payment', async () => {
+    const h = harness();
+    h.tx.payment.findFirst.mockResolvedValueOnce(originalPayment);
+    const receipt = await h.service.receipt('invoice-1', 'payment-1', 'admin-1');
+    expect(receipt.id).toBe('receipt-1');
+    expect(h.paymentCreate).not.toHaveBeenCalled();
+    expect(h.receiptCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['-1.000', '0.000'])(
+    'refuses to issue a receipt for a historical payment of %s',
+    async (amount) => {
+      const h = harness();
+      h.tx.payment.findFirst.mockResolvedValueOnce({
+        ...originalPayment, amount: AMOUNT(amount),
+      });
+      await expect(h.service.receipt('invoice-1', 'payment-1', 'admin-1'))
+        .rejects.toThrow(ConflictException);
+      expect(h.receiptCreate).not.toHaveBeenCalled();
+      expect(h.paymentCreate).not.toHaveBeenCalled();
+    },
+  );
+
   it('records receipt correction as an additive version without rewriting the original payment', async () => {
     const h = harness();
     const newVersion = await h.service.correct('invoice-1', 'payment-1', {
