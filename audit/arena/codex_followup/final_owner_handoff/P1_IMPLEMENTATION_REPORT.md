@@ -184,3 +184,29 @@ Added regression scenarios for safe repeated payment/reopening and fresh-write r
 Active Email Sync and the common COMPANY template are required under the approved roadmap, but activating either without P0 mail/schema and P1 transaction evidence would violate the release order. No live mail/provider/DB operations were performed here.
 
 **Verdict:** additional P1 source defects corrected, but no build/CI/browser/DB acceptance evidence yet.
+
+## Recovery checkpoint 6 — real MariaDB evidence, new human reply fix and workflow isolation (2026-11-23)
+
+### Source CI and notification control
+
+The verified GitHub Actions source-validation run `45193099922` at `be2a0a1` passed workspace typecheck, API Jest, P0 node invariants, static invoice/receipt rendering, Prisma validate and ESLint. Later commits have **not** been revalidated by that suite after the owner requested manual-only workflow execution. Both recovery-branch workflow files now use only `workflow_dispatch`; no `push` trigger remains. This change is scoped to the NUSRV CRM recovery branch, not organization-wide Actions settings.
+
+The first disposable MariaDB rehearsal successfully applied all checked-in Prisma migrations to a fresh database and verified the migration ledger. The later run `45194996014` independently passed the focused `p1-finance-mariadb-live.spec.ts` step (partial receipts, correction, void, rollback, unique concurrent payment key). The **historical combined integration step failed**, with 35 failing and 71 passing assertions, largely reflecting P0 owner decisions disabling operational AI and automatic customer reminders and a separate human-reply cutover bug. Therefore the rehearsal's overall status remained **FAILED**. This does not prove upgrade safety on existing target data.
+
+### Actual human reply cutover bug corrected
+
+DB failures identified a real source defect: `OperatorReplyService.attemptQueueReply()` called `MailConfigurationResolverService.resolvePinned()` with its default `checkCutover:true` for a human-initiated reply. The resolver's documented contract explicitly exempts operator replies from automatic-reminder cutover; outbound worker already passed `{ checkCutover: false }`. This could incorrectly reject a manual reply with `OUTBOUND_SEND_CUTOVER_NOT_REACHED`.
+
+The queue creation path now explicitly passes `{ checkCutover: false }` while **retaining enabled/environment/mailbox checks**. Reverted the temporary cutover workaround in the historical MariaDB fixture so the test still detects this regression. Added an explicit operator reply unit regression check. These updates have **not** been rerun against MariaDB since workflow notifications were disabled.
+
+### Real DB legacy tests reconciled with approved OD-6
+
+Updated the old Phase 2 MariaDB renewal integration expectations to explicitly prohibit automatic CUSTOMER outbox messages while preserving case creation, internal escalation checks, concurrency and human hold controls. No reminder automation was re-enabled. Older Phase 3 outbound and AI test suites still include assertions written for now-prohibited execution and require separate explicit reconciliation; they have not been silently disabled or reported green.
+
+### Other verification constraints
+
+The newly added P1 finance suite initially exposed a TypeScript template-literal UUID default-argument inference error under branch CI. Updated the helper signature to accept an explicit string idempotency key. That correction is source committed but **not yet confirmed by a fresh TypeScript run** under the manual-only workflow.
+
+The P2.Active Email Sync source inventory and inert classification work are documented in `P2_ACTIVE_SYNC_READINESS.md`, without activation.
+
+**Release status: NOT READY; no live database, outbound customer mail, or production deploy touched.**
