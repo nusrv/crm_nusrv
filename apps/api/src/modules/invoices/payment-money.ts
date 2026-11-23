@@ -14,7 +14,7 @@ export function signedMoney(units: bigint): string {
  return units < 0n ? `-${formatMoney(-units)}` : formatMoney(units);
 }
 
-function validPositiveAmount(value: string): boolean {
+export function validPositiveAmount(value: string): boolean {
  return /^\d{1,11}(?:\.\d{1,3})?$/.test(value) && paymentUnits(value) > 0n;
 }
 
