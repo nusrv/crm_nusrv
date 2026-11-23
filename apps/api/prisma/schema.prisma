@@ -1430,7 +1430,7 @@ model MailEvidenceFolderCheckpoint {
   lastError           String?            @map("last_error") @db.VarChar(1000)
   createdAt           DateTime           @default(now()) @map("created_at")
   updatedAt           DateTime           @updatedAt @map("updated_at")
-  mailConfiguration   MailConfiguration  @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict)
+  mailConfiguration   MailConfiguration  @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict, map: "mail_evidence_folder_checkpoints_configuration_fkey")
 
   @@unique([mailConfigurationId, folderIdentityKey], map: "mail_evidence_folder_checkpoints_config_identity_uq")
   @@index([mailConfigurationId, sourceKind], map: "mail_evidence_folder_checkpoints_config_kind_idx")
