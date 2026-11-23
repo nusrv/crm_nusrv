@@ -166,46 +166,46 @@ describe('RenewalEngineService — missed-milestone recovery (Slice B §2/§4)',
   const asOf = new Date('2026-09-01T08:00:00.000Z');
   const businessTime = new BusinessTimeService({ getOrThrow: () => 'Asia/Amman' } as never);
 
-  it('A — a single missed D-21 is queued once when the engine resumes at D-20', async () => {
+  it('A — missed D-21 does not schedule a prohibited automatic customer send at D-20', async () => {
     const fake = buildFakePrisma();
     fake.setWindowSubscriptions([subscriptionAtDaysBeforeDue(businessTime, asOf, 20)]);
     const engine = buildEngine(fake.prisma);
 
     const summary = await engine.evaluateAll({ asOf, trigger: 'test' });
 
-    expect(summary.customerRemindersQueued).toBe(1);
-    expect(fake.outboxIdempotencyKeys.size).toBe(1);
+    expect(summary.customerRemindersQueued).toBe(0);
+    expect(fake.outboxIdempotencyKeys.size).toBe(0);
   });
 
-  it('B — D-21 and D-14 both missed: only D-14 (the nearer one) is queued when resuming at D-12', async () => {
+  it('B — missed D-21 and D-14 do not schedule any customer email at D-12', async () => {
     const fake = buildFakePrisma();
     fake.setWindowSubscriptions([subscriptionAtDaysBeforeDue(businessTime, asOf, 12)]);
     const engine = buildEngine(fake.prisma);
 
     const summary = await engine.evaluateAll({ asOf, trigger: 'test' });
 
-    expect(summary.customerRemindersQueued).toBe(1);
-    expect(fake.outboxIdempotencyKeys.size).toBe(1);
+    expect(summary.customerRemindersQueued).toBe(0);
+    expect(fake.outboxIdempotencyKeys.size).toBe(0);
   });
 
-  it('C — once D-14 is already queued, resuming at D-12 never replays the older D-21', async () => {
+  it('C — repeated catch-up evaluations do not create customer messages', async () => {
     const fake = buildFakePrisma();
     const subscription = subscriptionAtDaysBeforeDue(businessTime, asOf, 14);
     fake.setWindowSubscriptions([subscription]);
     const engine = buildEngine(fake.prisma);
     await engine.evaluateAll({ asOf, trigger: 'test' });
-    expect(fake.outboxIdempotencyKeys.size).toBe(1);
+    expect(fake.outboxIdempotencyKeys.size).toBe(0);
 
     // Two business days later the same subscription now reads as D-12.
     const laterAsOf = businessTime.addBusinessDays(asOf, 2);
     const summary = await engine.evaluateAll({ asOf: laterAsOf, trigger: 'test' });
 
     expect(summary.customerRemindersQueued).toBe(0);
-    expect(summary.duplicatesPrevented).toBe(1);
-    expect(fake.outboxIdempotencyKeys.size).toBe(1);
+    expect(summary.duplicatesPrevented).toBe(0);
+    expect(fake.outboxIdempotencyKeys.size).toBe(0);
   });
 
-  it('D — running twice on the same missed-catch-up day (D-6, for missed D-7) produces one outbox row only', async () => {
+  it('D — repeated same-day catch-up never schedules customer messages', async () => {
     const fake = buildFakePrisma();
     fake.setWindowSubscriptions([subscriptionAtDaysBeforeDue(businessTime, asOf, 6)]);
     const engine = buildEngine(fake.prisma);
@@ -213,10 +213,10 @@ describe('RenewalEngineService — missed-milestone recovery (Slice B §2/§4)',
     const first = await engine.evaluateAll({ asOf, trigger: 'test' });
     const second = await engine.evaluateAll({ asOf, trigger: 'test' });
 
-    expect(first.customerRemindersQueued).toBe(1);
+    expect(first.customerRemindersQueued).toBe(0);
     expect(second.customerRemindersQueued).toBe(0);
-    expect(second.duplicatesPrevented).toBe(1);
-    expect(fake.outboxIdempotencyKeys.size).toBe(1);
+    expect(second.duplicatesPrevented).toBe(0);
+    expect(fake.outboxIdempotencyKeys.size).toBe(0);
   });
 });
 
