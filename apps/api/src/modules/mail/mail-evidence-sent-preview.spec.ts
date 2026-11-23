@@ -106,9 +106,10 @@ describe('P2.C read-only bounded Sent observations — no worker or cursor side 
       }),
       expect.objectContaining({ uid: 15n, messageIdHeader: '<case@Example.test>', deliveryStatus: 'UNKNOWN' }),
     ]);
-    expect(JSON.stringify(result, (_, value: unknown) =>
-      typeof value === 'bigint' ? value.toString() : value))
-      .not.toContain('Customer sensitive content');
+    expect(JSON.stringify(result, (key: string, value: unknown) => {
+      void key;
+      return typeof value === 'bigint' ? value.toString() : value;
+    })).not.toContain('Customer sensitive content');
     expect(state.lastUid).toBe(10n);
     expect(state.uidValidity).toBe(123n);
   });
