@@ -33,7 +33,7 @@ export interface SentFolderObservation {
 
 export type SentFolderPreview =
   | { outcome: 'NOT_ENABLED' | 'NOT_AVAILABLE' | 'NOT_SENT_SOURCE' | 'FOLDER_IDENTITY_MISMATCH' |
-    'INVALID_CURSOR' | 'NEEDS_BASELINE' | 'INVALID_LIMIT'; observations: [] }
+    'INVALID_CURSOR' | 'NEEDS_BASELINE' | 'INVALID_LIMIT' | 'FETCH_INTEGRITY_ERROR'; observations: [] }
   | { outcome: 'UIDVALIDITY_CHANGED'; currentUidValidity: bigint; observations: [] }
   | { outcome: 'PREVIEW_ONLY'; observations: SentFolderObservation[]; highestObservedUid: bigint | null };
 
@@ -50,9 +50,10 @@ export async function previewSentFolderObservations(
   reader: Pick<MailboxReader, 'fetchMessagesSince'>,
   requestedLimit = SENT_PREVIEW_MAX_MESSAGES,
 ): Promise<SentFolderPreview> {
-  const empty = (outcome: Extract<SentFolderPreview, { observations: [] }>['outcome']) => ({
-    outcome, observations: [] as [],
-  });
+  const empty = (outcome:
+    | 'NOT_ENABLED' | 'NOT_AVAILABLE' | 'NOT_SENT_SOURCE' | 'FOLDER_IDENTITY_MISMATCH'
+    | 'INVALID_CURSOR' | 'NEEDS_BASELINE' | 'INVALID_LIMIT' | 'FETCH_INTEGRITY_ERROR',
+  ): SentFolderPreview => ({ outcome, observations: [] });
 
   if (!checkpoint.syncEnabled) return empty('NOT_ENABLED');
   if (checkpoint.sourceKind !== 'SENT') return empty('NOT_SENT_SOURCE');
@@ -86,15 +87,18 @@ export async function previewSentFolderObservations(
   }
 
   const canonicalFolder = canonicalizeImapFolder(checkpoint.folderName);
-  const unique = new Map<bigint, FetchedMailboxMessage>();
+  // A malformed reader result must not become a persisted cursor candidate.
+  // In particular, never silently hide duplicate UIDs, descending scans or
+  // a batch larger than the requested bound.
+  if (result.messages.length > limit) return empty('FETCH_INTEGRITY_ERROR');
+  let previousUid = checkpoint.lastUid!;
   for (const message of result.messages) {
-    if (message.uid <= checkpoint.lastUid! || message.uid <= 0n) continue;
-    unique.set(message.uid, message);
+    if (message.uid <= previousUid || message.uid <= 0n) {
+      return empty('FETCH_INTEGRITY_ERROR');
+    }
+    previousUid = message.uid;
   }
-
-  const messages = [...unique.values()]
-    .sort((a, b) => a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0)
-    .slice(0, limit);
+  const messages: FetchedMailboxMessage[] = result.messages;
 
   // No cursor update, no sender/recipient matching, no provider/DSN assertion.
   const observations: SentFolderObservation[] = messages.map((message) => ({
