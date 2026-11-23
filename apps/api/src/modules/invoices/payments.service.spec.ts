@@ -54,7 +54,7 @@ function harness(status = 'FAWTARA_ACCEPTED') {
       create: paymentCreate,
     },
     paymentReceipt: {
-      findUnique: jest.fn(async () => null),
+      findUnique: jest.fn(async (_args: unknown): Promise<{ id: string; paymentId: string } | null> => null),
       findFirst: jest.fn(async () => ({
         id: 'receipt-1', paymentId: originalPayment.id,
         revisions: [originalRevision],
