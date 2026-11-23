@@ -718,3 +718,59 @@ tbody tr:last-child td {
 .nusrv-buyer {
   overflow-wrap: anywhere;
 }
+
+
+/* P1 payment receipt: an acknowledgement, never the official tax invoice. */
+.payment-receipt-print {
+  background: #fff;
+  color: #111827;
+  border: 1px solid #cbd5e1;
+  padding: 22px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.payment-receipt-header {
+  display: grid;
+  grid-template-columns: minmax(0, 110px) 1fr auto;
+  align-items: center;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #111827;
+}
+.payment-receipt-header h2 {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.payment-receipt-logo { max-width: 100px; max-height: 65px; object-fit: contain; }
+.payment-receipt-id { overflow-wrap: anywhere; font-size: 11px; max-width: 135px; text-align: right; }
+.payment-receipt-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 0; }
+.payment-receipt-parties > div { min-width: 0; overflow-wrap: anywhere; }
+.payment-receipt-details { border-top: 1px solid #cbd5e1; }
+.payment-receipt-details > div {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px; padding: 7px 0; border-bottom: 1px solid #e2e8f0;
+}
+.payment-receipt-details dt { font-weight: 600; }
+.payment-receipt-details dd { overflow-wrap: anywhere; text-align: right; }
+.payment-receipt-amount {
+  display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  margin-top: 20px; padding: 16px; border: 2px solid #111827;
+  font-size: 16px; font-weight: 700;
+}
+.payment-receipt-note { margin-top: 12px; overflow-wrap: anywhere; }
+.payment-receipt-footer {
+  margin-top: 28px; border-top: 1px solid #cbd5e1; padding-top: 12px;
+  font-size: 11px; color: #475569;
+}
+@media print {
+  body:has(.payment-receipt-print) * { visibility: hidden !important; }
+  body:has(.payment-receipt-print) .payment-receipt-print,
+  body:has(.payment-receipt-print) .payment-receipt-print * { visibility: visible !important; }
+  body:has(.payment-receipt-print) .payment-receipt-print {
+    position: fixed !important; left: 0 !important; top: 0 !important;
+    width: 210mm !important; max-width: 210mm !important;
+    min-height: 0 !important; margin: 0 !important; border: 0 !important;
+    padding: 10mm 12mm !important; background: #fff !important; box-shadow: none !important;
+  }
+}
