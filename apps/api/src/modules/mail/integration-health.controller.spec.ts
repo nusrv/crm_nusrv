@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { jest } from '@jest/globals';
 import { REQUIRED_ROLES_KEY } from '../../identity/auth.constants';
 import { IntegrationHealthController } from './integration-health.controller';
 
