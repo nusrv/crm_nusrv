@@ -34,7 +34,7 @@ export function InvoicesManager() {
       <PageHeading
         eyebrow="Financial operations"
         title="Invoices"
-        description="Human-reviewed invoice snapshots created from active subscriptions. A CRM draft is not an official JoFotara invoice."
+        description="Manually reviewed renewal, subscription and independent invoice drafts. A CRM draft is not an official JoFotara invoice."
       />
       <Notice message={error} />
       <div className="filter-bar mt-6">
@@ -78,9 +78,15 @@ export function InvoicesManager() {
                   <small>{invoice.customerNameEnSnapshot || invoice.customerNameArSnapshot}</small>
                 </td>
                 <td>
-                  {invoice.sourceSubscription.name}
-                  <br />
-                  <small>{invoice.sourceSubscription.subscriptionCode}</small>
+                  {invoice.sourceSubscription ? (
+                    <>
+                      {invoice.sourceSubscription.name}
+                      <br />
+                      <small>{invoice.sourceSubscription.subscriptionCode}</small>
+                    </>
+                  ) : (
+                    <span className="muted">Independent / one-time invoice</span>
+                  )}
                 </td>
                 <td>{invoice.internalReference}</td>
                 <td>{invoice.fawtaraInvoiceNumber || '—'}</td>
