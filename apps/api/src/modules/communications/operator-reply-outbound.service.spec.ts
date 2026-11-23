@@ -135,6 +135,7 @@ function harness(options: {
     $transaction: jest.fn((cb: (tx: unknown) => unknown) =>
       Promise.resolve(
         cb({
+          $queryRaw: jest.fn(() => Promise.resolve([{ id: options.row.id }])),
           operatorReplyOutbox: { updateMany: operatorReplyOutbox.updateMany },
           emailMessage: { update: emailMessageUpdate },
         }),
