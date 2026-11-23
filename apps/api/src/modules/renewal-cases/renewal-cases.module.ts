@@ -1,3 +1,4 @@
+import { ManualRenewalService } from './manual-renewal.service';
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { CustomersModule } from '../customers/customers.module';
@@ -12,6 +13,7 @@ import { RenewalEngineService } from './renewal-engine.service';
 import { RENEWAL_QUEUE } from './renewal-queue.constants';
 import { RenewalQueueService } from './renewal-queue.service';
 import { RenewalTemplateRenderer } from './renewal-template.renderer';
+import { LegacyRenewalRecoveryController } from './legacy-renewal-recovery.controller';
 
 @Module({
   imports: [BullModule.registerQueue({ name: RENEWAL_QUEUE }), CustomersModule],
@@ -19,10 +21,12 @@ import { RenewalTemplateRenderer } from './renewal-template.renderer';
     RenewalCasesController,
     RenewalConfigurationController,
     CommunicationOutboxController,
+    LegacyRenewalRecoveryController,
     RenewalEngineController,
   ],
   providers: [
     RenewalCasesService,
+    ManualRenewalService,
     RenewalConfigurationService,
     CommunicationOutboxService,
     RenewalTemplateRenderer,

@@ -1,3 +1,4 @@
+import { ManualRenewalService } from './manual-renewal.service';
 import { Body, Controller, Get, Ip, Param, Post, Query, Req } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../../identity/auth-user';
 import { Roles } from '../../identity/roles.decorator';
@@ -6,7 +7,37 @@ import { RenewalCasesService } from './renewal-cases.service';
 
 @Controller('renewal-cases')
 export class RenewalCasesController {
-  constructor(private readonly renewalCases: RenewalCasesService) {}
+  constructor(private readonly renewalCases: RenewalCasesService, private readonly manual: ManualRenewalService) {}
+
+  @Get(':id/reminder-preview')
+  prepare(@Param('id') id: string) { return this.manual.prepare(id); }
+  @Roles('ADMIN')
+  @Post(':id/send-reminder')
+  send(@Param('id') id: string, @Body() input: unknown, @Req() req: AuthenticatedRequest) {
+    return this.manual.send(id, input, req.user.id);
+  }
+  @Get(':id/replies')
+  replies(@Param('id') id: string) { return this.manual.replies(id); }
+  @Roles('ADMIN')
+  @Post(':id/replies/:messageId/read')
+  read(@Param('id') id: string, @Param('messageId') messageId: string, @Req() req: AuthenticatedRequest) {
+    return this.manual.markRead(id, messageId, req.user.id);
+  }
+  @Roles('ADMIN')
+  @Post(':id/replies/:messageId/unread')
+  unread(@Param('id') id: string, @Param('messageId') messageId: string, @Req() req: AuthenticatedRequest) {
+    return this.manual.markRead(id, messageId, req.user.id, false);
+  }
+  @Roles('ADMIN')
+  @Get(':id/outbox/:outboxId/evidence')
+  evidence(@Param('id') id: string, @Param('outboxId') outboxId: string) {
+    return this.manual.evidence(id, outboxId);
+  }
+  @Roles('ADMIN')
+  @Post(':id/outbox/:outboxId/resend')
+  resend(@Param('id') id: string, @Param('outboxId') outboxId: string, @Body() input: unknown, @Req() req: AuthenticatedRequest) {
+    return this.manual.resend(id, outboxId, input, req.user.id);
+  }
 
   @Get()
   list(@Query() query: RenewalCaseListQueryDto) {
@@ -70,6 +101,18 @@ export class RenewalCasesController {
   @Post(':id/mark-do-not-renew')
   markDoNotRenew(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Ip() ip: string) {
     return this.renewalCases.markDoNotRenew(id, { actorId: req.user.id, ipAddress: ip });
+  }
+
+  @Roles('ADMIN')
+  @Post(':id/needs-clarification')
+  clarify(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    return this.manual.review(id, true, req.user.id);
+  }
+
+  @Roles('ADMIN')
+  @Post(':id/keep-in-review')
+  keepInReview(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    return this.manual.review(id, false, req.user.id);
   }
 
   @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')

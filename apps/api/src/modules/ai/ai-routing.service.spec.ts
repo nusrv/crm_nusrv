@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { AiRoutingService } from './ai-routing.service';
 import { AI_ROUTING_RESULT_CODE, AI_ROUTING_VERSION } from './ai-routing.constants';
 
@@ -246,6 +247,10 @@ function seedHumanReview(h: ReturnType<typeof buildHarness>, messageStatus: Emai
     completedAt: null,
   });
 }
+
+// Exercise the retained AI implementation behind the frozen production gate.
+beforeEach(() => { jest.spyOn(aiOperationalPolicy, 'isDeferred').mockReturnValue(false); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 describe('AiRoutingService.processOne — claim/lease (§9)', () => {
   it('claims a PENDING decision and marks it PROCESSING with attempts incremented', async () => {

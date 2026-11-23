@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { DynamicLlmGateway } from './dynamic-llm-gateway';
 import { LlmPermanentError } from './llm-errors';
 
@@ -32,6 +33,10 @@ function fakeRegistry(adapters: Record<string, ReturnType<typeof fakeAdapter> | 
 function input() {
   return { kind: 'untrusted_email_classification_input', currentMessage: { bodyText: 'x' } } as never;
 }
+
+// Exercise the retained AI implementation behind the frozen production gate.
+beforeEach(() => { jest.spyOn(aiOperationalPolicy, 'isDeferred').mockReturnValue(false); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 describe('DynamicLlmGateway (provider-neutral correction)', () => {
   it('P1/regression §6.1 — OPENAI resolves and delegates to the OpenAI adapter only, regardless of any AI_PROVIDER env value that might exist', async () => {

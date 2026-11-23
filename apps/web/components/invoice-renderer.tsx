@@ -56,11 +56,6 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
             <p dir="rtl">{visible.nameAr && invoice.issuerLegalNameArSnapshot}</p>
             <p>{visible.address && invoice.issuerAddressSnapshot}</p>
             <p>{visible.country && (details.countryName || presentation?.countryCode)}</p>
-            <p>
-              {visible.taxNumber &&
-                invoice.issuerTaxNumberSnapshot &&
-                `Tax / National No. ${invoice.issuerTaxNumberSnapshot}`}
-            </p>
           </div>
           <div className="nusrv-rule" />
           <h1>Invoice {invoice.internalReference}</h1>
@@ -99,7 +94,9 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
           <p>
             {invoice.customerAddressSnapshot} {invoice.customerCountrySnapshot}
           </p>
-          <p className="nusrv-tax">Sales Tax No.: {invoice.customerTaxNumberSnapshot || '-'}</p>
+          {visible.taxNumber && (
+            <p className="nusrv-tax">Sales Tax No.: {invoice.issuerTaxNumberSnapshot || '-'}</p>
+          )}
         </div>
       </header>
       {discrepancy && (

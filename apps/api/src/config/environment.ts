@@ -41,7 +41,7 @@ const environmentSchema = z
     JWT_ACCESS_SECRET: z.string().min(32),
     JWT_REFRESH_SECRET: z.string().min(32),
     JWT_ACCESS_TTL: duration.default('15m'),
-    JWT_REFRESH_TTL: duration.default('7d'),
+    JWT_REFRESH_TTL: duration.default('24h'),
     ENCRYPTION_KEY_BASE64: base64Key,
     CAPTCHA_PROVIDER: z.enum(['none', 'mock', 'turnstile', 'recaptcha']).default('mock'),
     CAPTCHA_TEST_TOKEN: z.string().min(8).optional(),

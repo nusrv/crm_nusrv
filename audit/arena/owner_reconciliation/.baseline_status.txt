@@ -1,0 +1,22 @@
+ M .env.example
+ M apps/api/prisma/schema.prisma
+ M apps/api/src/config/environment.ts
+ M apps/api/src/identity/auth.service.ts
+ M apps/api/src/modules/ai/ai-settings-resolver.service.ts
+ M apps/api/src/modules/invoices/invoices.controller.ts
+ M apps/api/src/modules/invoices/invoices.module.ts
+ M apps/api/src/modules/invoices/invoices.service.ts
+ M apps/api/src/modules/mail/mail-outbound.service.ts
+ M apps/api/src/modules/renewal-cases/renewal-cases.controller.ts
+ M apps/api/src/modules/renewal-cases/renewal-cases.module.ts
+ M apps/api/src/modules/renewal-cases/renewal-cases.service.ts
+ M apps/api/src/modules/renewal-cases/renewal-engine.service.ts
+ M apps/api/src/modules/renewal-cases/renewal-transition-policy.ts
+ M apps/web/lib/api.ts
+?? apps/api/src/modules/invoices/payment-money.ts
+?? apps/api/src/modules/invoices/payments.controller.ts
+?? apps/api/src/modules/invoices/payments.service.ts
+?? apps/api/src/modules/renewal-cases/manual-renewal.service.ts
+?? apps/api/src/modules/renewal-cases/renewal-period.ts
+?? docs/CURRENT_IMPLEMENTATION_SCOPE.md
+?? docs/templates/nusrv_invoice_latest_reference.pdf

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { MailConfiguration } from '../../generated/prisma/client';
 import type { MailTransport, PreparedOutboundMessage } from './mail-transport';
+import type { MailAcceptance } from './smtp-attempt-policy';
 
 /**
  * No network traffic, ever. Deterministic and safe for tests and non-production defaults. Never
@@ -11,10 +12,10 @@ import type { MailTransport, PreparedOutboundMessage } from './mail-transport';
 export class MockMailTransport implements MailTransport {
   readonly sent: PreparedOutboundMessage[] = [];
 
-  send(message: PreparedOutboundMessage, _config: MailConfiguration): Promise<void> {
+  send(message: PreparedOutboundMessage, _config: MailConfiguration): Promise<MailAcceptance> {
     void _config;
     this.sent.push(message);
-    return Promise.resolve();
+    return Promise.resolve({ source: 'mock' });
   }
 
   clear(): void {

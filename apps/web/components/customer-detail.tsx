@@ -11,6 +11,7 @@ import { Modal } from './modal';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 import { SubscriptionModal } from './subscription-modal';
+import { CustomerBalancesPanel } from './invoice-payments-panel';
 
 interface BillingEntity {
   id: string;
@@ -166,6 +167,7 @@ export function CustomerDetail() {
         title={customerCombinedLabel(detail)}
         description={`${detail.customerCode} · ${detail.billingEntity.name} · ${detail.status}`}
       />
+      {can('ADMIN') && <CustomerBalancesPanel customerId={customerId} />}
       {!contactFormOpen && (
         <>
           <Notice message={error} />

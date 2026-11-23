@@ -1,0 +1,15 @@
+OWNER RECONCILIATION — ROUND 1 (same thread; read-only; modify nothing; do not call real services)
+
+Codex, the project owner has now approved all twelve outstanding owner decisions. They supersede our previous recommendations where applicable. Read audit/arena/owner_reconciliation/OWNER_DECISIONS_APPROVED.md (authoritative, do not alter) and my interpretation audit/arena/owner_reconciliation/CLAUDE_INTERPRETATION_R1.md (to be challenged), plus docs/CURRENT_IMPLEMENTATION_SCOPE.md and audit/arena/OWNER_DECISION_BRIEF.md and FINAL_MASTER_PLAN.md as needed.
+
+Your task is to independently examine their implementation implications and challenge my interpretation. Focus especially on:
+1. OD-3: enforcing official-invoice existence before fulfilment without a payment prerequisite (what is "officially recorded": status, reconciliation, cancelled/multiple invoices, legacy invoices with no sourceRenewalCaseId).
+2. OD-4: payment independence, official-invoice prerequisite for receipt issuance, same-number receipts, multiple payments, manager edit/delete of receipts, audit integrity. Is my receipt-void/revision design right? What is the cleanest handling of "payments before any CRM invoice exists" and "delete receipt vs payment" (these are owner-flagged unclarified)? The owner says "manager" but no MANAGER role exists.
+3. OD-5: clarification-send lifecycle (transition only after send), shared unread, Keep in Review semantics.
+4. OD-6: manual-send bypass of automation Holds without enabling automatic customer reminders.
+5. OD-8: PNG/JPEG/WebP structural checks with accepted limitations, and safe historical QR correction (overlay table vs mutating locked invoice).
+6. OD-2 and OD-9: fresh-authorization inventory (justify complete protected endpoint/action list; access token has no session id), 15-min tokens, durable logout, browser-session recovery given the refresh cookie path is /api/v1/auth.
+7. OD-11: issuer-type templates without fabricating tax/legal requirements; which references are missing.
+8. OD-12: active email status synchronization — evidence quality per status, SMTP result capture (MailTransport.send returns void), Sent-folder reconciliation, DSN/bounce handling (note: bounces currently look like customer replies), the existing auto-retry of non-terminal SMTP failures vs the rule "no automatic resend of uncertain reminders", crash recovery, duplicate prevention, and a proposed uncertain-outcome policy.
+
+Identify every contradiction, hidden dependency, database migration requirement, security issue, regression risk, or test gap. For every problem propose a technically defensible resolution. Verify my 'facts I verified' paragraph against the code and tell me which are wrong. Clearly separate implementation questions engineers can resolve from business questions reserved for the owner (say which genuinely need the owner). Do not agree automatically with Claude. Do not change the approved owner decisions. Respond with evidence-based findings (file:line) and proposed revisions to the final master plan, organized by OD-1..OD-12 plus a section 'cross-cutting'.

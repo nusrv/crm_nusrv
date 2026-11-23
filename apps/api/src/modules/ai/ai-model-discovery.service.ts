@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { AiSettingsResolverService } from './ai-settings-resolver.service';
+import { AI_DEFERRED_MESSAGE, aiOperationalPolicy } from './ai-operational-policy';
 import type { DiscoverAiModelsDto } from './ai-model-discovery.dto';
 import { LlmMalformedOutputError, LlmPermanentError, LlmTransientError } from './llm-errors';
 import { AI_PROVIDER_LABELS, type AiProviderId, type DiscoveredAiModel } from './llm-provider-adapter';
@@ -40,6 +41,9 @@ export class AiModelDiscoveryService {
   ) {}
 
   async discover(dto: DiscoverAiModelsDto): Promise<AiModelDiscoveryResult> {
+    if (aiOperationalPolicy.isDeferred()) {
+      return { success: false, provider: dto.provider, models: [], message: AI_DEFERRED_MESSAGE };
+    }
     const adapter = this.registry.resolve(dto.provider);
     if (!adapter) {
       throw new BadRequestException(`Unsupported AI provider "${dto.provider}".`);

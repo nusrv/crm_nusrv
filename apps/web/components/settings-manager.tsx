@@ -2,7 +2,6 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
-import { AiModelCombobox, type AiModelOption } from './ai-model-combobox';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
 import { Notice } from './notice';
@@ -481,190 +480,90 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
 function AiSettingsSection({ canManage }: { canManage: boolean }) {
   const [settings, setSettings] = useState<AiSettingsView | null>(null);
   const [formOpen, setFormOpen] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState('OPENAI');
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [discoveredModels, setDiscoveredModels] = useState<AiModelOption[]>([]);
-  const [discoveryLoading, setDiscoveryLoading] = useState(false);
-  const [discoveryError, setDiscoveryError] = useState('');
-  const [customModelMode, setCustomModelMode] = useState(true);
-  const [customModelId, setCustomModelId] = useState('');
-  const [selectedModelId, setSelectedModelId] = useState('');
+  const [provider, setProvider] = useState('OPENAI');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [testResult, setTestResult] = useState('');
-  const [confirmAutoAccept, setConfirmAutoAccept] = useState(false);
 
-  async function load() {
-    setSettings(await apiRequest<AiSettingsView>('/settings/ai'));
-  }
   useEffect(() => {
-    void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'));
+    void apiRequest<AiSettingsView>('/settings/ai')
+      .then(setSettings)
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'));
   }, []);
 
+  if (!settings) return <Notice message={error} />;
+  const providerChanged = settings.provider !== provider;
+
   function openEdit() {
-    setSelectedProvider(settings?.provider ?? 'OPENAI');
-    setApiKeyInput('');
-    setDiscoveredModels([]);
-    setDiscoveryError('');
-    // No discovery has happened yet at open time — default to custom mode pre-filled with the
-    // currently saved model, so Save works unchanged even if the admin never clicks "Load Models".
-    setCustomModelMode(true);
-    setCustomModelId(settings?.model ?? '');
-    setSelectedModelId('');
+    setProvider(settings!.provider);
+    setModel(settings!.model ?? '');
+    setApiKey('');
+    setError('');
     setFormOpen(true);
-  }
-
-  const providerChanged = settings !== null && selectedProvider !== settings.provider;
-
-  // Requirement: changing provider clears the previous selected model — a model ID from one
-  // provider is never meaningful for another. Switching back to the currently-saved provider
-  // restores that provider's saved model instead of leaving the field empty.
-  function handleProviderChange(nextProvider: string) {
-    setSelectedProvider(nextProvider);
-    setApiKeyInput('');
-    setDiscoveredModels([]);
-    setDiscoveryError('');
-    setSelectedModelId('');
-    setCustomModelMode(true);
-    setCustomModelId(nextProvider === settings?.provider ? (settings?.model ?? '') : '');
-  }
-
-  async function loadModels() {
-    setDiscoveryLoading(true);
-    setDiscoveryError('');
-    try {
-      const body: Record<string, unknown> = { provider: selectedProvider };
-      if (apiKeyInput.trim()) body.apiKey = apiKeyInput.trim();
-      const result = await apiRequest<{ success: boolean; models: AiModelOption[]; message?: string }>('/settings/ai/discover-models', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      if (!result.success) {
-        setDiscoveryError(result.message || 'Model discovery is temporarily unavailable.');
-        setDiscoveredModels([]);
-        return;
-      }
-      setDiscoveredModels(result.models);
-      if (!result.models.length) {
-        setDiscoveryError('The provider returned no models for this credential.');
-        return;
-      }
-      // If the model already active (custom or previously selected) is present in the fresh list,
-      // switch into list mode with it pre-selected; otherwise leave the admin's current choice alone
-      // — never force a selection, never silently overwrite a deliberate custom entry.
-      const currentId = customModelMode ? customModelId : selectedModelId;
-      const match = result.models.find((candidate) => candidate.id === currentId);
-      if (match) {
-        setCustomModelMode(false);
-        setSelectedModelId(match.id);
-      }
-    } catch (cause) {
-      setDiscoveryError(cause instanceof Error ? cause.message : 'Model discovery is temporarily unavailable.');
-      setDiscoveredModels([]);
-    } finally {
-      setDiscoveryLoading(false);
-    }
   }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const value = (name: string) => String(form.get(name) ?? '').trim();
-    const autoRouteAccept = form.get('autoRouteAccept') === 'on';
-    if (autoRouteAccept && !settings?.autoRouteAccept && !confirmAutoAccept) {
-      setError('Please confirm the automatic-acceptance warning checkbox before enabling it.');
-      return;
-    }
-    const model = customModelMode ? customModelId.trim() : selectedModelId;
-    if (!model) {
-      setError(customModelMode ? 'Enter a Model ID.' : 'Select a model, or switch to "Use custom model ID".');
-      return;
-    }
+    const fields = new FormData(event.currentTarget);
+    const threshold = String(fields.get('confidenceThreshold') ?? '');
     try {
-      const body: Record<string, unknown> = {
-        enabled: form.get('enabled') === 'on',
-        provider: selectedProvider,
-        model,
-        confidenceThreshold: value('confidenceThreshold') ? Number(value('confidenceThreshold')) : undefined,
-        autoRouteAccept,
-        autoRouteAcceptCutoverAt: value('autoRouteAcceptCutoverAt') ? new Date(value('autoRouteAcceptCutoverAt')).toISOString() : undefined,
-      };
-      if (apiKeyInput.trim()) body.apiKey = apiKeyInput.trim();
-      if (form.get('clearApiKey') === 'on') body.clearApiKey = true;
-
-      await apiRequest('/settings/ai', { method: 'PATCH', body: JSON.stringify(body) });
+      const updated = await apiRequest<AiSettingsView>('/settings/ai', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          provider,
+          model: model.trim() || undefined,
+          confidenceThreshold: threshold ? Number(threshold) : undefined,
+          apiKey: apiKey.trim() || undefined,
+          clearApiKey: fields.get('clearApiKey') === 'on' || undefined,
+        }),
+      });
+      setSettings(updated);
+      setApiKey('');
       setFormOpen(false);
       setError('');
-      setMessage('AI settings saved and audited.');
-      setConfirmAutoAccept(false);
-      await load();
+      setMessage('AI settings saved. Processing remains inactive.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
     }
   }
 
-  async function runTest() {
-    try {
-      const result = await apiRequest<{ success: boolean; message: string; latencyMs?: number }>('/settings/ai/test', { method: 'POST' });
-      setTestResult(result.success ? `Connected${result.latencyMs ? ` (${result.latencyMs}ms)` : ''}` : `Failed: ${result.message}`);
-    } catch (cause) {
-      setTestResult(cause instanceof Error ? cause.message : 'Test failed.');
-    }
-  }
-
-  if (!settings) return <Notice message={error} />;
-
-  const loadModelsDisabled = discoveryLoading || (providerChanged && !apiKeyInput.trim());
-  const loadModelsLabel = discoveryLoading
-    ? 'Loading models…'
-    : providerChanged || !settings.apiKeyConfigured
-      ? 'Verify & Load Models'
-      : 'Refresh Models';
-
   return (
     <>
-      {!formOpen && (
-        <>
-          <Notice message={error} />
-          <Notice message={message} tone="success" />
-        </>
-      )}
+      {!formOpen && <Notice message={error} />}
+      <Notice message={message} tone="success" />
       {formOpen && (
         <Modal maxWidth="36rem" onClose={() => setFormOpen(false)} title="Edit AI Settings">
           <Notice message={error} />
-          <form className="form-grid" onSubmit={(e) => void save(e)}>
-            <label className="checkbox field-wide">
-              <input defaultChecked={settings.enabled} name="enabled" type="checkbox" /> AI Processing Enabled
-            </label>
+          <form className="form-grid" onSubmit={(event) => void save(event)}>
             <label className="field">
               <span>Provider</span>
-              <select onChange={(e) => handleProviderChange(e.target.value)} value={selectedProvider}>
+              <select
+                onChange={(event) => {
+                  const nextProvider = event.target.value;
+                  setProvider(nextProvider);
+                  setModel(nextProvider === settings.provider ? (settings.model ?? '') : '');
+                  setApiKey('');
+                }}
+                value={provider}
+              >
                 {AI_PROVIDER_OPTIONS.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
+                  <option key={option.id} value={option.id}>{option.label}</option>
                 ))}
               </select>
             </label>
-            {providerChanged && (
-              <p className="field-wide text-sm text-amber-700">
-                Changing AI provider requires a new API key and model for the selected provider.
-              </p>
-            )}
+            <label className="field">
+              <span>Model ID</span>
+              <input onChange={(event) => setModel(event.target.value)} required={providerChanged} value={model} />
+            </label>
             <label className="field field-wide">
-              <span>
-                {providerChanged
-                  ? `New API Key for ${aiProviderLabel(selectedProvider)} (required)`
-                  : settings.apiKeyConfigured
-                    ? 'Replace API Key (leave blank to keep the current one, or to Refresh Models with it)'
-                    : 'API Key'}
-              </span>
+              <span>{settings.apiKeyConfigured && !providerChanged ? 'Replace stored API key' : 'API key'}</span>
               <input
                 autoComplete="new-password"
-                onChange={(e) => setApiKeyInput(e.target.value)}
+                onChange={(event) => setApiKey(event.target.value)}
                 required={providerChanged}
                 type="password"
-                value={apiKeyInput}
+                value={apiKey}
               />
             </label>
             {settings.apiKeyConfigured && !providerChanged && (
@@ -672,99 +571,27 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
                 <input name="clearApiKey" type="checkbox" /> Clear stored API key
               </label>
             )}
-            <div className="field-wide">
-              <button className="button-secondary" disabled={loadModelsDisabled} onClick={() => void loadModels()} type="button">
-                {loadModelsLabel}
-              </button>
-            </div>
-            <Notice message={discoveryError} />
-            {customModelMode ? (
-              <label className="field field-wide">
-                <span>Custom Model ID</span>
-                <input
-                  onChange={(e) => setCustomModelId(e.target.value)}
-                  placeholder={AI_PROVIDER_OPTIONS.find((o) => o.id === selectedProvider)?.modelPlaceholder}
-                  required
-                  value={customModelId}
-                />
-              </label>
-            ) : (
-              <AiModelCombobox onSelect={setSelectedModelId} options={discoveredModels} value={selectedModelId} />
-            )}
-            <div className="field-wide">
-              {customModelMode ? (
-                discoveredModels.length > 0 && (
-                  <button className="button-small" onClick={() => setCustomModelMode(false)} type="button">
-                    Use discovered models list
-                  </button>
-                )
-              ) : (
-                <button className="button-small" onClick={() => setCustomModelMode(true)} type="button">
-                  Use custom model ID
-                </button>
-              )}
-            </div>
             <label className="field">
-              <span>Confidence threshold (0–1)</span>
-              <input defaultValue={settings.confidenceThreshold ?? 0.9} max={1} min={0} name="confidenceThreshold" step={0.01} type="number" />
+              <span>Confidence threshold</span>
+              <input defaultValue={settings.confidenceThreshold ?? ''} max={1} min={0} name="confidenceThreshold" step={0.01} type="number" />
             </label>
-            <label className="checkbox field-wide">
-              <input
-                defaultChecked={settings.autoRouteAccept}
-                name="autoRouteAccept"
-                onChange={(e) => setConfirmAutoAccept(e.target.checked ? confirmAutoAccept : false)}
-                type="checkbox"
-              />{' '}
-              Automatic acceptance enabled
-            </label>
-            <label className="field field-wide">
-              <span>Automatic acceptance cutover</span>
-              <input
-                defaultValue={settings.autoRouteAcceptCutoverAt ? settings.autoRouteAcceptCutoverAt.slice(0, 16) : ''}
-                name="autoRouteAcceptCutoverAt"
-                type="datetime-local"
-              />
-            </label>
-            {!settings.autoRouteAccept && (
-              <label className="checkbox field-wide">
-                <input checked={confirmAutoAccept} onChange={(e) => setConfirmAutoAccept(e.target.checked)} type="checkbox" /> I understand
-                enabling automatic acceptance allows the AI to automatically mark high-confidence renewal acceptances as ACCEPTED without human
-                review, for messages received after the cutover.
-              </label>
-            )}
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
-                Save
-              </button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
-                Cancel
-              </button>
+              <button className="button-primary" type="submit">Save</button>
+              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">Cancel</button>
             </div>
           </form>
         </Modal>
       )}
       <section className="panel">
-        <p>AI Processing: <strong>{settings.enabled ? 'ON' : 'OFF'}</strong></p>
+        <p>AI processing <strong>Inactive (deferred)</strong></p>
         <p>Provider: {aiProviderLabel(settings.provider)}</p>
         <p>Model: {settings.model ?? 'Not configured'}</p>
-        <p>API Key: {settings.apiKeyConfigured ? 'Configured' : 'Not configured'}</p>
+        <p>API key: {settings.apiKeyConfigured ? 'Configured' : 'Not configured'}</p>
         <p>Confidence threshold: {settings.confidenceThreshold ?? '—'}</p>
-        <p>
-          Automatic acceptance: <strong>{settings.autoRouteAccept ? 'ON' : 'OFF'}</strong>
-          {settings.autoRouteAcceptCutoverAt ? ` (cutover ${new Date(settings.autoRouteAcceptCutoverAt).toLocaleString()})` : ''}
-        </p>
-        <p className="muted">Only high-confidence ACCEPT_RENEWAL classifications may ever auto-transition to ACCEPTED. REJECT_RENEWAL and PAYMENT_REPORTED — and everything else — always require human review.</p>
-        {testResult && <p className="muted">Last test: {testResult}</p>}
-        {canManage && (
-          <div className="mt-4 flex gap-3">
-            <button className="button-primary" onClick={openEdit} type="button">
-              Edit
-            </button>
-            <button className="button-secondary" onClick={() => void runTest()} type="button">
-              Test AI
-            </button>
-          </div>
+        {settings.autoRouteAcceptCutoverAt && (
+          <p>Saved acceptance cutover: {new Date(settings.autoRouteAcceptCutoverAt).toLocaleString()}</p>
         )}
+        {canManage && <button className="button-primary mt-4" onClick={openEdit} type="button">Edit</button>}
       </section>
     </>
   );

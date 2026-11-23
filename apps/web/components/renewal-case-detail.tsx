@@ -46,6 +46,17 @@ interface RenewalCaseDetailData {
   id: string;
   dueDate: string;
   status: string;
+  customerDecision: string;
+  proposedPeriodStart: string | null;
+  proposedPeriodEnd: string | null;
+  proposedNextRenewalDate: string | null;
+  invoices?: Array<{
+    id: string;
+    status: string;
+    internalReference: string;
+    fawtaraInvoiceNumber: string | null;
+    renewalOfficialKey: string | null;
+  }>;
   subscription: {
     id: string;
     subscriptionCode: string;
@@ -105,7 +116,7 @@ const MARK_ACTIONS = [
   { key: 'mark-awaiting-customer', label: 'Mark awaiting customer' },
   { key: 'mark-accepted', label: 'Mark accepted' },
   { key: 'mark-do-not-renew', label: 'Mark do not renew' },
-  { key: 'mark-fulfilled', label: 'Mark fulfilled' },
+  { key: 'mark-fulfilled', label: 'Mark Renewal Fulfilled' },
 ] as const;
 
 // Mirrors apps/api/src/modules/renewal-cases/renewal-transition-policy.ts so the UI does not offer
@@ -116,10 +127,7 @@ const MARK_ACTION_LEGAL_FROM: Record<(typeof MARK_ACTIONS)[number]['key'], strin
   'mark-awaiting-customer': ['UPCOMING', 'REMINDER_CYCLE', 'HUMAN_REVIEW'],
   'mark-accepted': ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER', 'HUMAN_REVIEW'],
   'mark-do-not-renew': ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER', 'HUMAN_REVIEW'],
-  // Only PAYMENT_CONFIRMED — not ACCEPTED — per 03_WORKFLOWS_AND_STATE_MACHINE.md §4. Nothing in
-  // the current Phase 0-2 application sets PAYMENT_CONFIRMED yet, so this button is correctly
-  // absent for every case today; it starts appearing on its own once Phase 3+ ships that state.
-  'mark-fulfilled': ['PAYMENT_CONFIRMED'],
+  'mark-fulfilled': ['ACCEPTED'],
 };
 
 const TERMINAL_STATUSES = new Set(['CLOSED', 'FULFILLED', 'REJECTED', 'DO_NOT_RENEW']);
@@ -197,6 +205,18 @@ export function RenewalCaseDetail({
     await runAction(`holds/${holdId}/release`, 'Workflow hold released.');
   }
 
+  async function createRenewalInvoice() {
+    try {
+      await apiRequest(`/invoices/from-renewal/${caseId}`, { method: 'POST' });
+      setMessage('Renewal invoice draft created.');
+      setError('');
+      await load();
+      onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to create the renewal invoice draft.');
+    }
+  }
+
   return (
     <Modal
       maxWidth="52rem"
@@ -219,6 +239,7 @@ export function RenewalCaseDetail({
           onSubmitHold={submitHold}
           onRelease={release}
           onMarkAction={runAction}
+          onCreateRenewalInvoice={createRenewalInvoice}
           reminderRules={reminderRules}
         />
       )}
@@ -237,6 +258,7 @@ function RenewalCaseBody({
   onSubmitHold,
   onRelease,
   onMarkAction,
+  onCreateRenewalInvoice,
   reminderRules,
 }: {
   canManage: boolean;
@@ -249,6 +271,7 @@ function RenewalCaseBody({
   onSubmitHold: (event: React.FormEvent<HTMLFormElement>) => void;
   onRelease: (holdId: string) => void;
   onMarkAction: (path: string, successMessage: string) => void;
+  onCreateRenewalInvoice: () => void;
   reminderRules: ReminderRuleOption[];
 }) {
   const asOf = new Date().toISOString();
@@ -261,6 +284,11 @@ function RenewalCaseBody({
     .sort((a, b) => b.daysBeforeDue - a.daysBeforeDue);
   const { customer } = detail.subscription;
   const isTerminal = TERMINAL_STATUSES.has(detail.status);
+  const invoices = detail.invoices ?? [];
+  const approvedRenewal = detail.status === 'ACCEPTED' && detail.customerDecision === 'ACCEPTED' &&
+    Boolean(detail.proposedPeriodStart && detail.proposedPeriodEnd && detail.proposedNextRenewalDate);
+  const hasOfficialRenewalInvoice = invoices.some((invoice) =>
+    invoice.renewalOfficialKey === detail.id && invoice.status === 'FAWTARA_ACCEPTED');
 
   return (
     <div className="space-y-6">
@@ -413,6 +441,30 @@ function RenewalCaseBody({
         )}
       </section>
 
+      {(approvedRenewal || invoices.length > 0) && (
+        <section>
+          <h4 className="font-medium">Renewal invoices</h4>
+          {invoices.length > 0 && (
+            <ul className="mt-2 space-y-1">
+              {invoices.map((invoice) => (
+                <li key={invoice.id}>
+                  <Link className="underline" href={`/dashboard/invoices/${invoice.id}`}>
+                    {invoice.fawtaraInvoiceNumber ?? invoice.internalReference}
+                  </Link>
+                  <span className="muted ml-2">{invoice.status}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {canManage && approvedRenewal && !hasOfficialRenewalInvoice &&
+            !invoices.some((invoice) => ['DRAFT', 'READY_FOR_FAWTARA', 'FAWTARA_REJECTED'].includes(invoice.status)) && (
+              <button className="button-small mt-2" onClick={onCreateRenewalInvoice} type="button">
+                Create Renewal Invoice Draft
+              </button>
+          )}
+        </section>
+      )}
+
       {canManage && (
         <section>
           <h4 className="font-medium">Actions</h4>
@@ -432,7 +484,8 @@ function RenewalCaseBody({
             )}
             {!isTerminal &&
               MARK_ACTIONS.filter((action) =>
-                MARK_ACTION_LEGAL_FROM[action.key].includes(detail.status),
+                MARK_ACTION_LEGAL_FROM[action.key].includes(detail.status) &&
+                  (action.key !== 'mark-fulfilled' || (approvedRenewal && hasOfficialRenewalInvoice)),
               ).map((action) => (
                 <button
                   className="button-small"

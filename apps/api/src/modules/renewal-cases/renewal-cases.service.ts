@@ -1,3 +1,6 @@
+import { proposedRenewalPeriod } from './renewal-period';
+import { lockAcceptedRenewal } from './accepted-renewal-invoice';
+import { isVerifiedOfficialInvoice } from '../invoices/official-invoice-eligibility';
 import {
   BadRequestException,
   ConflictException,
@@ -32,6 +35,16 @@ export const TERMINAL_STATUSES: RenewalCaseStatus[] = [
 ];
 
 const renewalCaseInclude = {
+  invoices: {
+    select: {
+      id: true,
+      status: true,
+      internalReference: true,
+      fawtaraInvoiceNumber: true,
+      renewalOfficialKey: true,
+    },
+  },
+  emailMessages: { where: { direction: 'INBOUND' as const }, orderBy: { occurredAt: 'desc' as const }, take: 20, select: { id: true, reviewedAt: true, occurredAt: true, threadId: true } },
   subscription: {
     include: {
       customer: {
@@ -265,10 +278,14 @@ export class RenewalCasesService {
   }
 
   async markAccepted(id: string, context: MutationContext) {
+    const row = await this.prisma.renewalCase.findUnique({ where: { id }, include: { subscription: true } });
+    if (!row) throw new NotFoundException('Renewal case not found.');
+    const proposal = proposedRenewalPeriod(row.dueDate, row.subscription.renewalIntervalMonths);
     return this.transitionStatus(
       id,
       RenewalCaseStatus.ACCEPTED,
-      { customerDecision: CustomerDecision.ACCEPTED, acceptedAt: this.clock.now() },
+      { customerDecision: CustomerDecision.ACCEPTED, acceptedAt: this.clock.now(), clarificationPending: false,
+        communicationRevision: { increment: 1 }, ...proposal },
       'renewal.case.marked_accepted',
       context,
     );
@@ -278,20 +295,49 @@ export class RenewalCasesService {
     return this.transitionStatus(
       id,
       RenewalCaseStatus.DO_NOT_RENEW,
-      { customerDecision: CustomerDecision.REJECTED, doNotRenewAt: this.clock.now() },
+      { customerDecision: CustomerDecision.REJECTED, doNotRenewAt: this.clock.now(), clarificationPending: false,
+        communicationRevision: { increment: 1 } },
       'renewal.case.marked_do_not_renew',
       context,
     );
   }
 
+  async markNeedsClarification(id: string, context: MutationContext) {
+    return this.transitionStatus(id, RenewalCaseStatus.HUMAN_REVIEW,
+      { customerDecision: CustomerDecision.UNDECIDED }, 'renewal.case.needs_clarification', context);
+  }
+
   async markFulfilled(id: string, context: MutationContext) {
-    return this.transitionStatus(
-      id,
-      RenewalCaseStatus.FULFILLED,
-      { fulfilledAt: this.clock.now() },
-      'renewal.case.marked_fulfilled',
-      context,
-    );
+    const existing = await this.prisma.renewalCase.findUnique({ where: { id }, select: { subscriptionId: true } });
+    if (!existing) throw new NotFoundException('Renewal case not found.');
+    return this.prisma.$transaction(async (tx) => {
+      const { renewal: current, period } = await lockAcceptedRenewal(tx, id, existing.subscriptionId);
+      const invoice = await tx.invoice.findUnique({ where: { renewalOfficialKey: id } });
+      if (!invoice || !isVerifiedOfficialInvoice(invoice) ||
+          invoice.sourceRenewalCaseId !== id ||
+          invoice.sourceSubscriptionId !== current.subscriptionId ||
+          invoice.customerId !== current.subscription.customerId ||
+          invoice.billingEntityId !== current.subscription.customer.billingEntityId ||
+          invoice.periodStart.getTime() !== period.start.getTime() ||
+          invoice.periodEnd.getTime() !== period.end.getTime()) {
+        throw new ConflictException('Record a verified official invoice linked to this renewal before fulfillment.');
+      }
+      const changed = await tx.subscription.updateMany({
+        where: { id: current.subscriptionId, renewalDate: current.dueDate },
+        data: { renewalDate: period.next, currentTermEndDate: period.end },
+      });
+      if (changed.count !== 1) throw new ConflictException('Subscription tracking date changed; review before fulfillment.');
+      const { subscription: _subscription, ...caseRow } = current;
+      const result = await applyRenewalCaseTransition(tx, this.audit, {
+        id, currentRow: caseRow, toStatus: RenewalCaseStatus.FULFILLED,
+        extraData: { fulfilledAt: this.clock.now(), clarificationPending: false,
+          communicationRevision: { increment: 1 } }, eventKey: 'renewal.case.marked_fulfilled',
+        actor: { actorType: ActorType.USER, actorId: context.actorId, ipAddress: context.ipAddress },
+        auditMetadata: { invoiceId: invoice.id, oldRenewalDate: current.dueDate, newRenewalDate: period.next, trackingOnly: true },
+      });
+      if (result.kind === 'cas_lost') throw new ConflictException('Renewal changed concurrently.');
+      return result.renewalCase;
+    });
   }
 
   private async transitionStatus(
@@ -308,6 +354,9 @@ export class RenewalCasesService {
     // using whatever the row's status actually is at write time, not this pre-check's snapshot.
     const current = await this.prisma.renewalCase.findUnique({ where: { id } });
     if (!current) throw new NotFoundException('Renewal Case not found.');
+    if (status === RenewalCaseStatus.AWAITING_CUSTOMER &&
+        (current.clarificationPending || current.status === RenewalCaseStatus.HUMAN_REVIEW))
+      throw new ConflictException('A clarification must be accepted by SMTP before waiting for the customer.');
     if (TERMINAL_STATUSES.includes(current.status)) {
       throw new ConflictException(
         `Renewal Case is already ${current.status} and cannot be moved to ${status}.`,

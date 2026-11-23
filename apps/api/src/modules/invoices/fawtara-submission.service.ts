@@ -64,23 +64,11 @@ export class FawtaraSubmissionService {
     });
   }
   async submit(id: string, input: SubmitOfficialInvoiceDto, context: HumanSubmissionContext) {
-    if (
-      context.initiation !== 'HUMAN' ||
-      !context.roles.some((r) => ['ADMIN', 'ACCOUNTANT'].includes(r))
-    )
+    if (context.initiation !== 'HUMAN' || !context.roles.includes('ADMIN'))
       throw new ForbiddenException('Only an authorized human may submit.');
     if (input.confirmation !== 'CREATE_REAL_JOFOTARA_INVOICE')
       throw new BadRequestException('Explicit real-invoice confirmation required.');
-    const previousAttempt = input.recoverUncertain
-      ? await this.prisma.fawtaraSubmission.findFirst({
-          where: { invoiceId: id },
-          orderBy: { attemptNumber: 'desc' },
-        })
-      : null;
-    const preflight = await this.invoices.preflight(
-      id,
-      previousAttempt?.joFotaraConnectionId ?? input.connectionId,
-    );
+    const preflight = await this.invoices.preflight(id);
     if (!preflight.valid)
       throw new BadRequestException({ message: 'Current preflight failed.', preflight });
     const reserved = await this.prisma.$transaction(async (tx) => {

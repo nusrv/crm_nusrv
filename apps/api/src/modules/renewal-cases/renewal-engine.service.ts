@@ -176,7 +176,7 @@ export class RenewalEngineService {
 
       const holdPolicy = aggregateEffectiveHolds(renewalCase.holds, asOf);
       const values = this.templateValues(subscription, renewalCase.id);
-      if (customerRule) {
+      if (customerRule && customerReminderAutomationEnabled()) {
         if (holdPolicy.stopCustomerReminders) {
           if (
             await this.recordDecision(
@@ -603,3 +603,6 @@ export class RenewalEngineService {
     return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
   }
 }
+
+// Detection/internal evaluation remain active; customer delivery requires human approval.
+function customerReminderAutomationEnabled(): boolean { return false; }

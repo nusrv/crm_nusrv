@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AiSettingsResolverService } from './ai-settings-resolver.service';
+import { AI_DEFERRED_MESSAGE, aiOperationalPolicy } from './ai-operational-policy';
 import type { ClassificationInput, DraftReplyInput, LlmGateway, NormalizedClassificationResult, NormalizedDraftResult } from './llm-gateway';
 import { LlmPermanentError } from './llm-errors';
 import type { LlmProviderAdapter, LlmProviderAdapterConfig } from './llm-provider-adapter';
@@ -57,6 +58,7 @@ export class DynamicLlmGateway implements LlmGateway {
   }
 
   private async resolveActiveAdapter(): Promise<{ adapter: LlmProviderAdapter; config: LlmProviderAdapterConfig }> {
+    if (aiOperationalPolicy.isDeferred()) throw new LlmPermanentError(AI_DEFERRED_MESSAGE);
     const settings = await this.aiSettings.getSettings();
     if (!settings.enabled) {
       throw new LlmPermanentError('AI is disabled in Settings.');

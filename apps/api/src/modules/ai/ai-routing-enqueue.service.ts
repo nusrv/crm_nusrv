@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { AI_QUEUE, AI_ROUTE_JOB } from './ai-queue.constants';
+import { aiOperationalPolicy } from './ai-operational-policy';
 
 export interface RouteClassificationJobData {
   routingDecisionId: string;
@@ -31,6 +32,7 @@ export class AiRoutingEnqueueService {
   constructor(@InjectQueue(AI_QUEUE) private readonly queue: Queue<RouteClassificationJobData>) {}
 
   async enqueue(routingDecisionId: string): Promise<void> {
+    if (aiOperationalPolicy.isDeferred()) return;
     try {
       await this.queue.add(
         AI_ROUTE_JOB,

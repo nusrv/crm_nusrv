@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { AiClassificationEnqueueService, classifyDeduplicationId } from './ai-classification-enqueue.service';
 
 /**
@@ -62,6 +63,10 @@ function harness(configValues: Record<string, string>) {
   const service = new AiClassificationEnqueueService(queue as never, aiSettings as never);
   return { service, add };
 }
+
+// Exercise the retained AI implementation behind the frozen production gate.
+beforeEach(() => { jest.spyOn(aiOperationalPolicy, 'isDeferred').mockReturnValue(false); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 describe('AiClassificationEnqueueService', () => {
   it('§10 — never enqueues when AI is disabled', async () => {

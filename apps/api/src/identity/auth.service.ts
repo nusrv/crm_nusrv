@@ -9,6 +9,7 @@ import { PrismaService } from '../database/prisma.service';
 import { ActorType } from '../generated/prisma/enums';
 import { CaptchaService } from './captcha.service';
 import type { LoginDto } from './login.dto';
+import { isCurrentSession, MAX_ACCESS_SECONDS, MAX_REFRESH_SECONDS, sessionDeadline, tokenLifetimeSeconds } from './session-policy';
 
 interface TokenPair {
   accessToken: string;
@@ -113,11 +114,12 @@ export class AuthService {
     try {
       payload = await this.jwt.verifyAsync<RefreshPayload>(refreshToken, {
         secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
+        algorithms: ['HS256'],
       });
     } catch {
       throw new UnauthorizedException('Invalid session.');
     }
-    if (payload.type !== 'refresh') throw new UnauthorizedException('Invalid session.');
+    if (!this.isRefreshPayload(payload)) throw new UnauthorizedException('Invalid session.');
 
     const session = await this.prisma.authSession.findUnique({
       where: { id: payload.sid },
@@ -125,9 +127,7 @@ export class AuthService {
     });
     if (
       !session ||
-      session.userId !== payload.sub ||
-      session.revokedAt ||
-      session.expiresAt <= new Date() ||
+      !isCurrentSession(session, payload.sub, Date.now()) ||
       !(await verify(session.refreshTokenHash, refreshToken))
     ) {
       throw new UnauthorizedException('Invalid session.');
@@ -148,32 +148,41 @@ export class AuthService {
     // than trusting anything embedded in the refresh token itself — a role change since login must
     // be reflected in the next access token.
     const user = this.toAuthenticatedUser(session.user);
-    return { accessToken: await this.signAccessToken(user), user };
+    // Any credential issued during a concurrent logout still names the revoked session.
+    return { accessToken: await this.signAccessToken(user, session.id, sessionDeadline(session)), user };
   }
 
   async logout(refreshToken?: string): Promise<void> {
     if (!refreshToken) return;
+    let payload: RefreshPayload;
+    const secret = this.config.getOrThrow<string>('JWT_REFRESH_SECRET');
     try {
-      const payload = await this.jwt.verifyAsync<RefreshPayload>(refreshToken, {
-        secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
+      payload = await this.jwt.verifyAsync<RefreshPayload>(refreshToken, {
+        secret,
+        algorithms: ['HS256'],
         ignoreExpiration: true,
-      });
-      await this.prisma.authSession.updateMany({
-        where: { id: payload.sid, userId: payload.sub, revokedAt: null },
-        data: { revokedAt: new Date() },
       });
     } catch {
       // Clearing a stale or malformed browser cookie is still a successful logout.
+      return;
     }
+    if (!this.isRefreshPayload(payload)) return;
+    await this.prisma.authSession.updateMany({
+      where: { id: payload.sid, userId: payload.sub, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
   }
 
   private async issueTokens(user: AuthenticatedUser): Promise<TokenPair> {
     const sessionId = randomUUID();
+    const refreshLifetime = tokenLifetimeSeconds(
+      this.config.getOrThrow<string>('JWT_REFRESH_TTL'), MAX_REFRESH_SECONDS,
+    );
     const refreshToken = await this.jwt.signAsync(
       { sub: user.id, sid: sessionId, type: 'refresh' },
       {
         secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
-        expiresIn: this.config.getOrThrow<string>('JWT_REFRESH_TTL') as never,
+        expiresIn: refreshLifetime,
       },
     );
     const decoded = this.jwt.decode<RefreshPayload>(refreshToken);
@@ -187,26 +196,34 @@ export class AuthService {
       },
     });
     return {
-      accessToken: await this.signAccessToken(user),
+      accessToken: await this.signAccessToken(user, sessionId, refreshExpiresAt.getTime()),
       refreshToken,
       refreshExpiresAt,
     };
   }
 
-  private signAccessToken(user: AuthenticatedUser): Promise<string> {
+  private signAccessToken(user: AuthenticatedUser, sessionId: string, absoluteExpiry: number): Promise<string> {
+    const seconds = Math.min(
+      tokenLifetimeSeconds(this.config.getOrThrow<string>('JWT_ACCESS_TTL'), MAX_ACCESS_SECONDS),
+      Math.floor((absoluteExpiry - Date.now()) / 1000),
+    );
+    if (seconds < 1) throw new UnauthorizedException('Invalid session.');
     return this.jwt.signAsync(
       {
         sub: user.id,
-        email: user.email,
-        displayName: user.displayName,
-        roles: user.roles,
+        sid: sessionId,
         type: 'access',
       },
       {
         secret: this.config.getOrThrow<string>('JWT_ACCESS_SECRET'),
-        expiresIn: this.config.getOrThrow<string>('JWT_ACCESS_TTL') as never,
+        expiresIn: seconds,
       },
     );
+  }
+
+  private isRefreshPayload(payload: RefreshPayload): boolean {
+    return payload?.type === 'refresh' && typeof payload.sid === 'string' && payload.sid.length > 0 &&
+      typeof payload.sub === 'string' && payload.sub.length > 0;
   }
 
   private toAuthenticatedUser(user: {

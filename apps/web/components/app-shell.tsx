@@ -94,6 +94,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [error, setError] = useState('');
+  const [logoutError, setLogoutError] = useState('');
+  const [signingOut, setSigningOut] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
@@ -121,13 +123,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
+    let mounted = true;
     void apiRequest<{ user: AuthenticatedUser }>('/auth/me')
-      .then((result) => setUser(result.user))
+      .then((result) => {
+        if (mounted) setUser(result.user);
+      })
       .catch((cause: unknown) => {
+        if (!mounted) return;
         const message = cause instanceof Error ? cause.message : 'Unable to load session.';
         if (message === 'Authentication required.') router.replace('/login');
         else setError(message);
       });
+    return () => { mounted = false; };
   }, [router]);
 
   const value = useMemo<ControlPanelContextValue | null>(
@@ -142,8 +149,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   );
 
   async function logout() {
-    await apiRequest<void>('/auth/logout', { method: 'POST' });
-    router.replace('/login');
+    setSigningOut(true);
+    setLogoutError('');
+    try {
+      await apiRequest<void>('/auth/logout', { method: 'POST' });
+      setUser(null);
+      router.replace('/login');
+    } catch {
+      setLogoutError('Sign-out failed. Try again.');
+      setSigningOut(false);
+    }
   }
 
   if (error) return <main className="p-8 text-red-700">{error}</main>;
@@ -182,11 +197,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <p className="mt-1 text-xs text-[var(--muted)]">{user.roles.join(', ')}</p>
                 <button
                   className="button-secondary mt-4 w-full"
+                  disabled={signingOut}
                   onClick={() => void logout()}
                   type="button"
                 >
                   Sign out
                 </button>
+                {logoutError && <p role="alert" className="mt-2 text-red-700">{logoutError}</p>}
               </div>
             </div>
           </aside>

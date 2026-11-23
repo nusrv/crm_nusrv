@@ -11,6 +11,7 @@ import {
 } from './mail-timing.constants';
 import type { MailTransport, PreparedOutboundMessage } from './mail-transport';
 import type { SmtpCredentials } from './smtp-credentials';
+import { SmtpNotStartedError, smtpAcceptance, type MailAcceptance } from './smtp-attempt-policy';
 
 /**
  * Real SMTP delivery via nodemailer (the one dependency added for Slice B — see package.json).
@@ -47,10 +48,12 @@ export class SmtpMailTransport implements MailTransport {
     private readonly oauthTokenProvider: MicrosoftOAuthTokenProvider = new MicrosoftOAuthTokenProvider(),
   ) {}
 
-  async send(message: PreparedOutboundMessage, config: MailConfiguration): Promise<void> {
-    const transporter = await this.buildTransporter(config);
+  async send(message: PreparedOutboundMessage, config: MailConfiguration): Promise<MailAcceptance | undefined> {
+    const transporter = await this.buildTransporter(config).catch(() => {
+      throw new SmtpNotStartedError('SMTP transport initialization failed.');
+    });
     try {
-      await transporter.sendMail({
+      const sent = await transporter.sendMail({
         messageId: message.messageId,
         from: { name: message.fromName, address: message.fromAddress },
         to: message.toAddress,
@@ -59,6 +62,7 @@ export class SmtpMailTransport implements MailTransport {
         html: message.html,
         headers: message.headers,
       });
+      return smtpAcceptance(sent, message.toAddress);
     } finally {
       transporter.close();
     }

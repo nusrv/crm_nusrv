@@ -1,13 +1,14 @@
 import { FawtaraSubmissionService } from './fawtara-submission.service';
-import { Body, Controller, Get, Ip, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Ip, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../../identity/auth-user';
 import { Roles } from '../../identity/roles.decorator';
 import {
+  CreateManualInvoiceDto,
   InvoiceListQueryDto,
   InvoiceReasonDto,
+  OfficializeInvoiceDto,
   SubmitOfficialInvoiceDto,
   RecordFawtaraRejectionDto,
-  RecordFawtaraResultDto,
   UpdateInvoiceDraftDto,
 } from './invoices.dto';
 import { InvoicesService } from './invoices.service';
@@ -37,12 +38,7 @@ export class InvoicesController {
     @Req() req: AuthenticatedRequest,
     @Ip() ip: string,
   ) {
-    return this.submissions.submit(id, input, {
-      actorId: req.user.id,
-      roles: req.user.roles,
-      initiation: 'HUMAN',
-      ipAddress: ip,
-    });
+    throw new BadRequestException('JoFotara API submission is deferred. Record the externally issued official invoice instead.');
   }
 
   @Get(':id')
@@ -60,6 +56,18 @@ export class InvoicesController {
       actorId: req.user.id,
       ipAddress: ip,
     });
+  }
+
+  @Post('from-renewal/:caseId')
+  @Roles('ADMIN')
+  createForRenewal(@Param('caseId') caseId: string, @Req() req: AuthenticatedRequest, @Ip() ip: string) {
+    return this.invoices.createForRenewal(caseId, { actorId: req.user.id, ipAddress: ip });
+  }
+
+  @Post('manual-draft')
+  @Roles('ADMIN')
+  createManualDraft(@Body() input: CreateManualInvoiceDto, @Req() req: AuthenticatedRequest, @Ip() ip: string) {
+    return this.invoices.createManualDraft(input, { actorId: req.user.id, ipAddress: ip });
   }
 
   @Patch(':id')
@@ -107,10 +115,11 @@ export class InvoicesController {
     return this.invoices.returnToDraft(id, { actorId: req.user.id, ipAddress: ip });
   }
 
-  @Post(':id/record-fawtara-result')
+  @Post([':id/officialize', ':id/record-fawtara-result'])
+  @Roles('ADMIN')
   recordFawtaraResult(
     @Param('id') id: string,
-    @Body() input: RecordFawtaraResultDto,
+    @Body() input: OfficializeInvoiceDto,
     @Req() req: AuthenticatedRequest,
     @Ip() ip: string,
   ) {

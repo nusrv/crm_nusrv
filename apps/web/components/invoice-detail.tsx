@@ -27,6 +27,10 @@ type EditableLine = Pick<
 >;
 
 const dateInput = (value: string | null) => (value ? value.slice(0, 10) : '');
+const localDateTimeInput = () => {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+};
 
 export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
   const [invoice, setInvoice] = useState<InvoiceView | null>(null);
@@ -193,9 +197,18 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const optional = (name: string) => String(form.get(name) ?? '').trim() || undefined;
+    if (!qrImageDataUrl) {
+      setError('Load the official QR image first.');
+      return;
+    }
+    const acceptedAt = new Date(String(form.get('acceptedAt')));
+    if (!Number.isFinite(acceptedAt.getTime())) {
+      setError('Enter a valid acceptance date.');
+      return;
+    }
     await run(
       () =>
-        apiRequest(`/invoices/${invoiceId}/record-fawtara-result`, {
+        apiRequest(`/invoices/${invoiceId}/officialize`, {
           method: 'POST',
           body: JSON.stringify({
             fawtaraStatus: String(form.get('fawtaraStatus')),
@@ -203,7 +216,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
             invoiceUuid: optional('invoiceUuid'),
             qrPayload: optional('qrPayload'),
             qrImageDataUrl: qrImageDataUrl || undefined,
-            acceptedAt: String(form.get('acceptedAt')),
+            acceptedAt: acceptedAt.toISOString(),
             officialCurrencyCode: optional('officialCurrencyCode'),
             officialSubtotal: optional('officialSubtotal'),
             officialDiscountTotal: optional('officialDiscountTotal'),
@@ -241,7 +254,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
       <PageHeading
         eyebrow="Human-controlled JoFotara invoicing"
         title={invoice.internalReference}
-        description={`${invoice.status} · ${invoice.customerCodeSnapshot} · ${invoice.sourceSubscription.name}`}
+        description={`${invoice.status} · ${invoice.customerCodeSnapshot} · ${invoice.sourceSubscription?.name ?? 'Independent invoice'}`}
         actions={
           <div className="no-print flex gap-2">
             <Link className="button-secondary" href="/dashboard/invoices">
@@ -595,7 +608,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
       </section>
       {invoice.status === 'READY_FOR_FAWTARA' && !invoice.submissionPending && (
         <section className="panel no-print mb-6">
-          <h3 className="text-xl font-semibold">Record manual JoFotara result</h3>
+          <h3 className="text-xl font-semibold">تثبيت الفاتورة الرسمية / Officialize Invoice</h3>
           <p className="muted mt-1 text-sm">
             Issue/finalize this invoice outside the CRM, then record the official result here. This
             action makes accepted values authoritative and locks the invoice.
@@ -615,24 +628,27 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
               name="acceptedAt"
               required
               type="datetime-local"
-              value={new Date().toISOString().slice(0, 16)}
+              value={localDateTimeInput()}
             />
             <Field
-              label="Official currency (optional)"
+              label="Official currency"
               name="officialCurrencyCode"
               value={invoice.currencyCode}
+              required
             />
-            <Field label="Official subtotal (optional)" name="officialSubtotal" type="number" />
+            <Field label="Official subtotal" name="officialSubtotal" type="number" required />
             <Field
-              label="Official discount total (optional)"
+              label="Official discount total"
               name="officialDiscountTotal"
               type="number"
+              required
             />
-            <Field label="Official tax total (optional)" name="officialTaxTotal" type="number" />
+            <Field label="Official tax total" name="officialTaxTotal" type="number" required />
             <Field
-              label="Official grand total (optional)"
+              label="Official grand total"
               name="officialGrandTotal"
               type="number"
+              required
             />
             <label className="field field-wide">
               <span>Official EINV_QR payload / Base64</span>
@@ -654,7 +670,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
             </label>
             <div className="field-wide flex gap-3">
               <button className="button-primary" type="submit">
-                Confirm official JoFotara invoice
+                تثبيت الفاتورة الرسمية / Officialize Invoice
               </button>
               <button
                 className="button-secondary"

@@ -608,6 +608,12 @@ model SubscriptionConnection {
 }
 
 model RenewalCase {
+  communicationRevision Int @default(0) @map("communication_revision")
+  clarificationPending Boolean @default(false) @map("clarification_pending")
+  proposedPeriodStart DateTime? @map("proposed_period_start") @db.Date
+  proposedPeriodEnd DateTime? @map("proposed_period_end") @db.Date
+  proposedNextRenewalDate DateTime? @map("proposed_next_renewal_date") @db.Date
+  invoices Invoice[]
   id                    String                      @id @default(uuid()) @db.VarChar(36)
   subscriptionId        String                      @map("subscription_id") @db.VarChar(36)
   cycleStartDate        DateTime                    @map("cycle_start_date") @db.Date
@@ -879,6 +885,14 @@ model RenewalHold {
 }
 
 model CommunicationOutbox {
+  purpose String? @db.VarChar(24)
+  caseRevision Int? @map("case_revision")
+  recipientContactId String? @map("recipient_contact_id") @db.VarChar(36)
+  resendOfId String? @unique @map("resend_of_id") @db.VarChar(36)
+  manualApprovedBy String? @map("manual_approved_by") @db.VarChar(36)
+  smtpRetrySafe Boolean @default(false) @map("smtp_retry_safe")
+  smtpUncertain Boolean @default(false) @map("smtp_uncertain")
+  nextAttemptAt DateTime? @map("next_attempt_at")
   id                 String                    @id @default(uuid()) @db.VarChar(36)
   customerId         String                    @map("customer_id") @db.VarChar(36)
   subscriptionId     String                    @map("subscription_id") @db.VarChar(36)
@@ -917,6 +931,7 @@ model CommunicationOutbox {
 
   @@index([renewalCaseId, status])
   @@index([status, scheduledAt])
+  @@index([status, nextAttemptAt, scheduledAt], map: "communication_outbox_attempt_due_idx")
   @@index([customerId])
   @@index([subscriptionId])
   @@index([reminderRuleId])
@@ -944,6 +959,9 @@ model CommunicationOutbox {
 // enum TYPE — this is data-type reuse only, never a relation to or dependency on the
 // CommunicationOutbox table/worker/eligibility logic itself.
 model OperatorReplyOutbox {
+  resendOfId String? @unique @map("resend_of_id") @db.VarChar(36)
+  smtpRetrySafe Boolean @default(false) @map("smtp_retry_safe")
+  smtpUncertain Boolean @default(false) @map("smtp_uncertain")
   id                  String                    @id @default(uuid()) @db.VarChar(36)
   threadId            String                    @map("thread_id") @db.VarChar(36)
   mailConfigurationId String                    @map("mail_configuration_id") @db.VarChar(36)
@@ -1055,6 +1073,8 @@ model CommunicationThread {
 }
 
 model EmailMessage {
+  reviewedAt DateTime? @map("reviewed_at")
+  reviewedBy String? @map("reviewed_by") @db.VarChar(36)
   id                       String                @id @default(uuid()) @db.VarChar(36)
   threadId                 String                @map("thread_id") @db.VarChar(36)
   customerId               String?               @map("customer_id") @db.VarChar(36)
@@ -1471,13 +1491,19 @@ model InvoiceSequence {
 // retained for traceability and use RESTRICT so financial history can never disappear through an
 // existing Customer/Subscription deletion flow.
 model Invoice {
+  qrCorrections InvoiceQrCorrection[]
+  renewalOfficialKey String? @unique(map: "invoices_renewal_official_key") @map("renewal_official_key") @db.VarChar(36)
+  sourceRenewalCaseId String? @map("source_renewal_case_id") @db.VarChar(36)
+  sourceRenewalCase RenewalCase? @relation(fields: [sourceRenewalCaseId], references: [id], onDelete: Restrict)
+  payments Payment[]
+  @@index([sourceRenewalCaseId])
   issuerPresentationSnapshot Json?                 @map("issuer_presentation_snapshot")
   issuerLogoAssetId          String?               @map("issuer_logo_asset_id") @db.VarChar(36)
   issuerLogoAsset            InvoiceBrandingAsset? @relation(fields: [issuerLogoAssetId], references: [id], onDelete: Restrict)
   id                         String                @id @default(uuid()) @db.VarChar(36)
-  customerId                 String                @map("customer_id") @db.VarChar(36)
+  customerId                 String?                @map("customer_id") @db.VarChar(36)
   billingEntityId            String                @map("billing_entity_id") @db.VarChar(36)
-  sourceSubscriptionId       String                @map("source_subscription_id") @db.VarChar(36)
+  sourceSubscriptionId       String?                @map("source_subscription_id") @db.VarChar(36)
   status                     InvoiceStatus         @default(DRAFT)
   internalReference          String                @unique @map("internal_reference") @db.VarChar(80)
   // Non-null only while the invoice is DRAFT/READY. The nullable unique key is the concurrent
@@ -1545,9 +1571,9 @@ model Invoice {
 
   createdAt          DateTime      @default(now()) @map("created_at")
   updatedAt          DateTime      @updatedAt @map("updated_at")
-  customer           Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict, map: "invoices_customer_fkey")
+  customer           Customer?      @relation(fields: [customerId], references: [id], onDelete: Restrict, map: "invoices_customer_fkey")
   billingEntity      BillingEntity @relation(fields: [billingEntityId], references: [id], onDelete: Restrict, map: "invoices_billing_entity_fkey")
-  sourceSubscription Subscription  @relation("InvoiceSourceSubscription", fields: [sourceSubscriptionId], references: [id], onDelete: Restrict, map: "invoices_source_subscription_fkey")
+  sourceSubscription Subscription?  @relation("InvoiceSourceSubscription", fields: [sourceSubscriptionId], references: [id], onDelete: Restrict, map: "invoices_source_subscription_fkey")
   lines              InvoiceLine[]
 
   @@unique([billingEntityId, fawtaraInvoiceNumber], map: "invoices_entity_fawtara_number_key")
@@ -1675,4 +1701,70 @@ model InvoiceBrandingAsset {
 
   @@unique([billingEntityId, sha256])
   @@map("invoice_branding_assets")
+}
+
+// Append-only human-recorded collection ledger. Financial history is never cascade-deleted.
+model Payment {
+ id String @id @default(uuid()) @db.VarChar(36)
+ invoiceId String @map("invoice_id") @db.VarChar(36)
+ amount Decimal @db.Decimal(14,3)
+ currency String @db.VarChar(3)
+ paymentDate DateTime @map("payment_date") @db.Date
+ method String @db.VarChar(30)
+ reference String? @db.VarChar(191)
+ notes String? @db.Text
+ recordedBy String @map("recorded_by") @db.VarChar(36)
+ idempotencyKey String @unique @map("idempotency_key") @db.VarChar(80)
+ createdAt DateTime @default(now()) @map("created_at")
+ invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+ receipt PaymentReceipt?
+ @@index([invoiceId,paymentDate])
+ @@map("payments")
+}
+model PaymentReceipt {
+ id String @id @default(uuid()) @db.VarChar(36)
+ paymentId String @unique @map("payment_id") @db.VarChar(36)
+ snapshot Json
+ createdBy String @map("created_by") @db.VarChar(36)
+ createdAt DateTime @default(now()) @map("created_at")
+ payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+ revisions PaymentReceiptRevision[]
+ @@map("payment_receipts")
+}
+
+model PaymentReceiptRevision {
+  id             String         @id @default(uuid()) @db.VarChar(36)
+  receiptId      String         @map("receipt_id") @db.VarChar(36)
+  version        Int
+  amount         Decimal        @db.Decimal(14, 3)
+  currency       String         @db.VarChar(3)
+  paymentDate    DateTime       @map("payment_date") @db.Date
+  method         String         @db.VarChar(30)
+  reference      String?        @db.VarChar(191)
+  notes          String?        @db.Text
+  voided         Boolean        @default(false)
+  reason         String         @db.VarChar(500)
+  actorId        String         @map("actor_id") @db.VarChar(36)
+  requestKey     String?        @unique @map("request_key") @db.VarChar(80)
+  requestHash    String?        @map("request_hash") @db.VarChar(64)
+  createdAt      DateTime       @default(now()) @map("created_at")
+  receipt        PaymentReceipt @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+
+  @@unique([receiptId, version])
+  @@map("payment_receipt_revisions")
+}
+
+model InvoiceQrCorrection {
+  id                 String   @id @default(uuid()) @db.VarChar(36)
+  invoiceId          String   @map("invoice_id") @db.VarChar(36)
+  invoiceRevision    Int      @map("invoice_revision")
+  oldImageDataUrl    String?  @map("old_image_data_url") @db.MediumText
+  newImageDataUrl    String   @map("new_image_data_url") @db.MediumText
+  reason             String   @db.VarChar(500)
+  actorId            String   @map("actor_id") @db.VarChar(36)
+  createdAt          DateTime @default(now()) @map("created_at")
+  invoice            Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, invoiceRevision])
+  @@map("invoice_qr_corrections")
 }

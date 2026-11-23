@@ -1,7 +1,12 @@
 import { jest } from '@jest/globals';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { AiQueueService } from './ai-queue.service';
 import { AI_RECOVERY_SCAN_INTERVAL_MS } from './ai-timing.constants';
 import { AI_RECOVERY_JOB, AI_RECOVERY_SCHEDULER } from './ai-queue.constants';
+
+// Exercise the retained AI implementation behind the frozen production gate.
+beforeEach(() => { jest.spyOn(aiOperationalPolicy, 'isDeferred').mockReturnValue(false); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 describe('AiQueueService', () => {
   it('registers the periodic recovery-scan scheduler idempotently on boot', async () => {

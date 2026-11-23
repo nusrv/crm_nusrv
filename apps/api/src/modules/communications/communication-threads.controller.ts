@@ -57,6 +57,18 @@ export class CommunicationThreadsController {
     });
   }
 
+  @Roles('ADMIN')
+  @Get(':threadId/outbox/:outboxId/evidence')
+  evidence(@Param('threadId') threadId: string, @Param('outboxId') outboxId: string) {
+    return this.replies.evidence(threadId, outboxId);
+  }
+
+  @Roles('ADMIN')
+  @Post(':threadId/outbox/:outboxId/resend')
+  resend(@Param('threadId') threadId: string, @Param('outboxId') outboxId: string, @Body() input: unknown, @Req() request: AuthenticatedRequest) {
+    return this.replies.resend(threadId, outboxId, input, request.user.id);
+  }
+
   /** Slice F §16 — synchronous, human-initiated, side-effect-free generation. No body: the request
    * always drafts from the thread's own latest inbound message and effective classification. */
   @Roles('ADMIN', 'SALES_DEVELOPMENT')

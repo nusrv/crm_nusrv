@@ -35,7 +35,7 @@ describe('AuthService', () => {
       },
     };
     const jwt = {
-      signAsync: jest.fn((payload: { type: string }) =>
+      signAsync: jest.fn((payload: { type: string; sid?: string }, _options?: { expiresIn: number }) =>
         Promise.resolve(payload.type === 'refresh' ? 'refresh-token' : 'access-token'),
       ),
       decode: jest.fn(() => ({ exp: Math.floor(Date.now() / 1_000) + 3_600 })),
@@ -75,6 +75,10 @@ describe('AuthService', () => {
       data: { failedAttempts: 0, lockedUntil: null },
     });
     expect(sessionData?.refreshTokenHash).not.toBe('refresh-token');
+    const [refresh, access] = jwt.signAsync.mock.calls;
+    expect(refresh?.[1]?.expiresIn).toBe(86_400);
+    expect(access?.[0].sid).toBe(refresh?.[0].sid);
+    expect(access?.[1]?.expiresIn).toBeLessThanOrEqual(900);
     expect(await verify(sessionData?.refreshTokenHash ?? '', 'refresh-token')).toBe(true);
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -349,6 +353,7 @@ describe('AuthService', () => {
         userId: payload.sub,
         refreshTokenHash: await hash(REFRESH_TOKEN),
         revokedAt: null,
+        createdAt: new Date(),
         expiresAt: new Date(Date.now() + 3_600_000),
         user: {
           id: payload.sub,
@@ -396,6 +401,19 @@ describe('AuthService', () => {
     it('rejects a revoked session', async () => {
       const { service } = buildService(await baseSession({ revokedAt: new Date() }));
       await expect(service.refresh(REFRESH_TOKEN)).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it('rejects an over-24-hour legacy session with a later stored expiry', async () => {
+      const { service } = buildService(await baseSession({
+        createdAt: new Date(Date.now() - 86_401_000),
+      }));
+      await expect(service.refresh(REFRESH_TOKEN)).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it('does not report successful logout if revocation fails', async () => {
+      const { service, authSession } = buildService(await baseSession());
+      authSession.updateMany.mockRejectedValueOnce(new Error('Database unavailable'));
+      await expect(service.logout(REFRESH_TOKEN)).rejects.toThrow('Database unavailable');
     });
 
     it('rejects an expired session', async () => {

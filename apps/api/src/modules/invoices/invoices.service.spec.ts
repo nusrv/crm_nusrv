@@ -456,7 +456,7 @@ describe('InvoicesService manual JoFotara officialization', () => {
         invoiceUuid: 'official-uuid',
         qrPayload: 'official-qr-payload',
         qrImageDataUrl:
-          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jPZkAAAAASUVORK5CYII=',
+          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=',
         acceptedAt: '2026-11-17T10:00:00.000Z',
         officialCurrencyCode: 'JOD',
         officialGrandTotal: '117.000',

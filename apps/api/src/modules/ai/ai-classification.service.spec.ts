@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { AiIntent, ClassificationStatus, HealthStatus, MessageDirection } from '../../generated/prisma/enums';
 import { AiClassificationService } from './ai-classification.service';
 import { AI_AUDIT_EVENT } from './ai-events.constants';
@@ -172,6 +173,10 @@ function validResult(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+// Exercise the retained AI implementation behind the frozen production gate.
+beforeEach(() => { jest.spyOn(aiOperationalPolicy, 'isDeferred').mockReturnValue(false); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 describe('AiClassificationService', () => {
   it('§10 — AI_ENABLED=false: no provider call, no DB read, no status change', async () => {

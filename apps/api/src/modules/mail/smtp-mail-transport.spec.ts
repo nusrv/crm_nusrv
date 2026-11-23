@@ -7,6 +7,7 @@ import {
   STALE_PROCESSING_LEASE_MS,
 } from './mail-timing.constants';
 import { SmtpMailTransport } from './smtp-mail-transport';
+import { SmtpNotStartedError } from './smtp-attempt-policy';
 
 const message = {
   messageId: '<abc@example.test>',
@@ -24,7 +25,9 @@ function fakeTransportFactory(sendMail: jest.Mock, close: jest.Mock) {
 
 describe('SmtpMailTransport', () => {
   it('decrypts credentials lazily and passes the explicit Message-ID through unchanged', async () => {
-    const sendMail = jest.fn(() => Promise.resolve({ messageId: 'ignored' }));
+    const sendMail = jest.fn(() => Promise.resolve({
+      messageId: 'ignored', response: '250 queued server-fragment', accepted: ['customer@example.test'],
+    }));
     const close = jest.fn();
     const createTransport = fakeTransportFactory(sendMail, close);
     const decrypt = jest.fn(() => ({ password: 'super-secret' }));
@@ -39,7 +42,9 @@ describe('SmtpMailTransport', () => {
       smtpCredentialsCiphertext: 'v1.iv.tag.ciphertext',
     };
 
-    await transport.send(message, config as never);
+    await expect(transport.send(message, config as never)).resolves.toEqual({
+      source: 'smtp', responseCode: 250,
+    });
 
     expect(decrypt).toHaveBeenCalledWith('v1.iv.tag.ciphertext');
     expect(createTransport).toHaveBeenCalledWith(
@@ -81,7 +86,7 @@ describe('SmtpMailTransport', () => {
       smtpCredentialsCiphertext: null,
     };
 
-    await transport.send(message, config as never);
+    await expect(transport.send(message, config as never)).resolves.toBeUndefined();
 
     expect(decrypt).not.toHaveBeenCalled();
     expect(createTransport).toHaveBeenCalledWith(expect.objectContaining({ auth: undefined }));
@@ -203,7 +208,7 @@ describe('SmtpMailTransport', () => {
       expect(createTransport).toHaveBeenCalledWith(expect.objectContaining({ auth: { user: 'renewals', pass: 'super-secret' } }));
     });
 
-    it('propagates a token-provider failure without ever sending mail', async () => {
+    it('returns a safe pre-SMTP outcome for token-provider failure without entering mail transport', async () => {
       const sendMail = jest.fn();
       const close = jest.fn();
       const createTransport = fakeTransportFactory(sendMail, close);
@@ -222,7 +227,7 @@ describe('SmtpMailTransport', () => {
           smtpUsername: 'renewals@example.onmicrosoft.com',
           smtpCredentialsCiphertext: 'v1.iv.tag.ciphertext',
         } as never),
-      ).rejects.toThrow('status 401');
+      ).rejects.toThrow(SmtpNotStartedError);
       expect(createTransport).not.toHaveBeenCalled();
       expect(sendMail).not.toHaveBeenCalled();
     });

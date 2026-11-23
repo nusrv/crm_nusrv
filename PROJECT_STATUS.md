@@ -2,6 +2,7 @@
 
 ## Current status
 
+- Final owner handoff P0 is partially verified. The worker startup schema gate, 848 API tests, workspace typecheck and actual Next fresh-document recovery passed. Full Chrome restart failed the independent persistent-cookie control. Disposable MariaDB rehearsal and target schema verification remain open. Operational rollout requires separate approval and a verified old-worker cutover. [P0 final validation](audit/arena/codex_followup/final_owner_handoff/P0_FINAL_VALIDATION.md)
 - Phase 0: COMPLETE / OWNER APPROVED
 - Phase 1: COMPLETE / OWNER APPROVED
 - Phase 2: COMPLETE / OWNER APPROVED
