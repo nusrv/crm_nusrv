@@ -52,3 +52,42 @@ These are source commits only. **The added tests have not been executed in the r
 ## Checkpoint verdict
 
 **P1: implementation in progress, partially inspected, not verified.** Preserve the interrupted checkpoint and continue with targeted tests and source fixes rather than reproducing the previous long Codex run.
+
+
+## Recovery checkpoint 2 — financial, mail and UI hardening (2026-11-23)
+
+All changes below were made on the temporary GitHub recovery branch; the original interrupted Codex checkpoint remains in Git history.
+
+### Financial document integrity
+
+- Added `PaymentsService` unit scenarios for official-only payment, currency isolation, same-key replay, conflicting-key rejection, initial receipt, correction, void and stale version rejection.
+- Added a receipt snapshot revision guard. `PaymentsService.record()` and `receipt()` fetch the candidate immutable display snapshot, acquire the invoice row lock, then compare the invoice revision. A concurrent invoice correction between these steps now fails safely with a reload-required conflict instead of freezing stale invoice data into a new receipt.
+- Implemented a separate printable, stamp-free `PaymentReceiptDocument` in the existing collection modal using the original legal/issuer/invoice snapshot and the latest effective receipt revision. Voided receipts cannot be printed as current valid acknowledgements. The document contains no tax-invoice QR or seal.
+- Added a server-rendered receipt markup check for the corrected amount, historical issuer/invoice, invalid/void status and React escaping. CSS printing has not yet undergone real Chrome visual verification.
+
+### Human mail resend containment
+
+- In both `MailOutboundService` and `OperatorReplyOutboundService`, an ADMIN-authorized resend now locks the original outbox row and checks committed SMTP acceptance evidence inside the transaction immediately before the durable send-attempt boundary.
+- If the original had accepted by that point, the new resend is marked CANCELLED with an audit entry and **no new SMTP attempt** begins. Lock ordering synchronizes with the existing `recordSuccess` original-row update path.
+- A genuinely later acceptance after the new attempt starts remains a possible duplicate-delivery risk; this is why explicit ADMIN acknowledgment is mandatory. No system can retroactively unsend an already-transmitted SMTP request.
+- Added tests for positive late acceptance, nonacceptance with an authorized resend, and normal first-send behavior for both outboxes. Real multi-connection transaction races remain unverified until disposable MariaDB is available.
+
+### Additional P1 coverage
+
+- Added priority and fallback recipient tests (registered BILLING, PRIMARY, then main email), plus invalid-address filtering.
+- Added historical renewal-date repair tests for authorized reasons, missing-only corrections, superseded cycles, already-complete dates and invalid boundaries.
+- Added QR correction tests for preserved original image, actor/reason, revision guard, rejected input and nonofficial invoices.
+- Existing official-invoice evidence, money arithmetic, renewal dates and GET authorization tests remain in the branch.
+
+### Verification and current restrictions
+
+**Source changes saved; tests NOT EXECUTED locally in this ChatGPT environment.** The connected GitHub repository exposes file operations, but no verified checked-out package-install/database runtime; no successful Jest, TypeScript, browser or MariaDB run has been claimed.
+
+P0 remains partially verified. P1 remains **engineering-in-progress**, not approved for operational migration or deployment. P2 Active Email Sync remains outside this implementation slice; only P1 manual resend safety was modified.
+
+Next steps, ordered by importance:
+1. Workspace API/web/shared typecheck and targeted Jest/Node renderer tests against the exact recovery branch, then repair failures.
+2. Transactional MariaDB P1.1/P1.2 rehearsal, including invoice uniqueness, total/effective receipt revisions, concurrent writes and migration compatibility with physical legacy tables.
+3. Multi-worker SMTP late-evidence, resend authorization and clarification-acceptance tests with synthetic transports, never live customer email.
+4. Real browser print review of the stamp-free receipt and existing invoice branding.
+5. Complete distinct prospective/free invoice and fulfillment end-to-end tests, followed by controlled owner review and separately authorized rollout.
