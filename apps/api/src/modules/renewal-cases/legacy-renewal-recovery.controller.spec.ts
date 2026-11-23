@@ -92,9 +92,9 @@ describe('P1 legacy renewal proposed-date repair (OD-7)', () => {
 
   it('rejects invalid period boundaries before attempting any database mutation', async () => {
     const h = harness();
-    await expect(h.controller.repair('case-1', {
+    expect(() => h.controller.repair('case-1', {
       ...input, nextRenewalDate: input.periodEnd,
-    }, ADMIN as never)).rejects.toThrow(BadRequestException);
+    }, ADMIN as never)).toThrow(BadRequestException);
     expect(h.updateMany).not.toHaveBeenCalled();
   });
 });
