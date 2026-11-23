@@ -91,3 +91,22 @@ Next steps, ordered by importance:
 3. Multi-worker SMTP late-evidence, resend authorization and clarification-acceptance tests with synthetic transports, never live customer email.
 4. Real browser print review of the stamp-free receipt and existing invoice branding.
 5. Complete distinct prospective/free invoice and fulfillment end-to-end tests, followed by controlled owner review and separately authorized rollout.
+
+## Recovery checkpoint 3 — accepted-cycle integrity and targeted test commands
+
+- Strengthened `acceptedRenewalPeriod()` so an accepted renewal begins exactly on the due date and ends exactly one day before the proposed next-renewal date. Gapped or shifted periods cannot qualify for prospective officialization or fulfillment.
+- Added `accepted-renewal-invoice.spec.ts` for decision, missing/gapped dates, row-lock ordering and superseded cycles.
+- Added `legacy-renewal-recovery.controller.spec.ts` and `invoice-qr-corrections.controller.spec.ts` for original evidence preservation, revision locks and audit.
+- Updated `PROJECT_STATUS.md` to retain the P1 recovery branch and open verification gates.
+
+### Safe focused local validation (requires previously installed project dependencies)
+
+From the recovery checkout, without starting any SMTP/worker/production service:
+
+```powershell
+npm run typecheck
+npm run test -w @cp/api -- --runTestsByPath src/modules/invoices/payment-money.spec.ts src/modules/invoices/payments.service.spec.ts src/modules/invoices/official-invoice-eligibility.spec.ts src/modules/invoices/invoice-qr-corrections.controller.spec.ts src/modules/renewal-cases/renewal-period.spec.ts src/modules/renewal-cases/renewal-mail-recipient.spec.ts src/modules/renewal-cases/accepted-renewal-invoice.spec.ts src/modules/renewal-cases/legacy-renewal-recovery.controller.spec.ts src/modules/renewal-cases/renewal-cases.controller.spec.ts src/modules/mail/resend-attempt-guard.spec.ts
+.\node_modules\.bin\tsx.cmd apps/web/tests/payment-receipt-renderer.check.tsx
+```
+
+These targeted checks use synthetic/mock data and do not perform migrations or live sends. They are **not executed at the time of writing**. Their eventual passing cannot substitute for isolated MariaDB concurrency/upgrade rehearsals or real browser print and session verification.
