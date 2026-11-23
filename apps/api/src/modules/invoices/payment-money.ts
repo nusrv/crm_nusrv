@@ -24,9 +24,18 @@ export function effectiveReceiptAmounts(
   const revision = payment.receipt?.revisions[0];
   if (!revision || revision.currency !== currency) {
    unresolved += 1;
-  } else if (!revision.voided) {
-   amounts.push(revision.amount.toString());
+   continue;
   }
+  // A malformed or nonpositive historical receipt must not crash the entire
+  // balance projection or silently count as a negative collection. Keep its
+  // immutable history intact and expose the row as unresolved for ADMIN review.
+  if (revision.voided) continue;
+  const amount = revision.amount.toString();
+  if (!/^\d{1,11}(?:\.\d{1,3})?$/.test(amount) || paymentUnits(amount) <= 0n) {
+   unresolved += 1;
+   continue;
+  }
+  amounts.push(amount);
  }
  return { amounts, unresolved };
 }
