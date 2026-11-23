@@ -33,3 +33,13 @@ Authority: `APPROVED_OWNER_REQUIREMENTS.md` (OD-12, CL-5/6), `FINAL_TECHNICAL_DE
 ## Release boundary
 
 **P2 Active Email Sync is not implemented or operationally verified.** This document is an inventory and safe design sequence only. Existing per-mailbox switches stay at their current settings; no new synchronization is activated here. In particular, do not point `MailConfiguration.imapFolder` at Sent just to gain observations, because doing so would abandon or invalidate the INBOX cursor identity.
+
+## Implementation checkpoint — P2.A offline classification (2026-11-23)
+
+Added `apps/api/src/modules/mail/active-email-evidence.ts`, plus `active-email-evidence.spec.ts`, on the temporary recovery branch. This new **unwired, side-effect-free** module accepts explicitly scoped source observations and requires exact mailbox configuration, case-sensitive Message-ID, intended recipient, outbound attempt and source-object identifiers before producing any correlated observation. It distinguishes observed Sent, generic inbound, provider observation and candidate DSN. All results explicitly leave delivery status `UNKNOWN`; a reported HARD DSN is a **candidate**, never a confirmed bounce or an instruction to resend, modify Waiting for Customer or change renewal state.
+
+The module deliberately contains no network/mailbox calls, no worker integration, no database writes, no AI calls and no automatic replies. It does **not** authenticate DSN or provider provenance: those integrations remain open and must check trusted source and attempt evidence before elevating a candidate.
+
+Unit tests cover Sent-not-delivered, hard/ambiguous DSN-not-authoritative, case-sensitive identifiers, recipient/attempt/mailbox mismatch, missing source identities, provider-without-IMAP-folder, and untrusted general inbound observations.
+
+**Not yet executed after this checkpoint**: current workflow triggers are intentionally manual-only for this repository; no tests, database or mail were run by adding these files. P2.A is partially authored, not accepted or activated.
