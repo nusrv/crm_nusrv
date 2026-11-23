@@ -80,4 +80,6 @@ A direct source inspection of the committed SQL and schema verified the table/na
 5. Review old worker fencing, UIDVALIDITY failure/epoch remediation and per-folder CAS under two concurrent disposable workers before enabling new folder scans.
 6. Keep DSN evidence as untrusted until trusted source/attempt/recipient checks exist; no automatic re-send or new case transition.
 
+The disposable MariaDB test now also includes a two-writer compare-and-set race: two updates with the same exact expected UIDVALIDITY and UID must produce one successful update and one rejected stale update, without enabling polling. Its mailbox fixture uses a canonical, real `BILLING_ENTITY:<id>` scope instead of an invented test-only scope. The test remains **unexecuted**.
+
 **Status: P2.B schema/helper/tests committed on the temporary branch, integration validation pending; no P2.C activation.**
