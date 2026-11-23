@@ -5,11 +5,9 @@ import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
 import { Notice } from './notice';
+import { PaymentReceiptDocument, type PaymentReceiptView, type ReceiptRevisionView } from './payment-receipt-document';
 
-type ReceiptRevision = {
-  version: number; amount: string; paymentDate: string; method: string; currency: string;
-  reference?: string; notes?: string; voided: boolean; reason: string; actorId: string; createdAt: string;
-};
+type ReceiptRevision = ReceiptRevisionView;
 type Payment = {
   id: string; amount: string; paymentDate: string; method: string;
   receipt: { id: string; revisions: ReceiptRevision[] } | null;
@@ -18,9 +16,7 @@ type Collection = {
   invoiceNumber: string; currency: string; total: string; paid: string; balance: string;
   unresolved: number; status: string; payments: Payment[];
 };
-type ReceiptHistory = {
-  id: string; snapshot: { invoiceNumber?: string }; revisions: ReceiptRevision[];
-};
+type ReceiptHistory = PaymentReceiptView;
 type Balance = { currency: string; invoiced: string; collected: string; outstanding: string; unresolved: number };
 
 const methods = [
@@ -141,7 +137,8 @@ function CollectionPanel({ invoiceId }: { invoiceId: string }) {
             <button className="button-primary" disabled={busy} type="submit">{editing?.voiding ? 'Confirm void' : 'Save'}</button>
           </form>
         </Modal>}
-        {document && <Modal title={`Receipt for official invoice ${document.snapshot.invoiceNumber ?? summary.invoiceNumber}`} onClose={() => setDocument(null)}>
+        {document && <Modal title={`Receipt for official invoice ${document.snapshot.invoiceNumber ?? summary.invoiceNumber}`} onClose={() => setDocument(null)} maxWidth="54rem">
+          <PaymentReceiptDocument receipt={document} />
           <p>Receipt ID {document.id}</p>
           {document.revisions.length === 0 && <p>Legacy receipt requires review.</p>}
           <ul className="space-y-2">
