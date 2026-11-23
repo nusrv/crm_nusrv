@@ -130,8 +130,8 @@ function CollectionPanel({ invoiceId }: { invoiceId: string }) {
               <label className="field">Amount<input name="amount" inputMode="decimal" required defaultValue={version?.amount} /></label>
               <label className="field">Payment date<input name="paymentDate" type="date" required defaultValue={version?.paymentDate.slice(0, 10)} /></label>
               <label className="field">Method<select name="method" defaultValue={version?.method}>{methods.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-              <label className="field">Reference<input name="reference" maxLength={191} defaultValue={version?.reference} /></label>
-              <label className="field">Notes<textarea name="notes" maxLength={5000} defaultValue={version?.notes} /></label>
+              <label className="field">Reference<input name="reference" maxLength={191} defaultValue={version?.reference ?? ''} /></label>
+              <label className="field">Notes<textarea name="notes" maxLength={5000} defaultValue={version?.notes ?? ''} /></label>
             </>}
             {editing && <label className="field">Reason<textarea name="reason" maxLength={500} required /></label>}
             <button className="button-primary" disabled={busy} type="submit">{editing?.voiding ? 'Confirm void' : 'Save'}</button>
