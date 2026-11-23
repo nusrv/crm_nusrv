@@ -83,3 +83,29 @@ A direct source inspection of the committed SQL and schema verified the table/na
 The disposable MariaDB test now also includes a two-writer compare-and-set race: two updates with the same exact expected UIDVALIDITY and UID must produce one successful update and one rejected stale update, without enabling polling. Its mailbox fixture uses a canonical, real `BILLING_ENTITY:<id>` scope instead of an invented test-only scope. The test remains **unexecuted**.
 
 **Status: P2.B schema/helper/tests committed on the temporary branch, integration validation pending; no P2.C activation.**
+
+## P2.C read-only Sent preview source checkpoint — 2026-11-23
+
+The actual checked-in P2.B work was inspected before beginning P2.C. The new `MailEvidenceFolderCheckpoint` Prisma model and `20261123014000_p2_folder_scoped_evidence_cursors` migration are purely additive; `syncEnabled` defaults false and the independent UID cursors default null. The legacy inbound worker still uses only the old MailConfiguration INBOX cursor.
+
+### Source fixes / regression coverage
+
+- The existing P2.B disposable MariaDB test previously depended on the first Jest case creating a Sent checkpoint. Its duplicate-key and concurrent-CAS tests now create their **own** independent folder records. The legacy-cursor preservation case now seeds non-null old INBOX UIDVALIDITY/UID values and asserts that a new Sent checkpoint does not alter them.
+- `decideFolderCursorAdvance()` now treats invalid, zero and negative UID/UIDVALIDITY inputs as requiring review instead of silently labelling them already observed. Added unit cases.
+- Added `mail-evidence-sent-preview.ts` as a **standalone, unregistered helper**, with `mail-evidence-sent-preview.spec.ts`. Only a source explicitly marked `SENT`, `syncEnabled: true`, `capability: AVAILABLE`, with a valid exact folder identity and established consistent UID cursor can request a bounded fetch. The current persisted defaults provide **none** of those activation prerequisites automatically.
+- `previewSentFolderObservations()` uses the existing `MailboxReader.fetchMessagesSince()` contract (including its same-selection UIDVALIDITY check). It returns up to **50** read-only UID/Message-ID metadata observations with case-sensitive source identity and delivery status `UNKNOWN`, or an explicit no-read/review outcome. A stale UID epoch, duplicate/descending/old UID, oversized batch, missing cursor or wrong folder role produces no observation. This helper never writes, schedules, sends, modifies a cursor, persists message contents, or asserts a reply, acceptance, delivery or bounce.
+- The new preview suite is included in the repository's **manual-only** P1/P2 source validation workflow. The disposable MariaDB workflow already includes the P2.B folder-checkpoint fixture.
+
+### Verification performed and evidence limits
+
+Ten **source-structure checks** were performed against the current GitHub branch: migration-only new table; default-off; null initial cursors; unmodified legacy worker; preview not registered as route/worker; no write/send calls in preview; bounded reader use; fail-closed outcomes; presence of regression tests; and both workflows remaining `workflow_dispatch`-only. All ten passed. These are static source checks, **not** TypeScript/Jest/SQL runtime tests.
+
+The latest full green source CI in the repo still predates these edits. The current GitHub connection cannot dispatch the branch-only workflow; no CI run was started to avoid reversing the owner's manual-only preference. Accordingly **P2.B and the P2.C preview remain unverified at the current head**, and P2.C active integration is NOT authorized.
+
+### Next required evidence and work
+
+1. Manually run the existing branch-specific source CI (Prisma generation, typecheck, ESLint, focused P2 Jest, full API Jest and additive migration Node invariants).
+2. Manually run the disposable MariaDB P2 folder checkpoint fixture and migrate an authorized representative upgrade snapshot. Capture schema/drift reports and exact pre/post old-cursor values. The historic combined MariaDB suite has known older failing cases; keep them visible and separately triaged.
+3. Review and approve an explicit per-provider Sent folder discovery and baseline policy. Do **not** guess folder names or copy INBOX UIDs.
+4. Only after P2.B passes, design the durable per-folder CAS and observation persistence with outbox evidence provenance and idempotency. No new worker should be wired until the old-worker and fallback behavior is tested.
+5. Keep DSN/SMTP/provider evidence untrusted until source, attempt and intended recipient can be corroborated. No automatic resend or renewal transition is permitted.
