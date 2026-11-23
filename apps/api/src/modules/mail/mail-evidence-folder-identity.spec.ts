@@ -49,6 +49,19 @@ describe('P2.B independent IMAP folder identity, without changing existing INBOX
     expect(cursor).toEqual({ uidValidity: 100n, lastUid: 42n });
   });
 
+  it('rejects invalid UID / UIDVALIDITY values instead of misclassifying them as old mail', () => {
+    const current = { uidValidity: 100n, lastUid: 42n };
+    expect(decideFolderCursorAdvance(current, 0n, 43n)).toBe('INVALID_UID_REQUIRES_REVIEW');
+    expect(decideFolderCursorAdvance(current, -1n, 43n)).toBe('INVALID_UID_REQUIRES_REVIEW');
+    expect(decideFolderCursorAdvance(current, 100n, 0n)).toBe('INVALID_UID_REQUIRES_REVIEW');
+    expect(decideFolderCursorAdvance(current, 100n, -1n)).toBe('INVALID_UID_REQUIRES_REVIEW');
+    expect(decideFolderCursorAdvance({ uidValidity: 0n, lastUid: 10n }, 100n, 11n))
+      .toBe('INVALID_UID_REQUIRES_REVIEW');
+    expect(decideFolderCursorAdvance({ uidValidity: 100n, lastUid: -1n }, 100n, 11n))
+      .toBe('INVALID_UID_REQUIRES_REVIEW');
+    expect(current).toEqual({ uidValidity: 100n, lastUid: 42n });
+  });
+
   it('only allows monotonic same-epoch cursor advancement, subject to future DB CAS', () => {
     const cursor = { uidValidity: 100n, lastUid: 42n };
     expect(decideFolderCursorAdvance(cursor, 100n, 42n)).toBe('ALREADY_OBSERVED');
