@@ -48,7 +48,7 @@ function harness(prototype: object, table: 'communicationOutbox' | 'operatorRepl
   };
   const service = Object.assign(Object.create(prototype) as object, {
     prisma, audit: { record },
-  }) as WorkerAttempt;
+  }) as unknown as WorkerAttempt;
   return { service, calls, findMany, updateMany, queryRaw, record, table };
 }
 
