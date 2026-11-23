@@ -8,6 +8,7 @@ const revision = (amount: string, voided = false, currency = 'JOD') => ({
 });
 
 const payment = (...revisions: ReturnType<typeof revision>[]) => ({
+  currency: 'JOD',
   receipt: { revisions },
 });
 
@@ -56,11 +57,12 @@ describe('P1 financial balance rules (OD-4 / CL-1 / CL-2)', () => {
 
   it('does not use original Payment amounts when a receipt is missing or mismatched', () => {
     const { amounts, unresolved } = effectiveReceiptAmounts([
-      { receipt: null },
+      { currency: 'JOD', receipt: null },
       payment(revision('5.000', false, 'USD')),
+      { ...payment(revision('20.000')), currency: 'USD' },
       payment(revision('12.500')),
     ], 'JOD');
-    expect(unresolved).toBe(2);
+    expect(unresolved).toBe(3);
     expect(paymentSummary('100.000', amounts)).toEqual({
       total: '100.000', paid: '12.500', balance: '87.500', status: 'PARTIALLY_PAID',
     });
