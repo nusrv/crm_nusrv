@@ -110,3 +110,34 @@ npm run test -w @cp/api -- --runTestsByPath src/modules/invoices/payment-money.s
 ```
 
 These targeted checks use synthetic/mock data and do not perform migrations or live sends. They are **not executed at the time of writing**. Their eventual passing cannot substitute for isolated MariaDB concurrency/upgrade rehearsals or real browser print and session verification.
+
+## Recovery checkpoint 4 — SMTP evidence serialization and legacy money quarantine (2026-11-23)
+
+### Late SMTP evidence race tightened
+
+The prior resend preflight locked its original outbox and inspected committed SMTP acceptance evidence, but the original send's acceptance recording did not always explicitly lock the original row when the lease had already been quarantined. Both `MailOutboundService.recordSuccess()` and `OperatorReplyOutboundService.recordSuccess()` now issue a locking read of that original outbox row **before** conditionally updating status and appending the SMTP acceptance audit event. This creates a consistent original-row lock boundary with both outbox `markAttempt()` resend gates, even if status CAS affects zero rows.
+
+The two legacy worker test harnesses now support this additional locking read. Added a focused audit ordering test asserting that ownership-lost late acceptance is still recorded after the original-row lock. These are synthetic unit tests, **not a live MariaDB concurrency proof**. No live SMTP was invoked.
+
+### Financial history integrity tightened
+
+`effectiveReceiptAmounts()` now:
+- checks the original Payment currency as well as the effective receipt currency;
+- excludes and flags malformed, zero or negative historical Payment principals;
+- excludes and flags malformed, zero or negative effective receipt revisions;
+- retains voided receipt history without counting it as a collection;
+- exposes the number of unresolved records rather than throwing and breaking all customer balance results for these data discrepancies.
+
+The source Payment record and every receipt revision remain unmodified. No currency exchange, refund, reallocation or automatic correction occurs.
+
+`PaymentsService.receipt()` additionally refuses to issue a first receipt for a zero/negative historical Payment while preserving the existing valid backfill path for a positive recorded Payment. Added unit cases covering both and extended money-projection cases to cover mismatched principal/receipt currencies and malformed values.
+
+### Mandatory verification still open
+
+- Run TypeScript and targeted Jest suites for exact branch head; **none of the new tests have been executed in the connected GitHub file-edit environment**.
+- Verify race ordering against two concurrent disposable MariaDB transactions and mocked SMTP, including acceptance after lease quarantine and before/after resend claim.
+- Verify existing production schema and migration compatibility before any operational database change; deploy and old-worker cutover require separate owner approval.
+- Verify receipt printing in a real browser and the company's invoice template output.
+- Preserve the P0 browser restart and MariaDB release gates; do not interpret source review as P1 completion.
+
+**Verdict remains: P1 source hardening in progress, release not authorized.**
