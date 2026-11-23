@@ -75,3 +75,9 @@ jobs:
         run: |
           ../../node_modules/.bin/tsx ../web/tests/payment-receipt-renderer.check.tsx
           ../../node_modules/.bin/tsx ../web/tests/invoice-branding-renderer.check.tsx
+      - name: Prisma schema validation (offline, no migration or DB connection)
+        working-directory: apps/api
+        run: ../../node_modules/.bin/prisma validate
+      - name: Workspace ESLint checks
+        run: npm run lint
+
