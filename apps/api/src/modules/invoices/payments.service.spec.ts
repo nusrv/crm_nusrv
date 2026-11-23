@@ -34,43 +34,48 @@ function officialInvoice(status = 'FAWTARA_ACCEPTED') {
 function harness(status = 'FAWTARA_ACCEPTED') {
   let persisted: typeof originalPayment | null = null;
   const invoice = officialInvoice(status);
-  const paymentCreate = jest.fn(async (_input: unknown) => {
+  const paymentCreate = jest.fn((input: unknown) => {
+    void input;
     persisted = originalPayment;
-    return originalPayment;
+    return Promise.resolve(originalPayment);
   });
-  const receiptCreate = jest.fn(async (input: { data: Record<string, unknown> }) => ({
-    id: 'receipt-1', ...input.data,
-  }));
-  const revisionCreate = jest.fn(async (input: { data: Record<string, unknown> }) => ({
-    id: 'revision-2', ...input.data,
-  }));
-  const auditRecord = jest.fn(async (_event: unknown, _tx?: unknown) => ({ id: 'audit-1' }));
+  const receiptCreate = jest.fn((input: { data: Record<string, unknown> }) =>
+    Promise.resolve({ id: 'receipt-1', ...input.data }));
+  const revisionCreate = jest.fn((input: { data: Record<string, unknown> }) =>
+    Promise.resolve({ id: 'revision-2', ...input.data }));
+  const auditRecord = jest.fn((event: unknown, client?: unknown) => {
+    void event; void client;
+    return Promise.resolve({ id: 'audit-1' });
+  });
   const tx = {
-    $queryRaw: jest.fn(async () => [{ id: 'invoice-1' }]),
-    invoice: { findUnique: jest.fn(async () => invoice) },
+    $queryRaw: jest.fn(() => Promise.resolve([{ id: 'invoice-1' }])),
+    invoice: { findUnique: jest.fn(() => Promise.resolve(invoice)) },
     payment: {
-      findUnique: jest.fn(async () => persisted),
-      findFirst: jest.fn(async () => persisted),
+      findUnique: jest.fn(() => Promise.resolve(persisted)),
+      findFirst: jest.fn(() => Promise.resolve(persisted)),
       create: paymentCreate,
     },
     paymentReceipt: {
-      findUnique: jest.fn(async (_args: unknown): Promise<{ id: string; paymentId: string } | null> => null),
-      findFirst: jest.fn(async () => ({
+      findUnique: jest.fn((args: unknown): Promise<{ id: string; paymentId: string } | null> => {
+        void args;
+        return Promise.resolve(null);
+      }),
+      findFirst: jest.fn(() => Promise.resolve({
         id: 'receipt-1', paymentId: originalPayment.id,
         revisions: [originalRevision],
       })),
       create: receiptCreate,
     },
     paymentReceiptRevision: {
-      findUnique: jest.fn(async () => null),
+      findUnique: jest.fn(() => Promise.resolve(null)),
       create: revisionCreate,
     },
   };
   const prisma = {
-    $transaction: async <T>(callback: (client: typeof tx) => Promise<T>): Promise<T> => callback(tx),
+    $transaction: <T>(callback: (client: typeof tx) => Promise<T>): Promise<T> => callback(tx),
   };
   const invoices = {
-    findOne: jest.fn(async () => ({
+    findOne: jest.fn(() => Promise.resolve({
       id: invoice.id,
       revision: 2,
       issuerLogoDataUrl: null,
@@ -120,7 +125,7 @@ describe('P1 PaymentsService — official-only collection and receipt integrity'
     expect(result.id).toBe('payment-1');
     expect(h.paymentCreate).toHaveBeenCalledTimes(1);
     expect(h.receiptCreate).toHaveBeenCalledTimes(1);
-    const input = h.receiptCreate.mock.calls[0]![0]!;
+    const input = h.receiptCreate.mock.calls[0]![0];
     const snapshot = input.data.snapshot as { invoiceNumber: string; payment: { id: string } };
     expect(snapshot.invoiceNumber).toBe('NS-2026-500');
     expect(snapshot.payment.id).toBe('payment-1');
