@@ -156,7 +156,13 @@ export class OperatorReplyService {
 
     // §9 — the thread's own pinned mailbox only, never re-resolved to another BillingEntity/global
     // configuration, and never silently falls back if unusable.
-    const configResolution = this.mailConfigResolver.resolvePinned(thread.mailConfiguration);
+    // Operator-originated replies are independent of automatic-reminder cutover.
+    // Keep the mailbox enablement/environment gates, but do not strand a
+    // human-approved reply behind an unrelated outbound scheduler watermark.
+    const configResolution = this.mailConfigResolver.resolvePinned(
+      thread.mailConfiguration,
+      { checkCutover: false },
+    );
     if (!configResolution.usable) {
       throw new UnprocessableEntityException(`Reply mailbox is unavailable (${configResolution.reason}).`);
     }
