@@ -48,6 +48,31 @@ export interface MailIntegrationHealth {
  * health check has ever run), never hidden behind a null health event, and never hardcoded to
  * "OpenAI" — `provider`/`model` always reflect the actual persisted AiSettings row via
  * AiSettingsResolverService, the same source of truth DynamicLlmGateway uses at runtime. */
+/**
+ * P2.A observational inventory only: "CONFIGURED_ONLY" means the source has
+ * configuration prerequisites, NOT that the mailbox was reached or that an
+ * email was accepted/delivered. Sent/provider/DSN are intentionally reported
+ * as NOT_IMPLEMENTED until their separate folder-scoped evidence paths exist.
+ */
+export type EvidenceSourceState =
+  | 'DISABLED'
+  | 'NOT_CONFIGURED'
+  | 'BLOCKED_BY_DEPLOYMENT'
+  | 'CONFIGURED_ONLY'
+  | 'NOT_IMPLEMENTED';
+
+export interface EvidenceSourceInventory {
+  mailConfigurationId: string;
+  scope: string;
+  label: string;
+  configuredInboundFolder: string | null;
+  lastInboundSyncAt: Date | null;
+  inboundFolder: EvidenceSourceState;
+  sentFolder: 'NOT_IMPLEMENTED';
+  providerEvents: 'NOT_IMPLEMENTED';
+  dsnCorrelation: 'NOT_IMPLEMENTED';
+}
+
 export interface IntegrationHealthOverview {
   mail: MailIntegrationHealth[];
   ai: { provider: string; model: string | null; health: LatestHealthEvent | null };
@@ -81,6 +106,54 @@ export class IntegrationHealthService {
     private readonly config: ConfigService,
     private readonly aiSettings: AiSettingsResolverService,
   ) {}
+
+  /**
+   * Read-only, per-configuration P2 evidence coverage inventory.
+   * Never opens an IMAP or SMTP connection, advances a cursor, decrypts
+   * credentials, requests provider evidence, or writes to the database.
+   */
+  async getEvidenceSources(): Promise<EvidenceSourceInventory[]> {
+    const configs = await this.prisma.mailConfiguration.findMany({
+      orderBy: { scopeKey: 'asc' },
+      select: {
+        id: true,
+        scopeKey: true,
+        label: true,
+        enabled: true,
+        inboundSyncEnabled: true,
+        imapHost: true,
+        imapUsername: true,
+        imapFolder: true,
+        imapCredentialsCiphertext: true,
+        lastSyncedAt: true,
+      },
+    });
+    const adapter = resolveImapAdapterCapability(this.config);
+    return configs.map((item) => {
+      let inboundFolder: EvidenceSourceState;
+      if (!item.enabled || !item.inboundSyncEnabled) {
+        inboundFolder = 'DISABLED';
+      } else if (!item.imapHost.trim() || !item.imapUsername.trim() ||
+                 !item.imapFolder.trim() || !item.imapCredentialsCiphertext) {
+        inboundFolder = 'NOT_CONFIGURED';
+      } else if (adapter !== 'REAL') {
+        inboundFolder = 'BLOCKED_BY_DEPLOYMENT';
+      } else {
+        inboundFolder = 'CONFIGURED_ONLY';
+      }
+      return {
+        mailConfigurationId: item.id,
+        scope: item.scopeKey,
+        label: item.label,
+        configuredInboundFolder: item.imapFolder.trim() || null,
+        lastInboundSyncAt: item.lastSyncedAt,
+        inboundFolder,
+        sentFolder: 'NOT_IMPLEMENTED',
+        providerEvents: 'NOT_IMPLEMENTED',
+        dsnCorrelation: 'NOT_IMPLEMENTED',
+      };
+    });
+  }
 
   async getOverview(): Promise<IntegrationHealthOverview> {
     const configs = await this.prisma.mailConfiguration.findMany({
