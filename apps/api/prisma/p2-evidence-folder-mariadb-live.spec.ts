@@ -165,12 +165,29 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
     expect(persisted.syncEnabled).toBe(false);
   });
 
-  it('preserves and does not overwrite the legacy INBOX cursor', async () => {
+  it('preserves an ESTABLISHED legacy INBOX cursor even after creating an unrelated Sent checkpoint', async () => {
+    await prisma.mailConfiguration.update({
+      where: { id: configurationId },
+      data: {
+        lastSyncUidValidity: 900n,
+        lastSyncUid: 77n,
+        inboundSyncEnabled: false,
+      },
+    });
+    const name = 'Independent Sent Folder For Legacy Preservation';
+    await prisma.mailEvidenceFolderCheckpoint.create({
+      data: {
+        mailConfigurationId: configurationId,
+        folderName: name,
+        folderIdentityKey: mailEvidenceFolderIdentityKey(name),
+        sourceKind: 'SENT',
+      },
+    });
     const config = await prisma.mailConfiguration.findUniqueOrThrow({
       where: { id: configurationId },
     });
-    expect(config.lastSyncUidValidity).toBeNull();
-    expect(config.lastSyncUid).toBeNull();
+    expect(config.lastSyncUidValidity).toBe(900n);
+    expect(config.lastSyncUid).toBe(77n);
     expect(config.inboundSyncEnabled).toBe(false);
     const checkpoints = await prisma.mailEvidenceFolderCheckpoint.findMany({
       where: { mailConfigurationId: configurationId },
