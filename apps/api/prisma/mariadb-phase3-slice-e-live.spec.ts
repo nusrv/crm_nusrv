@@ -135,9 +135,6 @@ liveDescribe('Phase 3 Slice E MariaDB Communication Center integration', () => {
         environment: IntegrationEnvironment.SANDBOX,
         enabled: true,
         outboundSendEnabled: true,
-        // Operator replies now respect the explicit per-mailbox cutover, not
-        // the obsolete global MAIL_SEND_CUTOVER_AT fixture setting.
-        outboundSendCutoverAt: new Date('2020-01-01T00:00:00.000Z'),
       },
     });
     mailConfigurationId = mailConfiguration.id;
