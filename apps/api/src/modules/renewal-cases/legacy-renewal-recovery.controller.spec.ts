@@ -24,7 +24,7 @@ function harness(overrides: Record<string, unknown> = {}, newer = false) {
   const updateMany = jest.fn((input: unknown) => { void input; return Promise.resolve({ count: 1 }); });
   const findFirst = jest.fn((input: unknown) => { void input; return Promise.resolve(newer ? { id: 'newer-case' } : null); });
   const tx = {
-    $queryRaw: jest.fn(() => Promise.resolve([{ id: 'locked' }])), 
+    $queryRaw: jest.fn(() => Promise.resolve([{ id: 'locked' }])),
     renewalCase: {
       findUnique: jest.fn((input: unknown) => { void input; return Promise.resolve(row); }),
       findFirst,
@@ -90,7 +90,7 @@ describe('P1 legacy renewal proposed-date repair (OD-7)', () => {
       .rejects.toThrow(ConflictException);
   });
 
-  it('rejects invalid period boundaries before attempting any database mutation', async () => {
+  it('rejects invalid period boundaries before attempting any database mutation', () => {
     const h = harness();
     expect(() => h.controller.repair('case-1', {
       ...input, nextRenewalDate: input.periodEnd,
