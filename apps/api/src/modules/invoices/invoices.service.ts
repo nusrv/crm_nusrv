@@ -731,7 +731,7 @@ export class InvoicesService {
               ...presentation,
               templateVersion: 'nusrv-company-v1',
               logoAssetId: oldState.issuerLogoAssetId,
-            } as unknown as Prisma.InputJsonValue,
+            },
             fawtaraStatus: input.fawtaraStatus,
             fawtaraInvoiceNumber: input.invoiceNumber.trim(),
             fawtaraInvoiceUuid: this.cleanText(input.invoiceUuid),
