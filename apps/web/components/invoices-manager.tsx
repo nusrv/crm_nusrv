@@ -5,9 +5,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
 import type { InvoiceView } from './invoice-types';
 import { Notice } from './notice';
+import { Modal } from './modal';
+import { useControlPanel } from './app-shell';
+import { ManualInvoiceDraftForm } from './manual-invoice-draft-form';
 import { PageHeading } from './page-heading';
 
 export function InvoicesManager() {
+  const { can } = useControlPanel();
+  const [manualOpen, setManualOpen] = useState(false);
   const [result, setResult] = useState<PageResult<InvoiceView> | null>(null);
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
@@ -37,6 +42,25 @@ export function InvoicesManager() {
         description="Manually reviewed renewal, subscription and independent invoice drafts. A CRM draft is not an official JoFotara invoice."
       />
       <Notice message={error} />
+      {can('ADMIN') && (
+        <div className="mt-4">
+          <button type="button" className="button-primary" onClick={() => setManualOpen(true)}>
+            + Create independent invoice draft
+          </button>
+        </div>
+      )}
+      {manualOpen && (
+        <Modal title="New manual / one-time invoice" maxWidth="54rem" onClose={() => setManualOpen(false)}>
+          <ManualInvoiceDraftForm
+            onCancel={() => setManualOpen(false)}
+            onCreated={() => {
+              setManualOpen(false);
+              void load().catch((cause: unknown) =>
+                setError(cause instanceof Error ? cause.message : 'Unable to refresh invoices.'));
+            }}
+          />
+        </Modal>
+      )}
       <div className="filter-bar mt-6">
         <input
           onChange={(event) => setSearch(event.target.value)}
