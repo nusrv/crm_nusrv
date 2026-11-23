@@ -75,8 +75,8 @@ export function ManualInvoiceDraftForm({
       setError('The service period end must be after the start date.');
       return;
     }
-    if (!/^\\d{1,11}(?:\\.\\d{1,3})?$/.test(quantity) ||
-        !/^\\d{1,11}(?:\\.\\d{1,3})?$/.test(unitPrice) ||
+    if (!/^\d{1,11}(?:\.\d{1,3})?$/.test(quantity) ||
+        !/^\d{1,11}(?:\.\d{1,3})?$/.test(unitPrice) ||
         Number(quantity) <= 0) {
       setError('Quantity must be positive. Unit price must be a valid nonnegative three-decimal amount.');
       return;
