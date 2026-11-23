@@ -523,6 +523,19 @@ export class MailOutboundService {
       if (row.resendOfId) {
         await tx.$queryRaw`SELECT id FROM communication_outbox WHERE id = ${row.resendOfId} FOR UPDATE`;
         if (await hasRecordedSmtpAcceptance(tx, 'CommunicationOutbox', row.resendOfId)) {
+          const cancelled = await tx.communicationOutbox.updateMany({
+            where: { id: outboxId, status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: lease },
+            data: { status: CommunicationOutboxStatus.CANCELLED, lastError: 'original_accepted_before_resend_attempt' },
+          });
+          if (cancelled.count === 1) {
+            await this.audit.record({
+              actorType: ActorType.SYSTEM,
+              eventKey: 'mail.outbox.cancelled',
+              subjectType: 'CommunicationOutbox',
+              subjectId: outboxId,
+              metadata: { reason: 'original_accepted_before_resend_attempt', originalOutboxId: row.resendOfId },
+            }, tx);
+          }
           return null;
         }
       }
