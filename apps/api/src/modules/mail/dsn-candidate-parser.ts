@@ -132,16 +132,23 @@ function parseRecipient(fields: Map<string, string[]>): DsnCandidateRecipient | 
 export function parseDsnCandidate(input: DsnMimeReportInput): DsnCandidateParseResult {
   if (typeof input.mailConfigurationId !== 'string' ||
       !input.mailConfigurationId.trim() || input.mailConfigurationId.length > 128 ||
+      /[\u0000-\u001F\u007F]/u.test(input.mailConfigurationId) ||
       typeof input.sourceObjectId !== 'string' ||
-      !input.sourceObjectId.trim() || input.sourceObjectId.length > 256) {
+      !input.sourceObjectId.trim() || input.sourceObjectId.length > 256 ||
+      /[\u0000-\u001F\u007F]/u.test(input.sourceObjectId)) {
     return unusable('MISSING_SOURCE_IDENTITY');
   }
 
-  if (!input.outerContentType ||
+  // The MIME adapter is a runtime trust boundary; never assume its declared
+  // TypeScript field types or sizes are enforced by the remote message.
+  if (typeof input.outerContentType !== 'string' ||
+      input.outerContentType.length > 1024 ||
       !isReportContentType(input.outerContentType)) return { kind: 'NOT_DSN' };
 
-  const partContentType = input.reportPartContentType?.split(';')[0]?.trim().toLowerCase();
-  if (partContentType !== 'message/delivery-status' || !input.reportPartText) {
+  if (typeof input.reportPartContentType !== 'string' ||
+      input.reportPartContentType.length > 256 ||
+      input.reportPartContentType.split(';')[0]?.trim().toLowerCase() !== 'message/delivery-status' ||
+      typeof input.reportPartText !== 'string' || !input.reportPartText) {
     return unusable('MISSING_STRUCTURED_PART');
   }
 
