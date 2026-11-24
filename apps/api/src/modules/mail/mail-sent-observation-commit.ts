@@ -33,8 +33,13 @@ export async function commitSentObservationPreview(
   if (!plan) return { outcome: 'NO_NEW_MESSAGES', inserted: 0 };
 
   return prisma.$transaction(async (tx) => {
-    // Lock by the PK before reading the state. A concurrent copy of this
-    // worker has to observe the winning cursor after acquiring this lock.
+    // Lock the parent mailbox BEFORE the folder checkpoint, consistently for
+    // every Sent observation writer. A concurrent ADMIN mailbox disable must
+    // serialize with this write, not race between reading `enabled` and CAS.
+    // The stored FK/scope are checked below; the passed IDs are not trusted.
+    await tx.$queryRaw`SELECT id FROM mail_configurations WHERE id = ${checkpoint.mailConfigurationId} FOR UPDATE`;
+    // Next lock the folder row. Competing Sent writers then observe the
+    // winning cursor after waiting for this same lock.
     await tx.$queryRaw`SELECT id FROM mail_evidence_folder_checkpoints WHERE id = ${plan.folderCheckpointId} FOR UPDATE`;
     const actual = await tx.mailEvidenceFolderCheckpoint.findUnique({
       where: { id: plan.folderCheckpointId },
