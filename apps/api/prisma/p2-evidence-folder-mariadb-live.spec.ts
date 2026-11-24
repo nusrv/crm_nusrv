@@ -5,6 +5,7 @@ import { PaymentScope } from '../src/generated/prisma/enums';
 import { toMariaDbDriverUrl } from '../src/database/mariadb-url';
 import { mailEvidenceFolderIdentityKey } from '../src/modules/mail/mail-evidence-folder-identity';
 import { computeImapIdentityKey } from '../src/modules/mail/imap-identity.util';
+import { commitSentObservationPreview } from '../src/modules/mail/mail-sent-observation-commit';
 
 // Destructive disposable CI fixture only. Never point at a live/owner database.
 const testUrl = process.env.MARIADB_TEST_DATABASE_URL;
@@ -251,6 +252,127 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
     expect((await prisma.mailEvidenceFolderCheckpoint.findUniqueOrThrow({
       where: { id: checkpoint.id },
     })).lastUid).toBeNull();
+  });
+
+  it('commits a Sent evidence row and new cursor once under two competing transactions', async () => {
+    const folder = 'Atomic sent ledger fixture';
+    const row = await prisma.mailEvidenceFolderCheckpoint.create({
+      data: {
+        mailConfigurationId: configurationId,
+        folderName: folder,
+        folderIdentityKey: mailEvidenceFolderIdentityKey(folder),
+        sourceKind: 'SENT',
+        capability: 'AVAILABLE',
+        syncEnabled: true, // CI-local opt-in; production default remains OFF.
+        uidValidity: 700n,
+        lastUid: 44n,
+      },
+    });
+    const sourceIdentityKey = computeImapIdentityKey({
+      mailConfigurationId: configurationId,
+      canonicalFolder: folder,
+      uidValidity: 700n,
+      uid: 45n,
+    });
+    const checkpoint = {
+      id: row.id,
+      mailConfigurationId: configurationId,
+      folderName: folder,
+      folderIdentityKey: row.folderIdentityKey,
+      sourceKind: 'SENT',
+      capability: 'AVAILABLE',
+      syncEnabled: true,
+      uidValidity: 700n,
+      lastUid: 44n,
+    };
+    const preview = {
+      outcome: 'PREVIEW_ONLY' as const,
+      observations: [{
+        sourceIdentityKey,
+        uid: 45n,
+        internalDate: new Date('2026-11-23T12:00:00.000Z'),
+        messageIdHeader: '<Atomic@Example.test>',
+        parseFailed: false,
+        deliveryStatus: 'UNKNOWN' as const,
+      }],
+      highestObservedUid: 45n,
+    };
+
+    // Both callers begin with the same checkpoint snapshot and same preview.
+    // The winner inserts exactly one observation and advances one new cursor.
+    // The loser must never insert another row or advance the old INBOX cursor.
+    const outcomes = await Promise.allSettled([
+      commitSentObservationPreview(prisma as never, checkpoint, preview),
+      commitSentObservationPreview(prisma as never, checkpoint, preview),
+    ]);
+    expect(outcomes.filter((item) => item.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((item) => item.status === 'rejected')).toHaveLength(1);
+
+    const saved = await prisma.mailSentObservation.findMany({
+      where: { folderCheckpointId: row.id },
+    });
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.sourceIdentityKey).toBe(sourceIdentityKey);
+    expect(saved[0]?.deliveryStatus).toBe('UNKNOWN');
+    expect((await prisma.mailEvidenceFolderCheckpoint.findUniqueOrThrow({
+      where: { id: row.id },
+    })).lastUid).toBe(45n);
+
+    const inbox = await prisma.mailConfiguration.findUniqueOrThrow({ where: { id: configurationId } });
+    expect(inbox.inboundSyncEnabled).toBe(false);
+    expect(inbox.lastSyncUidValidity).toBeNull();
+    expect(inbox.lastSyncUid).toBeNull();
+  });
+
+  it('does not move Sent cursor if an observation insert conflicts with existing evidence', async () => {
+    const folder = 'Sent duplicate evidence fixture';
+    const row = await prisma.mailEvidenceFolderCheckpoint.create({
+      data: {
+        mailConfigurationId: configurationId,
+        folderName: folder,
+        folderIdentityKey: mailEvidenceFolderIdentityKey(folder),
+        sourceKind: 'SENT',
+        capability: 'AVAILABLE',
+        syncEnabled: true,
+        uidValidity: 999n,
+        lastUid: 1n,
+      },
+    });
+    const sourceIdentityKey = computeImapIdentityKey({
+      mailConfigurationId: configurationId,
+      canonicalFolder: folder,
+      uidValidity: 999n,
+      uid: 2n,
+    });
+    await prisma.mailSentObservation.create({
+      data: {
+        folderCheckpointId: row.id,
+        sourceIdentityKey,
+        uidValidity: 999n,
+        uid: 2n,
+      },
+    });
+    const checkpoint = {
+      id: row.id, mailConfigurationId: configurationId,
+      folderName: folder, folderIdentityKey: row.folderIdentityKey,
+      sourceKind: 'SENT', capability: 'AVAILABLE', syncEnabled: true,
+      uidValidity: 999n, lastUid: 1n,
+    };
+    await expect(commitSentObservationPreview(prisma as never, checkpoint, {
+      outcome: 'PREVIEW_ONLY',
+      observations: [{
+        sourceIdentityKey, uid: 2n, internalDate: null,
+        messageIdHeader: '<duplicate@sender.test>', parseFailed: false,
+        deliveryStatus: 'UNKNOWN',
+      }],
+      highestObservedUid: 2n,
+    })).rejects.toThrow();
+    expect((await prisma.mailEvidenceFolderCheckpoint.findUniqueOrThrow({
+      where: { id: row.id },
+    })).lastUid).toBe(1n);
+    expect(await prisma.mailSentObservation.count({
+      where: { folderCheckpointId: row.id },
+    })).toBe(1);
   });
 
   it('preserves an ESTABLISHED legacy INBOX cursor even after creating an unrelated Sent checkpoint', async () => {
