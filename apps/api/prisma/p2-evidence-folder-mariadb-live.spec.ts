@@ -338,6 +338,71 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
     expect(inbox).toEqual(legacyBefore);
   });
 
+  it('does not persist a Sent item or advance its cursor if ADMIN disabled the mailbox', async () => {
+    const folder = 'Disabled parent mailbox guard fixture';
+    const checkpoint = await prisma.mailEvidenceFolderCheckpoint.create({
+      data: {
+        mailConfigurationId: configurationId,
+        folderName: folder,
+        folderIdentityKey: mailEvidenceFolderIdentityKey(folder),
+        sourceKind: 'SENT',
+        syncEnabled: true,
+        capability: 'AVAILABLE',
+        uidValidity: 890n,
+        lastUid: 11n,
+      },
+    });
+    const sourceIdentityKey = computeImapIdentityKey({
+      mailConfigurationId: configurationId,
+      canonicalFolder: folder,
+      uidValidity: 890n,
+      uid: 12n,
+    });
+    const originalMailbox = await prisma.mailConfiguration.findUniqueOrThrow({
+      where: { id: configurationId },
+      select: { enabled: true },
+    });
+    try {
+      await prisma.mailConfiguration.update({
+        where: { id: configurationId },
+        data: { enabled: false },
+      });
+      await expect(commitSentObservationPreview(prisma as never, {
+        id: checkpoint.id,
+        mailConfigurationId: configurationId,
+        folderName: folder,
+        folderIdentityKey: checkpoint.folderIdentityKey,
+        sourceKind: 'SENT',
+        syncEnabled: true,
+        capability: 'AVAILABLE',
+        uidValidity: 890n,
+        lastUid: 11n,
+      }, {
+        outcome: 'PREVIEW_ONLY',
+        observations: [{
+          sourceIdentityKey,
+          uid: 12n,
+          internalDate: null,
+          messageIdHeader: null,
+          parseFailed: false,
+          deliveryStatus: 'UNKNOWN',
+        }],
+        highestObservedUid: 12n,
+      })).rejects.toThrow();
+      expect(await prisma.mailSentObservation.count({
+        where: { folderCheckpointId: checkpoint.id },
+      })).toBe(0);
+      expect((await prisma.mailEvidenceFolderCheckpoint.findUniqueOrThrow({
+        where: { id: checkpoint.id },
+      })).lastUid).toBe(11n);
+    } finally {
+      await prisma.mailConfiguration.update({
+        where: { id: configurationId },
+        data: { enabled: originalMailbox.enabled },
+      });
+    }
+  });
+
   it('does not move Sent cursor if an observation insert conflicts with existing evidence', async () => {
     const folder = 'Sent duplicate evidence fixture';
     const row = await prisma.mailEvidenceFolderCheckpoint.create({
