@@ -184,3 +184,40 @@ A ten-point static source inspection of the exact branch files passed, including
 Before enabling P2.D, obtain current-branch TypeScript/lint/Jest and disposable MariaDB verification for P2.B/C, then add trusted MIME-part extraction in the IMAP/provider adapters, independent source provenance, attempt- and recipient-safe correlation, deduplicated persisted review and Action/Error Queue, and controlled operator resolution. Preserve existing unread/review semantics and prevent any bounce-triggered case transition without separately approved policy.
 
 **State: P2.D parser/triage source added; no live DSN detection, correlation, delivery update or queue activation. P1/P2 release remains blocked.**
+
+## Recovery validation and continuation
+
+The local recovery branch was fast-forwarded from `00700968b84b829d9ef00b86519ae389df97b417` to the latest fetched remote head, `47274dccebf1b19dbb7e499456b6437bcd451e82`. The range contained 184 commits across 68 paths. The tracked worktree and index were clean on entry. The two pre-existing untracked files, `Prepare-NUSRV-Handoff.ps1` and `tatus --short`, were kept outside the change. This section supersedes the older test-status notes above for the recovered code and this continuation.
+
+### Implemented locally
+
+- **P2.C Sent discovery and baseline.** The IMAP adapter uses LIST/XLIST server flags to identify one selectable Sent folder and preserves the exact returned path. Missing capability, name-only guesses, ambiguity and a disabled mailbox leave the source unavailable. The future-only baseline planner requires an explicitly selected exact folder and an inactive, untouched checkpoint for that same mailbox and folder. Its proposal uses the selected mailbox's `UIDNEXT - 1` and its current UIDVALIDITY. Saving that baseline and enabling observation remain separate operations. The proposal neither writes nor resets any checkpoint.
+- **P2.C bounded ordered read.** The Sent preview selects the lowest outstanding UIDs using bounded ESEARCH MIN/COUNT responses within the UID range of the same read-only mailbox selection. It requests the exact selected UIDs, restores ascending order and rejects a partial, substituted or duplicate FETCH result. An unsupported server produces an explicit unavailable outcome. UIDVALIDITY disagreement and invalid UID bounds produce no cursor candidate. The existing INBOX fetch and ingestion contracts are unchanged. Each Sent preview requests at most 50 message sources and can issue up to 50 search round trips. Provider compatibility and timing still need controlled integration evidence.
+- **P2.D follow-up planning.** The pure planner requires agreement between parsed DSN content, an independently authenticated provider report supplied by a future server-side adapter, and the original mailbox, attempt, Message-ID and envelope recipient. Only a matched permanent failure yields a human follow-up plan. A stable key de-duplicates by mailbox, attempt and recipient while each report keeps its own source identity. Missing provenance, inconsistent fields and transient reports stay in review. No provider verifier, persistence, queue entry, customer decision change or resend is executed by this planner.
+- **Common COMPANY template.** The existing shared invoice renderer was retained. Static render regression now checks common document sections, the single issuer tax field, and separate issuer values across NUSRV, Future Foresight and a third company. The existing historical snapshot, independent draft, and receipt rendering cases remain in the local checks. Chrome printed four local synthetic fixtures, including NUSRV, Future Foresight, historical and draft, to valid one-page PDFs using dedicated profiles. Comparison with the approved reference and a print run through the authenticated application remain open. The separate individual visual reference remains required.
+- **Baseline defects.** Replaced four control-character regular expressions with equivalent explicit character classification and corrected three unsafe Jest matchers. The folded DSN fixture contains two recipients, so the regression now checks both. The Windows sandbox failed to resolve the account name required by the installed `tsx` runner; an isolated rerun outside the sandbox with database and browser integration variables cleared passed that wrapper.
+
+### Activation gates
+
+1. Rehearse a fresh and legacy-upgrade migration on verified disposable MariaDB using synthetic data. Exercise both P2 tables, folder-scoped uniqueness, duplicate prevention, transaction rollback, competing workers, disabled mailbox, unchanged INBOX records and P1 financial invariants. Verify backup and restore and capture schema and Prisma mapping evidence. The local Docker named pipe was unavailable, the service was stopped and no installed standalone MariaDB executable or dedicated disposable endpoint was verified. No database was contacted.
+2. Run a controlled provider fixture for Sent discovery, ESEARCH support, sparse or expunged UIDs, epoch changes and elapsed-time bounds. Authorize baseline persistence and activation separately. Verify P0 worker replacement and deployed schema compatibility before enabling the Sent worker.
+3. Build authenticated provider provenance and structured MIME extraction before wiring DSN triage into ingestion. Verify a durable exact attempt and envelope-recipient binding across repeat attempts, then persist independent evidence and de-duplicated follow-up in one transaction. Complete controlled operator resolution and permissions. A Sent copy, unauthenticated DSN, or unresolved report preserves SMTP evidence, the customer decision and Waiting for Customer.
+4. Complete controlled COMPANY visual comparison and an authenticated print run. The separate P0 full-process browser restart gate remains open. Runtime communication, operational database changes and deployment still require separate authorization.
+
+The two GitHub Actions workflows remain manual-only. This continuation leaves P2 Sent polling and DSN processing inactive.
+
+### Executed checks
+
+Validated source commit `2e01c2603fb7bbcb612370f262cb33ea19072d58`.
+
+| Check | Outcome |
+| --- | --- |
+| Dependency install | Lockfile install completed from the existing npm cache with lifecycle scripts disabled. Prisma client generation ran explicitly. |
+| Prisma | Client generation and schema validation passed with an unused loopback connection string. Migration SQL was never applied. |
+| TypeScript, ESLint, Next production build | All passed. |
+| API Jest | 1,389 passed, 139 skipped, 0 failed across 152 executed suites. The skipped set includes environment-dependent database and browser cases. |
+| Focused P2 Jest | 95 passed in eight suites, also covered by the full API run. |
+| Node invariants and migration contracts | All 28 passed, including P2.B and P2.C static migration contracts. |
+| Invoice/receipt rendering | Both synthetic fixture scripts passed. Chrome produced valid, one-page PDFs for four synthetic invoice cases. The dedicated Chrome profiles were removed afterward. |
+| Disposable MariaDB and provider integration | Blocked by the missing verified environments. Fresh and upgrade migrations, Prisma mappings against migrated tables, finance invariants, worker races and backup/restore remain unverified at this source commit. |
+| P0 full-process browser restart | Prior blocked status retained. The synthetic print smoke tests did not exercise authentication or profile persistence. |
