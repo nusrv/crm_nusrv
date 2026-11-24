@@ -38,6 +38,7 @@ export async function commitSentObservationPreview(
     await tx.$queryRaw`SELECT id FROM mail_evidence_folder_checkpoints WHERE id = ${plan.folderCheckpointId} FOR UPDATE`;
     const actual = await tx.mailEvidenceFolderCheckpoint.findUnique({
       where: { id: plan.folderCheckpointId },
+      include: { mailConfiguration: { select: { enabled: true } } },
     });
 
     if (!actual || actual.uidValidity !== plan.expectedUidValidity ||
@@ -45,6 +46,7 @@ export async function commitSentObservationPreview(
         actual.folderName !== checkpoint.folderName ||
         actual.folderIdentityKey !== checkpoint.folderIdentityKey ||
         actual.mailConfigurationId !== checkpoint.mailConfigurationId ||
+        !actual.mailConfiguration.enabled ||
         actual.sourceKind !== 'SENT' || !actual.syncEnabled || actual.capability !== 'AVAILABLE') {
       throw new ConflictException('Sent evidence checkpoint changed or is no longer authorized.');
     }
