@@ -149,3 +149,13 @@ In a *throwaway* MariaDB instance with an explicitly verified local test URL and
 4. Implement trusted DSN/provider/recipient/attempt provenance and operator Action/Error Queue separately under OD-12 and CL-5/6. A Sent copy still never proves message delivery, and no automatic resend or decision transition is authorized.
 
 **Current status: P2.C observation persistence architecture and tests committed, but not compiled, executed, activated or release-approved.**
+
+## P2.C guard hardening — 2026-11-24
+
+Source review uncovered an authorization race in the unregistered `commitSentObservationPreview()` transaction primitive: it locked only the Sent folder checkpoint and checked its parent mailbox `enabled` state without locking the parent. The code now takes a **parent MailConfiguration row lock first**, then the folder checkpoint row lock, reloads the folder with its parent enabled flag, and only then inserts observation metadata and advances the new cursor. This lock order is explicit and asserted by the offline unit harness. A concurrent ADMIN mailbox disable must therefore serialize with the evidence transaction rather than racing the enablement read. Future orchestration and administrative write paths must retain compatible lock order to avoid deadlocks.
+
+The pure `prepareSentObservationWritePlan()` now rejects runtime-invalid MIME metadata even when TypeScript types are bypassed: non-BigInt UIDs, non-boolean parse-failure state, non-string Message-ID, control-character/CRLF/NUL Message-ID headers, and out-of-bounds lengths. Added test cases with **real** escaped CRLF and NUL characters, not literal backslash sequences. These invalid observations cannot be committed as normal metadata.
+
+Added a disposable MariaDB fixture that disables the real parent MailConfiguration before trying to commit a valid Sent preview, asserts **no observation inserted and no cursor movement**, then restores the original configuration value in a `finally` block. It does not start IMAP, SMTP or a worker.
+
+**Verification status:** changes are committed on `work/p1-chatgpt-recovery` but the repository's CI remains manual-only. These tests have **not run** on the current head; typecheck, lint, Prisma generation, P2 Jest, and disposable MariaDB integration still gate release. The feature remains unregistered, unscheduled and unactivated, with no change to `main` or production.
