@@ -122,6 +122,19 @@ describe('P2.D isolated DSN candidate parsing (no provider trust and no side eff
       .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'MISSING_SOURCE_IDENTITY' });
   });
 
+  it('fails safely on malformed runtime MIME fields and control characters in source identifiers', () => {
+    expect(parseDsnCandidate(input({ outerContentType: 123 as never })))
+      .toEqual({ kind: 'NOT_DSN' });
+    expect(parseDsnCandidate(input({ reportPartContentType: {} as never })))
+      .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'MISSING_STRUCTURED_PART' });
+    expect(parseDsnCandidate(input({ reportPartText: 12 as never })))
+      .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'MISSING_STRUCTURED_PART' });
+    expect(parseDsnCandidate(input({ mailConfigurationId: 'mail\\r\\nspoof' })))
+      .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'MISSING_SOURCE_IDENTITY' });
+    expect(parseDsnCandidate(input({ sourceObjectId: 'uid\\u0000spoof' })))
+      .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'MISSING_SOURCE_IDENTITY' });
+  });
+
   it('allows header folding while keeping recipient claims explicitly untrusted', () => {
     const folded = report.replace(
       'Final-Recipient: rfc822;billing@example.test',
