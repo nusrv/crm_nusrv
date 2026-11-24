@@ -70,9 +70,12 @@ export async function commitSentObservationPreview(
       throw new ConflictException('Sent observation source integrity changed.');
     }
 
-    await tx.mailSentObservation.createMany({
+    const inserted = await tx.mailSentObservation.createMany({
       data: verifiedPlan.rows,
     });
+    if (inserted.count !== verifiedPlan.rows.length) {
+      throw new ConflictException('Sent evidence insert count did not match the verified batch.');
+    }
 
     // Compare both epoch + expected previous UID while still holding the
     // row lock. This is for the NEW folder checkpoint, not old INBOX fields.
