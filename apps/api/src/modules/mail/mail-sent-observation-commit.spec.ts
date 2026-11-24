@@ -46,6 +46,7 @@ function harness(options: {
   disabled?: boolean;
   mailboxDisabled?: boolean;
   casCount?: number;
+  insertCount?: number;
   insertFails?: boolean;
 } = {}) {
   const sequence: string[] = [];
@@ -75,7 +76,7 @@ function harness(options: {
       createMany: jest.fn((input: { data: unknown[] }) => {
         sequence.push('insert');
         if (options.insertFails) return Promise.reject(new Error('Unique source identity collision'));
-        return Promise.resolve({ count: input.data.length });
+        return Promise.resolve({ count: options.insertCount ?? input.data.length });
       }),
     },
   };
@@ -127,6 +128,13 @@ describe('P2.C offline atomic Sent evidence commit, no registered worker', () =>
       .rejects.toBeInstanceOf(ConflictException);
     expect(h.sequence).toEqual(['lock', 'find', 'insert', 'cas']);
     // Mock fixtures cannot prove SQL rollback; disposable MariaDB must do that.
+  });
+
+  it('does not advance when the storage adapter inserts fewer observations than expected', async () => {
+    const h = harness({ insertCount: 0 });
+    await expect(commitSentObservationPreview(h.prisma, checkpoint(), preview()))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(h.sequence).toEqual(['lock', 'find', 'insert']);
   });
 
   it('does not advance when a duplicate evidence insert fails', async () => {
