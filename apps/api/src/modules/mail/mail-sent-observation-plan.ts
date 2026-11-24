@@ -95,7 +95,7 @@ export function prepareSentObservationWritePlan(
     if (item.messageIdHeader !== null &&
         (typeof item.messageIdHeader !== 'string' ||
         Array.from(item.messageIdHeader).length > 500 ||
-        /[\\u0000-\\u001F\\u007F]/u.test(item.messageIdHeader))) {
+        /[\u0000-\u001F\u007F]/u.test(item.messageIdHeader))) {
       return fail('malformed or out-of-bounds Message-ID header');
     }
     if (item.internalDate !== null &&
