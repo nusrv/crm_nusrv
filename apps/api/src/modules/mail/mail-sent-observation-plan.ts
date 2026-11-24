@@ -84,10 +84,19 @@ export function prepareSentObservationWritePlan(
   const rows: PlannedSentObservation[] = [];
   let precedingUid = checkpoint.lastUid;
   for (const item of observations) {
-    if (item.uid <= precedingUid || item.uid <= 0n) return fail('UIDs not strictly increasing');
+    // Runtime validation is essential even for an internally typed preview:
+    // MIME/IMAP adapters are data boundaries and malformed values must never
+    // be silently coerced into authoritative persisted evidence.
+    if (typeof item.uid !== 'bigint' || item.uid <= precedingUid || item.uid <= 0n) {
+      return fail('UIDs must be positive and strictly increasing BigInts');
+    }
     if (item.deliveryStatus !== 'UNKNOWN') return fail('observations cannot assert delivery');
-    if (item.messageIdHeader !== null && Array.from(item.messageIdHeader).length > 500) {
-      return fail('message ID header exceeds storage bounds');
+    if (typeof item.parseFailed !== 'boolean') return fail('invalid parse-failure evidence');
+    if (item.messageIdHeader !== null &&
+        (typeof item.messageIdHeader !== 'string' ||
+        Array.from(item.messageIdHeader).length > 500 ||
+        /[\\u0000-\\u001F\\u007F]/u.test(item.messageIdHeader))) {
+      return fail('malformed or out-of-bounds Message-ID header');
     }
     if (item.internalDate !== null &&
         (!(item.internalDate instanceof Date) || !Number.isFinite(item.internalDate.getTime()))) {
