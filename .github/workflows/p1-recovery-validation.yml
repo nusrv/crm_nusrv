@@ -59,6 +59,8 @@ jobs:
             src/modules/mail/active-email-evidence.spec.ts \
             src/modules/mail/mail-evidence-folder-identity.spec.ts \
             src/modules/mail/mail-evidence-sent-preview.spec.ts \
+            src/modules/mail/mail-sent-observation-plan.spec.ts \
+            src/modules/mail/mail-sent-observation-commit.spec.ts \
             src/modules/mail/integration-health.service.spec.ts \
             src/modules/mail/integration-health.controller.spec.ts \
             src/modules/communications/operator-reply.service.spec.ts
@@ -69,6 +71,7 @@ jobs:
           node --import tsx --test \
             apps/api/prisma/p01-additive-migrations.test.mjs \
             apps/api/prisma/p2-folder-evidence-migration.test.mjs \
+            apps/api/prisma/p2-sent-observation-migration.test.mjs \
             apps/api/src/identity/session-policy.test.mjs \
             apps/api/src/modules/mail/smtp-attempt-policy.test.mjs \
             apps/web/lib/api.session.test.mjs
