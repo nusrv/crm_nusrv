@@ -159,3 +159,28 @@ The pure `prepareSentObservationWritePlan()` now rejects runtime-invalid MIME me
 Added a disposable MariaDB fixture that disables the real parent MailConfiguration before trying to commit a valid Sent preview, asserts **no observation inserted and no cursor movement**, then restores the original configuration value in a `finally` block. It does not start IMAP, SMTP or a worker.
 
 **Verification status:** changes are committed on `work/p1-chatgpt-recovery` but the repository's CI remains manual-only. These tests have **not run** on the current head; typecheck, lint, Prisma generation, P2 Jest, and disposable MariaDB integration still gate release. The feature remains unregistered, unscheduled and unactivated, with no change to `main` or production.
+
+## P2.D candidate-DSN review boundary — 2026-11-24
+
+### Confirmed against the controlling roadmap and acceptance criteria
+
+The mandatory P2 Active Email Sync work calls for a DSN/bounce evidence lane **before** ordinary inbound reply/unread processing. A valid-looking MIME report or a `5.x.x` status is still untrusted without an authenticated mailbox/provider source, attempt ID, intended envelope recipient and original Message-ID. A confirmed hard bounce must eventually produce exactly one operator follow-up, preserve prior SMTP acceptance, Waiting for Customer and renewal decision, and never automatically resend. Those trusted correlation, persistence and queue steps remain **unimplemented**.
+
+### Source-only implementation saved on recovery branch
+
+Added `apps/api/src/modules/mail/dsn-candidate-parser.ts` and `dsn-candidate-parser.spec.ts`.
+
+- Pure, bounded RFC 3464-style `multipart/report; report-type=delivery-status` / `message/delivery-status` candidate parser. It does not guess from Subject, From, human-readable message text, or an unauthenticated SMTP response.
+- The parser caps report bytes (64 KiB), lines (256), line length (1024), and recipient records (32). It rejects malformed MIME, duplicates/contradictions, CRLF/NUL corruption, missing source identifiers and bad runtime input types. It records only the claimed recipient, Action, enhanced Status and candidate HARD/SOFT/UNCLASSIFIED category; it does **not** include diagnostic body text or provider credentials.
+- Every parsed report explicitly returns `CANDIDATE_DSN`, `deliveryStatus: UNKNOWN` and `requiresHumanReview: true`. Unusable DSN-shaped reports are marked `UNUSABLE_DSN` for separate review. Neither becomes a confirmed bounce, customer reply, SMTP acceptance, action or state change.
+- Added `selectDsnInboundTriage()` as an **unwired pure contract**: recognized/invalid DSN-shaped reports must be handled in a future DSN human-review lane, not by ordinary customer reply correlation. Normal non-DSN messages remain ordinary inbound.
+- Focused Jest cases cover multiple recipients, duplicate/cross-recipient ambiguity, hard/soft candidate distinctions, malformed statuses, header folding, spoofed freeform content, unbounded payloads, runtime-type tampering, genuine CRLF/NUL source injection, and the no-customer-decision triage rule.
+- Registered the focused spec only in the existing **manual-only** GitHub Actions source workflow. Both project workflows still use `workflow_dispatch` and have no `push` trigger. No Inbox worker, HTTP controller or mail transport imports this helper.
+
+### Verification and remaining gates
+
+A ten-point static source inspection of the exact branch files passed, including bounds, no delivery authority, DSN-before-reply triage contract, explicit test inclusion, and unchanged manual-only workflow triggers. This is **not a runtime test**. The tests were not run, because the connected GitHub workflow dispatch capability is unavailable here and restoring automatic push triggers would violate the owner's instruction. A direct repository checkout is also unavailable from this isolated execution environment.
+
+Before enabling P2.D, obtain current-branch TypeScript/lint/Jest and disposable MariaDB verification for P2.B/C, then add trusted MIME-part extraction in the IMAP/provider adapters, independent source provenance, attempt- and recipient-safe correlation, deduplicated persisted review and Action/Error Queue, and controlled operator resolution. Preserve existing unread/review semantics and prevent any bounce-triggered case transition without separately approved policy.
+
+**State: P2.D parser/triage source added; no live DSN detection, correlation, delivery update or queue activation. P1/P2 release remains blocked.**
