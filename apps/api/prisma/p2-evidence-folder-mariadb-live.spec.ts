@@ -4,6 +4,7 @@ import { PrismaClient } from '../src/generated/prisma/client';
 import { PaymentScope } from '../src/generated/prisma/enums';
 import { toMariaDbDriverUrl } from '../src/database/mariadb-url';
 import { mailEvidenceFolderIdentityKey } from '../src/modules/mail/mail-evidence-folder-identity';
+import { computeImapIdentityKey } from '../src/modules/mail/imap-identity.util';
 
 // Destructive disposable CI fixture only. Never point at a live/owner database.
 const testUrl = process.env.MARIADB_TEST_DATABASE_URL;
@@ -64,6 +65,13 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
   afterAll(async () => {
     if (prisma) {
       if (configurationId) {
+        const checkpoints = await prisma.mailEvidenceFolderCheckpoint.findMany({
+          where: { mailConfigurationId: configurationId },
+          select: { id: true },
+        });
+        await prisma.mailSentObservation.deleteMany({
+          where: { folderCheckpointId: { in: checkpoints.map((item) => item.id) } },
+        });
         await prisma.mailEvidenceFolderCheckpoint.deleteMany({
           where: { mailConfigurationId: configurationId },
         });
@@ -163,6 +171,86 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
     expect(persisted.uidValidity).toBe(100n);
     expect(persisted.lastUid).toBe(43n);
     expect(persisted.syncEnabled).toBe(false);
+  });
+
+  it('stores a distinct Sent observation as UNKNOWN and rejects duplicate source identities', async () => {
+    const name = 'Sent evidence ledger fixture';
+    const checkpoint = await prisma.mailEvidenceFolderCheckpoint.create({
+      data: {
+        mailConfigurationId: configurationId,
+        folderName: name,
+        folderIdentityKey: mailEvidenceFolderIdentityKey(name),
+        sourceKind: 'SENT',
+      },
+    });
+    const sourceIdentityKey = computeImapIdentityKey({
+      mailConfigurationId: configurationId,
+      canonicalFolder: name,
+      uidValidity: 778n,
+      uid: 25n,
+    });
+    const observation = await prisma.mailSentObservation.create({
+      data: {
+        folderCheckpointId: checkpoint.id,
+        sourceIdentityKey,
+        uidValidity: 778n,
+        uid: 25n,
+        messageIdHeader: '<ID@sender.test>',
+        parseFailed: false,
+      },
+    });
+    expect(observation.deliveryStatus).toBe('UNKNOWN');
+    expect(observation.messageIdHeader).toBe('<ID@sender.test>');
+
+    // A different source identity cannot bypass the checkpoint/epoch/UID
+    // uniqueness constraint for the same physical mailbox item.
+    await expect(prisma.mailSentObservation.create({
+      data: {
+        folderCheckpointId: checkpoint.id,
+        sourceIdentityKey: computeImapIdentityKey({
+          mailConfigurationId: 'malformed-different-scope',
+          canonicalFolder: name,
+          uidValidity: 778n,
+          uid: 25n,
+        }),
+        uidValidity: 778n,
+        uid: 25n,
+      },
+    })).rejects.toThrow();
+
+    await expect(prisma.mailSentObservation.create({
+      data: {
+        folderCheckpointId: checkpoint.id,
+        sourceIdentityKey,
+        uidValidity: 778n,
+        uid: 25n,
+      },
+    })).rejects.toThrow();
+
+    // The P2.C ledger is metadata only: even an accidental code path trying
+    // to mark delivery cannot override the database's UNKNOWN-only check.
+    await expect(prisma.mailSentObservation.update({
+      where: { id: observation.id },
+      data: { deliveryStatus: 'DELIVERED' },
+    })).rejects.toThrow();
+    await expect(prisma.mailSentObservation.create({
+      data: {
+        folderCheckpointId: checkpoint.id,
+        sourceIdentityKey: computeImapIdentityKey({
+          mailConfigurationId: configurationId,
+          canonicalFolder: name,
+          uidValidity: 778n,
+          uid: 0n,
+        }),
+        uidValidity: 778n,
+        uid: 0n,
+      },
+    })).rejects.toThrow();
+    expect(await prisma.mailSentObservation.count({ where: { folderCheckpointId: checkpoint.id } }))
+      .toBe(1);
+    expect((await prisma.mailEvidenceFolderCheckpoint.findUniqueOrThrow({
+      where: { id: checkpoint.id },
+    })).lastUid).toBeNull();
   });
 
   it('preserves an ESTABLISHED legacy INBOX cursor even after creating an unrelated Sent checkpoint', async () => {
