@@ -1431,11 +1431,35 @@ model MailEvidenceFolderCheckpoint {
   createdAt           DateTime           @default(now()) @map("created_at")
   updatedAt           DateTime           @updatedAt @map("updated_at")
   mailConfiguration   MailConfiguration  @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict, map: "mail_evidence_folder_checkpoints_configuration_fkey")
+  // P2.C: independent observational metadata; no delivery or customer decision.
+  sentObservations    MailSentObservation[]
 
   @@unique([mailConfigurationId, folderIdentityKey], map: "mail_evidence_folder_checkpoints_config_identity_uq")
   @@index([mailConfigurationId, sourceKind], map: "mail_evidence_folder_checkpoints_config_kind_idx")
   @@index([syncEnabled], map: "mail_evidence_folder_checkpoints_sync_enabled_idx")
   @@map("mail_evidence_folder_checkpoints")
+}
+
+// P2.C Sent-folder evidence is NOT an EmailMessage and does not imply
+// customer delivery or human review. No mail worker or API may use this model
+// before separate P2.C release authorization, migration and concurrency proof.
+// Source identity reuses the frozen IMAP v1 tuple hashing contract.
+model MailSentObservation {
+  id                 String                        @id @default(uuid()) @db.VarChar(36)
+  folderCheckpointId String                        @map("folder_checkpoint_id") @db.VarChar(36)
+  sourceIdentityKey  String                        @unique(map: "mail_sent_observations_source_key_uq") @map("source_identity_key") @db.VarChar(67)
+  uidValidity        BigInt                        @map("uid_validity")
+  uid                BigInt
+  internalDate       DateTime?                     @map("internal_date")
+  messageIdHeader    String?                       @map("message_id_header") @db.VarChar(500)
+  parseFailed        Boolean                       @default(false) @map("parse_failed")
+  deliveryStatus     String                        @default("UNKNOWN") @map("delivery_status") @db.VarChar(24)
+  createdAt          DateTime                      @default(now()) @map("created_at")
+  folderCheckpoint   MailEvidenceFolderCheckpoint  @relation(fields: [folderCheckpointId], references: [id], onDelete: Restrict, map: "mail_sent_observations_checkpoint_fkey")
+
+  @@unique([folderCheckpointId, uidValidity, uid], map: "mail_sent_observations_ckpt_uid_uq")
+  @@index([folderCheckpointId, createdAt], map: "mail_sent_observations_ckpt_created_idx")
+  @@map("mail_sent_observations")
 }
 
 // Immutable event/signal log — NOT the future Phase 6/7 incident/action queue. Recovery is
