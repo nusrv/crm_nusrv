@@ -237,6 +237,12 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
       where: { id: observation.id },
       data: { deliveryStatus: 'DELIVERED' },
     })).rejects.toThrow();
+    // The table uses a case-insensitive default collation, so the CHECK
+    // must force bytewise comparison and reject lowercase "unknown" too.
+    await expect(prisma.mailSentObservation.update({
+      where: { id: observation.id },
+      data: { deliveryStatus: 'unknown' },
+    })).rejects.toThrow();
     await expect(prisma.mailSentObservation.create({
       data: {
         folderCheckpointId: checkpoint.id,
