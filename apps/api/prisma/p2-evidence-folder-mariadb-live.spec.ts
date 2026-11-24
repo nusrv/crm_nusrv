@@ -47,7 +47,10 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
         scopeKey: `BILLING_ENTITY:${issuerId}`,
         label: 'P2 disposal-only mailbox',
         environment: 'SANDBOX',
-        enabled: false,
+        // The disposable mailbox identity is enabled solely to exercise the
+        // explicit persistence primitive; both operational send/sync toggles
+        // stay false and no worker is started.
+        enabled: true,
         smtpHost: 'not-connected.example.test',
         smtpPort: 587,
         smtpUsername: 'p2@example.test',
