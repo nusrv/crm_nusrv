@@ -298,6 +298,10 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
       highestObservedUid: 45n,
     };
 
+    const legacyBefore = await prisma.mailConfiguration.findUniqueOrThrow({
+      where: { id: configurationId },
+      select: { lastSyncUidValidity: true, lastSyncUid: true, inboundSyncEnabled: true },
+    });
     // Both callers begin with the same checkpoint snapshot and same preview.
     // The winner inserts exactly one observation and advances one new cursor.
     // The loser must never insert another row or advance the old INBOX cursor.
@@ -318,10 +322,11 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
       where: { id: row.id },
     })).lastUid).toBe(45n);
 
-    const inbox = await prisma.mailConfiguration.findUniqueOrThrow({ where: { id: configurationId } });
-    expect(inbox.inboundSyncEnabled).toBe(false);
-    expect(inbox.lastSyncUidValidity).toBeNull();
-    expect(inbox.lastSyncUid).toBeNull();
+    const inbox = await prisma.mailConfiguration.findUniqueOrThrow({
+      where: { id: configurationId },
+      select: { lastSyncUidValidity: true, lastSyncUid: true, inboundSyncEnabled: true },
+    });
+    expect(inbox).toEqual(legacyBefore);
   });
 
   it('does not move Sent cursor if an observation insert conflicts with existing evidence', async () => {
