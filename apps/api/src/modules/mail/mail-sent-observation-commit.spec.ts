@@ -44,6 +44,7 @@ function preview(): SentFolderPreview {
 function harness(options: {
   stale?: boolean;
   disabled?: boolean;
+  mailboxDisabled?: boolean;
   casCount?: number;
   insertFails?: boolean;
 } = {}) {
@@ -53,6 +54,7 @@ function harness(options: {
     ...initial,
     lastUid: options.stale ? 201n : 200n,
     syncEnabled: options.disabled ? false : true,
+    mailConfiguration: { enabled: !options.mailboxDisabled },
   };
   const tx = {
     $queryRaw: jest.fn(() => {
@@ -111,7 +113,7 @@ describe('P2.C offline atomic Sent evidence commit, no registered worker', () =>
   });
 
   it('refuses stale or disabled source after locking without inserting or advancing', async () => {
-    for (const options of [{ stale: true }, { disabled: true }]) {
+    for (const options of [{ stale: true }, { disabled: true }, { mailboxDisabled: true }]) {
       const h = harness(options);
       await expect(commitSentObservationPreview(h.prisma, checkpoint(), preview()))
         .rejects.toBeInstanceOf(ConflictException);
