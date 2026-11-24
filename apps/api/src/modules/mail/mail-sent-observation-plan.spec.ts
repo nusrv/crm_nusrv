@@ -113,6 +113,7 @@ describe('P2.C safe observation write plan, not a worker', () => {
     const valid = preview();
     if (valid.outcome !== 'PREVIEW_ONLY') throw new Error('Invalid test fixture');
     const [first, second] = valid.observations;
+    if (!first || !second) throw new Error('Missing preview fixtures');
     const modified = [
       { ...valid, observations: [first, { ...second, uid: 101n }] },
       { ...valid, observations: [second, first] },
