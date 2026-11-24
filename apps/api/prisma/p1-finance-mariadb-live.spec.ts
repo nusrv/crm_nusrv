@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { PrismaMariaDb } from '@prisma/adapter-mariadb';
-import { PrismaClient } from '../src/generated/prisma/client';
+import { ConflictException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { AuditService } from '../src/audit/audit.service';
+import { PrismaService } from '../src/database/prisma.service';
 import { InvoiceStatus, PaymentScope } from '../src/generated/prisma/enums';
-import { toMariaDbDriverUrl } from '../src/database/mariadb-url';
 import { effectiveReceiptAmounts, paymentSummary } from '../src/modules/invoices/payment-money';
 import { isVerifiedOfficialInvoice } from '../src/modules/invoices/official-invoice-eligibility';
+import { RenewalCasesService } from '../src/modules/renewal-cases/renewal-cases.service';
+import { BusinessTimeService } from '../src/time/business-time.service';
 
 const url = process.env.MARIADB_TEST_DATABASE_URL;
 const liveDescribe = url ? describe : describe.skip;
@@ -24,13 +27,14 @@ function requireDisposableUrl(input: string): string {
 }
 
 liveDescribe('P1 actual MariaDB receipt constraints and effective balances (disposable CI)', () => {
-  let prisma: PrismaClient;
+  let prisma: PrismaService;
   let issuerId: string;
   let invoiceId: string;
+  let renewalFixture: { serviceTypeId: string; customerId: string; subscriptionId: string; renewalId: string } | undefined;
 
   beforeAll(async () => {
     const isolated = requireDisposableUrl(url!);
-    prisma = new PrismaClient({ adapter: new PrismaMariaDb(toMariaDbDriverUrl(isolated)) });
+    prisma = new PrismaService(new ConfigService({ DATABASE_URL: isolated }));
     const issuer = await prisma.billingEntity.create({
       data: {
         code: `P1-CI-${randomUUID()}`,
@@ -87,6 +91,16 @@ liveDescribe('P1 actual MariaDB receipt constraints and effective balances (disp
     await prisma.paymentReceipt.deleteMany({ where: { id: { in: receiptIds } } });
     await prisma.payment.deleteMany({ where: { invoiceId } });
     await prisma.invoice.delete({ where: { id: invoiceId } });
+    if (renewalFixture) {
+      const { serviceTypeId, customerId, subscriptionId, renewalId } = renewalFixture;
+      await prisma.$transaction([
+        prisma.renewalCase.deleteMany({ where: { id: renewalId } }),
+        prisma.subscription.deleteMany({ where: { id: subscriptionId } }),
+        prisma.customer.deleteMany({ where: { id: customerId } }),
+        prisma.serviceType.deleteMany({ where: { id: serviceTypeId } }),
+      ]);
+      renewalFixture = undefined;
+    }
   });
 
   afterAll(async () => {
@@ -184,5 +198,66 @@ liveDescribe('P1 actual MariaDB receipt constraints and effective balances (disp
     expect(await prisma.payment.count({ where: { invoiceId } })).toBe(1);
     const entry = await prisma.payment.findUniqueOrThrow({ where: { idempotencyKey: key } });
     expect(entry.amount.toFixed(3)).toBe('40.000');
+  });
+
+  it('fulfills an official unpaid renewal once under two competing requests', async () => {
+    const ids = { serviceTypeId: randomUUID(), customerId: randomUUID(), subscriptionId: randomUUID(), renewalId: randomUUID() };
+    renewalFixture = ids;
+    const periodEnd = new Date('2027-11-22T00:00:00.000Z');
+    const nextRenewal = new Date('2027-11-23T00:00:00.000Z');
+    const settledAt = new Date('2026-11-24T09:00:00.000Z');
+    await prisma.serviceType.create({
+      data: { id: ids.serviceTypeId, code: `CI-${randomUUID().slice(0, 8)}`, name: 'Disposable renewal service' },
+    });
+    await prisma.customer.create({
+      data: {
+        id: ids.customerId, billingEntityId: issuerId, customerCode: `CI-${ids.customerId}`,
+        nameEn: 'Disposable renewal customer', primaryEmail: 'renewal@example.test',
+      },
+    });
+    await prisma.subscription.create({
+      data: {
+        id: ids.subscriptionId, customerId: ids.customerId, serviceTypeId: ids.serviceTypeId,
+        subscriptionCode: `CI-${ids.subscriptionId}`, name: 'Disposable subscription',
+        startDate: new Date('2025-11-23T00:00:00.000Z'), renewalDate: invoiceDate,
+        billingFrequency: 'ANNUAL', sellingPrice: '100.000', currency,
+      },
+    });
+    await prisma.renewalCase.create({
+      data: {
+        id: ids.renewalId, subscriptionId: ids.subscriptionId, cycleStartDate: invoiceDate, dueDate: invoiceDate,
+        status: 'ACCEPTED', customerDecision: 'ACCEPTED', acceptedAt: invoiceDate,
+        proposedPeriodStart: invoiceDate, proposedPeriodEnd: periodEnd, proposedNextRenewalDate: nextRenewal,
+        clarificationPending: true, communicationRevision: 3,
+      },
+    });
+    await prisma.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        customerId: ids.customerId, sourceSubscriptionId: ids.subscriptionId,
+        sourceRenewalCaseId: ids.renewalId, renewalOfficialKey: ids.renewalId,
+      },
+    });
+    const service = new RenewalCasesService(prisma, new AuditService(prisma), { now: () => settledAt },
+      new BusinessTimeService(new ConfigService({ BUSINESS_TIMEZONE: 'Asia/Amman' })));
+    const actors = ['p1-disposable-admin-a', 'p1-disposable-admin-b'];
+    const outcomes = await Promise.allSettled(actors.map((actorId) => service.markFulfilled(ids.renewalId, { actorId })));
+    expect(outcomes.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.find((result) => result.status === 'rejected')?.reason).toBeInstanceOf(ConflictException);
+    expect(await prisma.renewalCase.findUniqueOrThrow({ where: { id: ids.renewalId } })).toMatchObject({
+      status: 'FULFILLED', fulfilledAt: settledAt, clarificationPending: false, communicationRevision: 4,
+    });
+    expect(await prisma.subscription.findUniqueOrThrow({ where: { id: ids.subscriptionId } })).toMatchObject({
+      renewalDate: nextRenewal, currentTermEndDate: periodEnd,
+    });
+    expect(await prisma.payment.count({ where: { invoiceId } })).toBe(0);
+    const events = await prisma.auditEvent.findMany({ where: {
+      subjectType: 'RenewalCase', subjectId: ids.renewalId, eventKey: 'renewal.case.marked_fulfilled',
+    } });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      actorId: actors[outcomes.findIndex((result) => result.status === 'fulfilled')],
+      metadata: { invoiceId, trackingOnly: true },
+    });
   });
 });

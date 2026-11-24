@@ -10,16 +10,16 @@ interface FakeFetchMessage {
   source?: Buffer;
 }
 
-function fakeClient(options: { fetchMessages?: FakeFetchMessage[]; uidValidity?: bigint; uidNext?: number } = {}) {
+function fakeClient(options: { fetchMessages?: FakeFetchMessage[]; uidValidity?: bigint; uidNext?: number; selectedPath?: string } = {}) {
   const connect = jest.fn(() => Promise.resolve());
   const logout = jest.fn(() => Promise.resolve());
   const close = jest.fn();
   const release = jest.fn();
+  const mailbox = { path: '', uidValidity: options.uidValidity ?? 7n, uidNext: options.uidNext ?? 200 };
   const getMailboxLock = jest.fn((path: string) => {
-    void path;
+    mailbox.path = options.selectedPath ?? path;
     return Promise.resolve({ path, release });
   });
-  const mailbox = { uidValidity: options.uidValidity ?? 7n, uidNext: options.uidNext ?? 200 };
   const fetchCalls: unknown[][] = [];
   async function* fetchGenerator() {
     for (const message of options.fetchMessages ?? []) {
@@ -99,6 +99,19 @@ describe('ImapMailboxReader (adapter contract, mocked ImapFlow/mailparser bounda
       mailConfigurationId: 'config-1', folderName: 'Folder/Sent', uidValidity: 7n, uidNext: 200n,
     });
     expect(getMailboxLock).toHaveBeenCalledWith('Folder/Sent', { readOnly: true });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a baseline or evidence when the selected folder differs even with the expected UIDVALIDITY', async () => {
+    const { client, fetch } = fakeClient({ selectedPath: 'Folder/sent' });
+    const list = jest.fn(() => Promise.resolve([{ path: 'Folder/Sent', listed: true, flags: new Set(['\\Sent']) }]));
+    const search = jest.fn();
+    const reader = new ImapMailboxReader(fakeConfig() as never, fakeEncryption() as never);
+    reader.clientFactory = () => ({ ...client, list, search, capabilities: new Map([['ESEARCH', true]]) }) as never;
+
+    expect(await reader.readSentBaselineSource('Folder/Sent')).toBeNull();
+    expect(await reader.fetchSentMessagesSince('Folder/Sent', 7n, 0n, 2)).toEqual({ outcome: 'integrity_error' });
+    expect(search).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
 

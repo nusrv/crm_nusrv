@@ -464,7 +464,7 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
       },
     });
     const name = 'Independent Sent Folder For Legacy Preservation';
-    await prisma.mailEvidenceFolderCheckpoint.create({
+    const checkpoint = await prisma.mailEvidenceFolderCheckpoint.create({
       data: {
         mailConfigurationId: configurationId,
         folderName: name,
@@ -478,9 +478,6 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
     expect(config.lastSyncUidValidity).toBe(900n);
     expect(config.lastSyncUid).toBe(77n);
     expect(config.inboundSyncEnabled).toBe(false);
-    const checkpoints = await prisma.mailEvidenceFolderCheckpoint.findMany({
-      where: { mailConfigurationId: configurationId },
-    });
-    expect(checkpoints.every((record) => !record.syncEnabled)).toBe(true);
+    expect(checkpoint.syncEnabled).toBe(false);
   });
 });

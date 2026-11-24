@@ -121,7 +121,7 @@ export class ImapMailboxReader implements MailboxReader, SentMailboxReader {
     const client = await this.ensureConnected();
     await this.ensureFolderOpen(client, selectedFolder, true);
     const mailbox = client.mailbox;
-    if (!mailbox || !Number.isSafeInteger(mailbox.uidNext) ||
+    if (!mailbox || mailbox.path !== selectedFolder || !Number.isSafeInteger(mailbox.uidNext) ||
         mailbox.uidNext < 1 || mailbox.uidNext > Number(MAX_IMAP_UID) ||
         mailbox.uidValidity < 1n || mailbox.uidValidity > MAX_IMAP_UID) return null;
     return { ...discovery.folder, uidValidity: mailbox.uidValidity, uidNext: BigInt(mailbox.uidNext) };
@@ -144,7 +144,7 @@ export class ImapMailboxReader implements MailboxReader, SentMailboxReader {
     }
     await this.ensureFolderOpen(client, folder, true);
     const mailbox = client.mailbox;
-    if (!mailbox || !Number.isSafeInteger(mailbox.uidNext) ||
+    if (!mailbox || mailbox.path !== folder || !Number.isSafeInteger(mailbox.uidNext) ||
         mailbox.uidNext < 1 || mailbox.uidNext > Number(MAX_IMAP_UID)) return { outcome: 'integrity_error' };
     if (mailbox.uidValidity !== expectedUidValidity) {
       return { outcome: 'uidvalidity_changed', currentUidValidity: mailbox.uidValidity };
@@ -180,7 +180,7 @@ export class ImapMailboxReader implements MailboxReader, SentMailboxReader {
       if (!selected.has(message.uid) || messages.has(message.uid)) return { outcome: 'integrity_error' };
       messages.set(message.uid, await this.parseFetchedMessage(BigInt(message.uid), message));
     }
-    if (messages.size !== selected.size || client.mailbox !== mailbox ||
+    if (messages.size !== selected.size || client.mailbox !== mailbox || mailbox.path !== folder ||
         mailbox.uidValidity !== expectedUidValidity) return { outcome: 'integrity_error' };
     return { outcome: 'ok', messages: [...selected].map((uid) => messages.get(uid)!) };
   }

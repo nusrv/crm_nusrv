@@ -1,7 +1,9 @@
 import { parseDsnCandidate } from './dsn-candidate-parser';
-import { planDsnFollowUp, type VerifiedDsnProvenance } from './dsn-follow-up-plan';
+import { planDsnFollowUp, type OutboundDsnSubject, type VerifiedDsnProvenance } from './dsn-follow-up-plan';
 
+const subject: OutboundDsnSubject = { type: 'CommunicationOutbox', id: 'outbox-1' };
 const original = {
+  subject,
   mailConfigurationId: 'mailbox-1',
   messageId: '<Original@crm.example.test>',
   intendedRecipient: 'billing@example.test',
@@ -9,6 +11,7 @@ const original = {
 };
 
 const provenance: VerifiedDsnProvenance = {
+  subject,
   mailConfigurationId: original.mailConfigurationId,
   sourceObjectId: 'report-1',
   folder: 'INBOX',
@@ -46,7 +49,8 @@ describe('DSN human follow-up plan', () => {
     { enhancedStatus: '5.0.0' },
     { folder: '' },
     { folder: 'INBOX\r\n' },
-  ])('requires consistent, exact source and attempt evidence (%j)', (overrides) => {
+    { subject: { type: 'CommunicationOutbox', id: 'other-outbox' } },
+  ] satisfies Partial<VerifiedDsnProvenance>[])('requires consistent, exact source and attempt evidence (%j)', (overrides) => {
     expect(planDsnFollowUp(candidate(), original, { ...provenance, ...overrides })).toEqual({
       outcome: 'REVIEW_ONLY', reason: 'IDENTITY_MISMATCH',
     });
@@ -68,6 +72,7 @@ describe('DSN human follow-up plan', () => {
         next.outcome !== 'PLAN_HUMAN_FOLLOW_UP') throw new Error('Missing follow-up plans');
     expect(first).toEqual({
       outcome: 'PLAN_HUMAN_FOLLOW_UP', deduplicationKey: first.deduplicationKey,
+      subject,
       mailConfigurationId: original.mailConfigurationId, attemptId: original.attemptId, sourceObjectId: 'report-1',
     });
     expect(repeated.deduplicationKey).toBe(first.deduplicationKey);
