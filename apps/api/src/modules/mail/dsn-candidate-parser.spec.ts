@@ -153,9 +153,9 @@ describe('P2.D isolated DSN candidate parsing (no provider trust and no side eff
       .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'MISSING_STRUCTURED_PART' });
     expect(parseDsnCandidate(input({ reportPartText: 12 as never })))
       .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'MISSING_STRUCTURED_PART' });
-    expect(parseDsnCandidate(input({ mailConfigurationId: 'mail\\r\\nspoof' })))
+    expect(parseDsnCandidate(input({ mailConfigurationId: 'mail\r\nspoof' })))
       .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'MISSING_SOURCE_IDENTITY' });
-    expect(parseDsnCandidate(input({ sourceObjectId: 'uid\\u0000spoof' })))
+    expect(parseDsnCandidate(input({ sourceObjectId: 'uid\u0000spoof' })))
       .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'MISSING_SOURCE_IDENTITY' });
   });
 
