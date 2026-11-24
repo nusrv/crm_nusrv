@@ -29,7 +29,7 @@ test('P2.C evidence storage has no body, recipients, credentials, delivery asser
   assert.match(schema, /sentObservations\s+MailSentObservation\[\]/);
   assert.match(schema, /@@map\("mail_sent_observations"\)/);
   assert.match(migration, /\`delivery_status\` VARCHAR\(24\) NOT NULL DEFAULT 'UNKNOWN'/);
-  assert.match(migration, /CHECK \(\`delivery_status\` = 'UNKNOWN'\)/);
+  assert.match(migration, /CHECK \(BINARY \`delivery_status\` = BINARY 'UNKNOWN'\)/);
   assert.match(migration, /CHECK \(\`uid_validity\` > 0 AND \`uid\` > 0\)/);
   assert.doesNotMatch(migration, /\`(?:body_text|body_html|to_addresses_json|envelope_recipient|password|credentials_ciphertext|sync_enabled)\`/);
   assert.doesNotMatch(migration, /(?:INSERT INTO|ALTER TABLE) \`email_messages\`/);
