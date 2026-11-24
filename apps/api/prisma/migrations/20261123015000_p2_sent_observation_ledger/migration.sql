@@ -18,6 +18,8 @@ CREATE TABLE `mail_sent_observations` (
     UNIQUE INDEX `mail_sent_observations_source_key_uq`(`source_identity_key`),
     UNIQUE INDEX `mail_sent_observations_ckpt_uid_uq`(`folder_checkpoint_id`, `uid_validity`, `uid`),
     INDEX `mail_sent_observations_ckpt_created_idx`(`folder_checkpoint_id`, `created_at`),
+    CONSTRAINT `mail_sent_observations_unknown_delivery_ck` CHECK (`delivery_status` = 'UNKNOWN'),
+    CONSTRAINT `mail_sent_observations_positive_uid_ck` CHECK (`uid_validity` > 0 AND `uid` > 0),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
