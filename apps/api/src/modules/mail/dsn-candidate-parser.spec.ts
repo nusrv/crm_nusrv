@@ -1,4 +1,4 @@
-import { parseDsnCandidate, type DsnMimeReportInput } from './dsn-candidate-parser';
+import { parseDsnCandidate, selectDsnInboundTriage, type DsnMimeReportInput } from './dsn-candidate-parser';
 
 const report = [
   'Reporting-MTA: dns; mx.test.example',
@@ -120,6 +120,30 @@ describe('P2.D isolated DSN candidate parsing (no provider trust and no side eff
       .toEqual({ kind: 'UNUSABLE_DSN', problem: 'MISSING_SOURCE_IDENTITY', deliveryStatus: 'UNKNOWN' });
     expect(parseDsnCandidate(input({ sourceObjectId: ' ' })))
       .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'MISSING_SOURCE_IDENTITY' });
+  });
+
+  it('routes every DSN-shaped result to human review, never ordinary customer reply correlation', () => {
+    const candidate = parseDsnCandidate(input());
+    expect(selectDsnInboundTriage(candidate)).toEqual({
+      lane: 'DSN_HUMAN_REVIEW',
+      mayUseCustomerReplyCorrelation: false,
+      deliveryStatus: 'UNKNOWN',
+      evidenceKind: 'CANDIDATE_DSN',
+    });
+    const malformed = parseDsnCandidate(input({
+      reportPartText: report.replace('Status: 5.1.1', 'Status: not-a-status'),
+    }));
+    expect(selectDsnInboundTriage(malformed)).toEqual({
+      lane: 'DSN_HUMAN_REVIEW',
+      mayUseCustomerReplyCorrelation: false,
+      deliveryStatus: 'UNKNOWN',
+      evidenceKind: 'UNUSABLE_DSN',
+    });
+    const normal = parseDsnCandidate(input({ outerContentType: 'text/plain' }));
+    expect(selectDsnInboundTriage(normal)).toEqual({
+      lane: 'ORDINARY_INBOUND',
+      mayUseCustomerReplyCorrelation: true,
+    });
   });
 
   it('fails safely on malformed runtime MIME fields and control characters in source identifiers', () => {
