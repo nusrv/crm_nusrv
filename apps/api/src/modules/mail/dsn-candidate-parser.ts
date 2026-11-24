@@ -194,3 +194,30 @@ export function parseDsnCandidate(input: DsnMimeReportInput): DsnCandidateParseR
     requiresHumanReview: true,
   };
 }
+
+/**
+ * Future inbound pipeline routing contract. DSN-shaped and malformed-report
+ * messages require specialist human review, never ordinary customer-reply
+ * correlation or unread/decision updates. This pure function does NOT wire
+ * the policy into the currently running INBOX worker.
+ */
+export type DsnInboundTriage =
+  | { lane: 'ORDINARY_INBOUND'; mayUseCustomerReplyCorrelation: true }
+  | {
+    lane: 'DSN_HUMAN_REVIEW';
+    mayUseCustomerReplyCorrelation: false;
+    deliveryStatus: 'UNKNOWN';
+    evidenceKind: 'CANDIDATE_DSN' | 'UNUSABLE_DSN';
+  };
+
+export function selectDsnInboundTriage(result: DsnCandidateParseResult): DsnInboundTriage {
+  if (result.kind === 'NOT_DSN') {
+    return { lane: 'ORDINARY_INBOUND', mayUseCustomerReplyCorrelation: true };
+  }
+  return {
+    lane: 'DSN_HUMAN_REVIEW',
+    mayUseCustomerReplyCorrelation: false,
+    deliveryStatus: 'UNKNOWN',
+    evidenceKind: result.kind,
+  };
+}
