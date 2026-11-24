@@ -75,7 +75,8 @@ function harness(options: {
         sequence.push('find');
         return Promise.resolve(locked);
       }),
-      updateMany: jest.fn(() => {
+      updateMany: jest.fn((input: { where: unknown; data: { lastObservedAt: Date; lastUid: bigint } }) => {
+        void input;
         sequence.push('cas');
         return Promise.resolve({ count: options.casCount ?? 1 });
       }),
@@ -100,25 +101,23 @@ describe('P2.C offline atomic Sent evidence commit, no registered worker', () =>
     const result = await commitSentObservationPreview(h.prisma, checkpoint(), preview());
     expect(result).toEqual({ outcome: 'COMMITTED', inserted: 1, lastUid: 201n });
     expect(h.sequence).toEqual(['lock-mailbox', 'lock-folder', 'find', 'insert', 'cas']);
-    expect(h.tx.mailSentObservation.createMany).toHaveBeenCalledWith({
-      data: [{
+    expect(h.tx.mailSentObservation.createMany.mock.calls[0]?.[0].data).toEqual([{
         folderCheckpointId: 'sent-checkpoint-1',
-        sourceIdentityKey: expect.any(String),
+        sourceIdentityKey: preview().observations[0]?.sourceIdentityKey,
         uidValidity: 100n,
         uid: 201n,
         internalDate: new Date('2026-11-23T15:00:00.000Z'),
         messageIdHeader: '<source@Test.example>',
         parseFailed: false,
         deliveryStatus: 'UNKNOWN',
-      }],
+      }]);
+    const update = h.tx.mailEvidenceFolderCheckpoint.updateMany.mock.calls[0]?.[0];
+    expect(update?.where).toMatchObject({
+      id: 'sent-checkpoint-1', uidValidity: 100n, lastUid: 200n,
+      syncEnabled: true, capability: 'AVAILABLE', sourceKind: 'SENT',
     });
-    expect(h.tx.mailEvidenceFolderCheckpoint.updateMany).toHaveBeenCalledWith({
-      where: expect.objectContaining({
-        id: 'sent-checkpoint-1', uidValidity: 100n, lastUid: 200n,
-        syncEnabled: true, capability: 'AVAILABLE', sourceKind: 'SENT',
-      }),
-      data: { lastUid: 201n, lastObservedAt: expect.any(Date) },
-    });
+    expect(update?.data.lastUid).toBe(201n);
+    expect(update?.data.lastObservedAt).toBeInstanceOf(Date);
   });
 
   it('refuses stale or disabled source after locking without inserting or advancing', async () => {

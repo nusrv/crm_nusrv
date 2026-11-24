@@ -1,4 +1,6 @@
 import { computeImapIdentityKey } from './imap-identity.util';
+import { hasAsciiControl } from './mail-evidence-text';
+import { MAX_IMAP_UID } from './mailbox-reader';
 import { classifyFolderCursor, mailEvidenceFolderIdentityKey } from './mail-evidence-folder-identity';
 import {
   SENT_PREVIEW_MAX_MESSAGES,
@@ -68,8 +70,8 @@ export function prepareSentObservationWritePlan(
     return fail('folder identity does not match its checkpoint');
   }
   if (classifyFolderCursor(checkpoint) !== 'ESTABLISHED' ||
-      checkpoint.uidValidity === null || checkpoint.uidValidity <= 0n ||
-      checkpoint.lastUid === null || checkpoint.lastUid < 0n) {
+      checkpoint.uidValidity === null || checkpoint.uidValidity <= 0n || checkpoint.uidValidity > MAX_IMAP_UID ||
+      checkpoint.lastUid === null || checkpoint.lastUid < 0n || checkpoint.lastUid > MAX_IMAP_UID) {
     return fail('missing or invalid established cursor');
   }
   if (preview.outcome !== 'PREVIEW_ONLY') return fail('not a successful observation preview');
@@ -87,15 +89,15 @@ export function prepareSentObservationWritePlan(
     // Runtime validation is essential even for an internally typed preview:
     // MIME/IMAP adapters are data boundaries and malformed values must never
     // be silently coerced into authoritative persisted evidence.
-    if (typeof item.uid !== 'bigint' || item.uid <= precedingUid || item.uid <= 0n) {
-      return fail('UIDs must be positive and strictly increasing BigInts');
+    if (typeof item.uid !== 'bigint' || item.uid <= precedingUid || item.uid > MAX_IMAP_UID) {
+      return fail('UIDs must be strictly increasing IMAP UID BigInts');
     }
     if (item.deliveryStatus !== 'UNKNOWN') return fail('observations cannot assert delivery');
     if (typeof item.parseFailed !== 'boolean') return fail('invalid parse-failure evidence');
     if (item.messageIdHeader !== null &&
         (typeof item.messageIdHeader !== 'string' ||
         Array.from(item.messageIdHeader).length > 500 ||
-        /[\u0000-\u001F\u007F]/u.test(item.messageIdHeader))) {
+        hasAsciiControl(item.messageIdHeader))) {
       return fail('malformed or out-of-bounds Message-ID header');
     }
     if (item.internalDate !== null &&

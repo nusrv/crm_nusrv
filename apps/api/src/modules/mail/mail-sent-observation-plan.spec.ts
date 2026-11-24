@@ -103,7 +103,9 @@ describe('P2.C safe observation write plan, not a worker', () => {
       { uidValidity: 15n, lastUid: null },
       { uidValidity: null, lastUid: 100n },
       { uidValidity: 0n },
+      { uidValidity: 4_294_967_296n },
       { lastUid: -1n },
+      { lastUid: 4_294_967_296n },
     ]) {
       expect(() => prepareSentObservationWritePlan({ ...current(), ...changed }, preview())).toThrow();
     }
@@ -127,6 +129,7 @@ describe('P2.C safe observation write plan, not a worker', () => {
       { ...valid, observations: [{ ...first, messageIdHeader: 23 as never }, second] },
       { ...valid, observations: [{ ...first, parseFailed: 'false' as never }, second] },
       { ...valid, observations: [{ ...first, uid: 101 as never }, second] },
+      { ...valid, observations: [first, { ...second, uid: 4_294_967_296n }] },
       { ...valid, observations: [{ ...first, internalDate: new Date(NaN) }, second] },
     ];
     for (const input of modified) {

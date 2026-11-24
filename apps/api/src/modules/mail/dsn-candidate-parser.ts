@@ -1,3 +1,5 @@
+import { hasAsciiControl } from './mail-evidence-text';
+
 /**
  * P2.D, source-only. Parse an RFC 3464-style message/delivery-status part as
  * UNTRUSTED candidate evidence for later operator review.
@@ -132,10 +134,10 @@ function parseRecipient(fields: Map<string, string[]>): DsnCandidateRecipient | 
 export function parseDsnCandidate(input: DsnMimeReportInput): DsnCandidateParseResult {
   if (typeof input.mailConfigurationId !== 'string' ||
       !input.mailConfigurationId.trim() || input.mailConfigurationId.length > 128 ||
-      /[\u0000-\u001F\u007F]/u.test(input.mailConfigurationId) ||
+      hasAsciiControl(input.mailConfigurationId) ||
       typeof input.sourceObjectId !== 'string' ||
       !input.sourceObjectId.trim() || input.sourceObjectId.length > 256 ||
-      /[\u0000-\u001F\u007F]/u.test(input.sourceObjectId)) {
+      hasAsciiControl(input.sourceObjectId)) {
     return unusable('MISSING_SOURCE_IDENTITY');
   }
 
@@ -160,7 +162,7 @@ export function parseDsnCandidate(input: DsnMimeReportInput): DsnCandidateParseR
   const lines = normalized.split('\n');
   if (lines.length > MAX_DSN_LINES ||
       lines.some((line) => line.length > MAX_DSN_LINE_CHARS ||
-        /[\u0000-\u0008\u000B-\u001F\u007F]/u.test(line))) {
+        hasAsciiControl(line, true))) {
     return unusable('BOUNDS_EXCEEDED');
   }
 

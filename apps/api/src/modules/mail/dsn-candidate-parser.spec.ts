@@ -167,9 +167,10 @@ describe('P2.D isolated DSN candidate parsing (no provider trust and no side eff
     const parsed = parseDsnCandidate(input({ reportPartText: folded }));
     expect(parsed).toMatchObject({
       kind: 'CANDIDATE_DSN',
-      recipients: [expect.objectContaining({
-        claimedFinalRecipient: 'billing@example.test',
-      })],
+      recipients: [
+        { claimedFinalRecipient: 'billing@example.test' },
+        { claimedFinalRecipient: 'other@example.test', disposition: 'SOFT' },
+      ],
       requiresHumanReview: true,
       deliveryStatus: 'UNKNOWN',
     });

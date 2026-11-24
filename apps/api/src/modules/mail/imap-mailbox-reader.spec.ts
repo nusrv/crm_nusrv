@@ -43,6 +43,7 @@ function fakeEncryption(password = REAL_PASSWORD) {
 function fakeConfig(overrides: Record<string, unknown> = {}) {
   return {
     id: 'config-1',
+    enabled: true,
     imapHost: 'imap.example.test',
     imapPort: 993,
     imapUsername: 'user@example.test',
@@ -63,6 +64,99 @@ function expectOk(result: { outcome: string; messages?: unknown }) {
 }
 
 describe('ImapMailboxReader (adapter contract, mocked ImapFlow/mailparser boundary)', () => {
+  it('refuses Sent discovery for a disabled mailbox before opening a connection', async () => {
+    const reader = new ImapMailboxReader(fakeConfig({ enabled: false }) as never, fakeEncryption() as never);
+    const connect = jest.fn(() => { throw new Error('unexpected connection'); });
+    reader.clientFactory = connect;
+    expect(await reader.discoverSentFolder()).toEqual({ outcome: 'NOT_ENABLED' });
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('probes server Sent flags through LIST without selecting or fetching a folder', async () => {
+    const { client, fetch, getMailboxLock } = fakeClient();
+    const list = jest.fn(() => Promise.resolve([{ path: 'Outbox/Sent copies', listed: true, flags: new Set(['\\Sent']) }]));
+    const reader = new ImapMailboxReader(fakeConfig() as never, fakeEncryption() as never);
+    reader.clientFactory = () => ({ ...client, list }) as never;
+
+    expect(await reader.discoverSentFolder()).toMatchObject({
+      outcome: 'AVAILABLE', folder: { mailConfigurationId: 'config-1', folderName: 'Outbox/Sent copies' },
+    });
+    expect(list).toHaveBeenCalledWith({ listOnly: true });
+    expect(getMailboxLock).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    await reader.close();
+  });
+
+  it('binds baseline state to a fresh discovery and a read-only selection of the requested folder', async () => {
+    const { client, getMailboxLock, fetch } = fakeClient();
+    const list = jest.fn(() => Promise.resolve([{ path: 'Folder/Sent', listed: true, flags: new Set(['\\Sent']) }]));
+    const reader = new ImapMailboxReader(fakeConfig() as never, fakeEncryption() as never);
+    reader.clientFactory = () => ({ ...client, list }) as never;
+
+    expect(await reader.readSentBaselineSource('folder/sent')).toBeNull();
+    expect(getMailboxLock).not.toHaveBeenCalled();
+    expect(await reader.readSentBaselineSource('Folder/Sent')).toMatchObject({
+      mailConfigurationId: 'config-1', folderName: 'Folder/Sent', uidValidity: 7n, uidNext: 200n,
+    });
+    expect(getMailboxLock).toHaveBeenCalledWith('Folder/Sent', { readOnly: true });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('selects the lowest Sent UIDs before fetching and accepts an out-of-order exact result', async () => {
+    const { client, fetchCalls, getMailboxLock } = fakeClient({
+      uidNext: 500, fetchMessages: [{ uid: 350 }, { uid: 20 }],
+    });
+    const search = jest.fn<() => Promise<{ count: number; min: number }>>()
+      .mockResolvedValueOnce({ count: 3, min: 20 })
+      .mockResolvedValueOnce({ count: 2, min: 350 });
+    const reader = new ImapMailboxReader(fakeConfig() as never, fakeEncryption() as never);
+    reader.clientFactory = () => ({ ...client, capabilities: new Map([['ESEARCH', true]]), search }) as never;
+
+    expect(expectOk(await reader.fetchSentMessagesSince('Sent Items', 7n, 10n, 2)).map((row) => row.uid))
+      .toEqual([20n, 350n]);
+    expect(getMailboxLock).toHaveBeenCalledWith('Sent Items', { readOnly: true });
+    expect(search).toHaveBeenNthCalledWith(1, { uid: '11:499' }, { uid: true, returnOptions: ['MIN', 'COUNT'] });
+    expect(search).toHaveBeenNthCalledWith(2, { uid: '21:499' }, { uid: true, returnOptions: ['MIN', 'COUNT'] });
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(fetchCalls[0]?.[0]).toBe('20,350');
+  });
+
+  it('does not fetch a Sent message without a bounded search capability or with a stale epoch', async () => {
+    const { client, fetch, getMailboxLock } = fakeClient();
+    const search = jest.fn();
+    const capabilities = new Map<string, boolean>();
+    const reader = new ImapMailboxReader(fakeConfig() as never, fakeEncryption() as never);
+    reader.clientFactory = () => ({ ...client, capabilities, search }) as never;
+
+    expect(await reader.fetchSentMessagesSince('Sent', 7n, 5n, 10)).toEqual({ outcome: 'bounded_search_unavailable' });
+    expect(getMailboxLock).not.toHaveBeenCalled();
+    capabilities.set('ESEARCH', true);
+    expect(await reader.fetchSentMessagesSince('Sent', 8n, 5n, 10))
+      .toEqual({ outcome: 'uidvalidity_changed', currentUidValidity: 7n });
+    expect(search).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([[[]], [[{ uid: 60 }]], [[{ uid: 20 }, { uid: 20 }]]])(
+    'discards the whole Sent result when FETCH omits, substitutes or duplicates a selected UID (%j)',
+    async (fetchMessages) => {
+      const { client } = fakeClient({ fetchMessages });
+      const reader = new ImapMailboxReader(fakeConfig() as never, fakeEncryption() as never);
+      const search = jest.fn(() => Promise.resolve({ count: 1, min: 20 }));
+      reader.clientFactory = () => ({ ...client, capabilities: new Map([['ESEARCH', true]]), search }) as never;
+      expect(await reader.fetchSentMessagesSince('Sent', 7n, 10n, 2)).toEqual({ outcome: 'integrity_error' });
+    },
+  );
+
+  it('refuses a legacy unbounded search result even if the server advertised ESEARCH', async () => {
+    const { client, fetch } = fakeClient();
+    const reader = new ImapMailboxReader(fakeConfig() as never, fakeEncryption() as never);
+    const search = jest.fn(() => Promise.resolve([20, 25]));
+    reader.clientFactory = () => ({ ...client, capabilities: new Map([['ESEARCH', true]]), search }) as never;
+    expect(await reader.fetchSentMessagesSince('Sent', 7n, 10n, 2)).toEqual({ outcome: 'integrity_error' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('never decrypts credentials until a real connection is actually opened', () => {
     const encryption = fakeEncryption();
     new ImapMailboxReader(fakeConfig() as never, encryption as never);

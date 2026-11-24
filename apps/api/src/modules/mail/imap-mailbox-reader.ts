@@ -12,8 +12,15 @@ import {
   IMAP_SOCKET_TIMEOUT_MS,
   MAX_INBOUND_MESSAGE_BYTES,
 } from './imap-timing.constants';
-import type { FetchSinceResult, FetchedMailboxMessage, MailboxReader, MailboxSyncState } from './mailbox-reader';
+import {
+  MAX_IMAP_UID, MAX_SENT_OBSERVATIONS,
+  type FetchSentSinceResult, type FetchSinceResult, type FetchedMailboxMessage, type MailboxReader,
+  type MailboxSyncState, type SentMailboxReader,
+} from './mailbox-reader';
 import type { SecretEncryptionService } from '../../security/secret-encryption.service';
+import {
+  discoverProviderSentFolder, type SentBaselineSource, type SentFolderDiscovery,
+} from './mail-sent-folder-discovery';
 
 function headerString(value: HeaderValue | undefined): string | undefined {
   if (typeof value === 'string') return value;
@@ -66,10 +73,11 @@ const EMPTY_MESSAGE: Omit<FetchedMailboxMessage, 'uid' | 'internalDate'> = {
  * BASIC-configured MailConfiguration keeps behaving exactly as before this feature was added; all
  * UIDVALIDITY/cursor/bounded-fetch/MIME-parsing behavior above is unaffected by auth mode.
  */
-export class ImapMailboxReader implements MailboxReader {
+export class ImapMailboxReader implements MailboxReader, SentMailboxReader {
   private client: ImapFlow | undefined;
   private lock: MailboxLockObject | undefined;
   private openedFolder: string | undefined;
+  private openedReadOnly = false;
 
   /** Test seams only — default to the real ImapFlow/mailparser entry points in production.
    * Overriding these lets adapter-contract tests substitute fakes without module-level mocking,
@@ -97,6 +105,84 @@ export class ImapMailboxReader implements MailboxReader {
       throw new Error('ImapMailboxReader: mailbox is not open after acquiring its lock.');
     }
     return { uidValidity: mailbox.uidValidity, uidNext: BigInt(mailbox.uidNext) };
+  }
+
+  /** Standalone provider capability probe. Existing INBOX ingestion never calls it. */
+  async discoverSentFolder(): Promise<SentFolderDiscovery> {
+    if (!this.config.enabled) return { outcome: 'NOT_ENABLED' };
+    const client = await this.ensureConnected();
+    return discoverProviderSentFolder(this.config.id, await client.list({ listOnly: true }));
+  }
+
+  /** Read baseline state from the same server-confirmed folder and mailbox as its identity. */
+  async readSentBaselineSource(selectedFolder: string): Promise<SentBaselineSource | null> {
+    const discovery = await this.discoverSentFolder();
+    if (discovery.outcome !== 'AVAILABLE' || discovery.folder.folderName !== selectedFolder) return null;
+    const client = await this.ensureConnected();
+    await this.ensureFolderOpen(client, selectedFolder, true);
+    const mailbox = client.mailbox;
+    if (!mailbox || !Number.isSafeInteger(mailbox.uidNext) ||
+        mailbox.uidNext < 1 || mailbox.uidNext > Number(MAX_IMAP_UID) ||
+        mailbox.uidValidity < 1n || mailbox.uidValidity > MAX_IMAP_UID) return null;
+    return { ...discovery.folder, uidValidity: mailbox.uidValidity, uidNext: BigInt(mailbox.uidNext) };
+  }
+
+  /** Keep Sent cursor candidates independent of the order in which FETCH responses arrive. */
+  async fetchSentMessagesSince(
+    folder: string, expectedUidValidity: bigint, afterUid: bigint, limit: number,
+  ): Promise<FetchSentSinceResult> {
+    if (!this.config.enabled || !folder.trim() || folder.toUpperCase() === 'INBOX' ||
+        expectedUidValidity < 1n || expectedUidValidity > MAX_IMAP_UID || afterUid < 0n ||
+        afterUid > MAX_IMAP_UID || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_SENT_OBSERVATIONS) {
+      return { outcome: 'integrity_error' };
+    }
+    const client = await this.ensureConnected();
+    const rev2Active = client.enabled?.has('IMAP4REV2') ||
+      (client.capabilities.has('IMAP4rev2') && !client.capabilities.has('IMAP4rev1'));
+    if (!client.capabilities.has('ESEARCH') && !rev2Active) {
+      return { outcome: 'bounded_search_unavailable' };
+    }
+    await this.ensureFolderOpen(client, folder, true);
+    const mailbox = client.mailbox;
+    if (!mailbox || !Number.isSafeInteger(mailbox.uidNext) ||
+        mailbox.uidNext < 1 || mailbox.uidNext > Number(MAX_IMAP_UID)) return { outcome: 'integrity_error' };
+    if (mailbox.uidValidity !== expectedUidValidity) {
+      return { outcome: 'uidvalidity_changed', currentUidValidity: mailbox.uidValidity };
+    }
+
+    const upperUid = mailbox.uidNext - 1;
+    if (afterUid > BigInt(upperUid)) return { outcome: 'integrity_error' };
+    let lowUid = Number(afterUid) + 1;
+    const selected = new Set<number>();
+    while (selected.size < limit && lowUid <= upperUid) {
+      const search = await client.search({ uid: `${lowUid}:${upperUid}` }, {
+        uid: true, returnOptions: ['MIN', 'COUNT'],
+      });
+      if (!search || Array.isArray(search) || search.count === undefined ||
+          !Number.isSafeInteger(search.count) || search.count < 0 || search.count > upperUid - lowUid + 1) {
+        return { outcome: 'integrity_error' };
+      }
+      if (search.count === 0 && search.min === undefined) break;
+      if (search.count === 0 || search.min === undefined || !Number.isSafeInteger(search.min) ||
+          search.min < lowUid || search.min > upperUid) return { outcome: 'integrity_error' };
+      selected.add(search.min);
+      lowUid = search.min + 1;
+      if (search.count === 1) break;
+    }
+    if (!selected.size) return { outcome: 'ok', messages: [] };
+
+    const messages = new Map<number, FetchedMailboxMessage>();
+    for await (const message of client.fetch(
+      [...selected].join(','),
+      { uid: true, internalDate: true, source: { maxLength: MAX_INBOUND_MESSAGE_BYTES } },
+      { uid: true },
+    )) {
+      if (!selected.has(message.uid) || messages.has(message.uid)) return { outcome: 'integrity_error' };
+      messages.set(message.uid, await this.parseFetchedMessage(BigInt(message.uid), message));
+    }
+    if (messages.size !== selected.size || client.mailbox !== mailbox ||
+        mailbox.uidValidity !== expectedUidValidity) return { outcome: 'integrity_error' };
+    return { outcome: 'ok', messages: [...selected].map((uid) => messages.get(uid)!) };
   }
 
   async fetchMessagesSince(
@@ -205,14 +291,15 @@ export class ImapMailboxReader implements MailboxReader {
     return { user: this.config.imapUsername, pass: credentials.password };
   }
 
-  private async ensureFolderOpen(client: ImapFlow, folder: string): Promise<void> {
-    if (this.openedFolder === folder && this.lock) return;
+  private async ensureFolderOpen(client: ImapFlow, folder: string, readOnly = false): Promise<void> {
+    if (this.openedFolder === folder && this.openedReadOnly === readOnly && this.lock) return;
     if (this.lock) {
       this.lock.release();
       this.lock = undefined;
     }
-    this.lock = await client.getMailboxLock(folder);
+    this.lock = readOnly ? await client.getMailboxLock(folder, { readOnly }) : await client.getMailboxLock(folder);
     this.openedFolder = folder;
+    this.openedReadOnly = readOnly;
   }
 
   private async parseFetchedMessage(uid: bigint, message: FetchMessageObject): Promise<FetchedMailboxMessage> {

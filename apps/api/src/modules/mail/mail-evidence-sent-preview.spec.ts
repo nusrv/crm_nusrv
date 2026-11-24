@@ -5,7 +5,7 @@ import {
   type SentFolderPreviewCheckpoint,
 } from './mail-evidence-sent-preview';
 import { mailEvidenceFolderIdentityKey } from './mail-evidence-folder-identity';
-import type { FetchSinceResult, FetchedMailboxMessage, MailboxReader } from './mailbox-reader';
+import type { FetchSentSinceResult, FetchedMailboxMessage, SentMailboxReader } from './mailbox-reader';
 
 const base: SentFolderPreviewCheckpoint = {
   mailConfigurationId: 'mail-A',
@@ -39,11 +39,11 @@ function message(uid: bigint, changes: Partial<FetchedMailboxMessage> = {}): Fet
   };
 }
 
-function fakeReader(result: FetchSinceResult = { outcome: 'ok', messages: [] }) {
-  const fetch = jest.fn<MailboxReader['fetchMessagesSince']>(
+function fakeReader(result: FetchSentSinceResult = { outcome: 'ok', messages: [] }) {
+  const fetch = jest.fn<SentMailboxReader['fetchSentMessagesSince']>(
     () => Promise.resolve(result),
   );
-  return { reader: { fetchMessagesSince: fetch }, fetch };
+  return { reader: { fetchSentMessagesSince: fetch }, fetch };
 }
 
 describe('P2.C read-only bounded Sent observations — no worker or cursor side effects', () => {
@@ -77,7 +77,9 @@ describe('P2.C read-only bounded Sent observations — no worker or cursor side 
       { uidValidity: 10n, lastUid: null },
       { uidValidity: null, lastUid: 10n },
       { uidValidity: 0n },
+      { uidValidity: 4_294_967_296n },
       { lastUid: -1n },
+      { lastUid: 4_294_967_296n },
     ]) {
       const { reader, fetch } = fakeReader();
       const result = await previewSentFolderObservations(checkpoint(changes), reader);
@@ -122,11 +124,18 @@ describe('P2.C read-only bounded Sent observations — no worker or cursor side 
       });
   });
 
+  it('leaves the cursor untouched when bounded UID search is unavailable', async () => {
+    const { reader } = fakeReader({ outcome: 'bounded_search_unavailable' });
+    await expect(previewSentFolderObservations(checkpoint(), reader))
+      .resolves.toEqual({ outcome: 'BOUNDED_SEARCH_UNAVAILABLE', observations: [] });
+  });
+
   it('rejects duplicated, descending, old and over-limit batches, instead of guessing the next cursor', async () => {
     const malformed: FetchedMailboxMessage[][] = [
       [message(11n), message(11n)],
       [message(12n), message(11n)],
       [message(10n)],
+      [message(4_294_967_296n)],
       Array.from({ length: 3 }, (_, index) => message(BigInt(index + 11))),
     ];
     for (const messages of malformed) {

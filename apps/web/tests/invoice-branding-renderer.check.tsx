@@ -180,6 +180,15 @@ assert(otherCompany.includes('JO00-THIRD-IBAN'));
 assert(!otherCompany.includes('NEW SERVE LOCAL'));
 assert(!otherCompany.includes('FUTURE FORESIGHT INTERNATIONAL'));
 assert(!otherCompany.includes('class="nusrv-logo"'));
+for (const companyHtml of [newServe, foresight, otherCompany]) {
+  for (const section of ['nusrv-header', 'nusrv-items', 'nusrv-totals', 'nusrv-footer']) {
+    assert(companyHtml.includes(`class="${section}"`));
+  }
+  assert.equal((companyHtml.match(/Sales Tax No\./g) ?? []).length, 1);
+  assert(!companyHtml.includes('Tax / National No.'));
+  assert(!companyHtml.includes('87654321'));
+}
+assert(otherCompany.includes('Sales Tax No.: THIRD-TAX-123'));
 
 // A draft with an unresolved tax rate is NOT a zero-rate assertion. The
 // currently provisionally zero arithmetic must never render a bare "%".

@@ -1,6 +1,6 @@
 import { computeImapIdentityKey, canonicalizeImapFolder } from './imap-identity.util';
 import { classifyFolderCursor, mailEvidenceFolderIdentityKey } from './mail-evidence-folder-identity';
-import type { FetchedMailboxMessage, MailboxReader } from './mailbox-reader';
+import { MAX_IMAP_UID, MAX_SENT_OBSERVATIONS, type FetchedMailboxMessage, type SentMailboxReader } from './mailbox-reader';
 
 /**
  * P2.C source-only, read-only Sent observation preview.
@@ -33,11 +33,12 @@ export interface SentFolderObservation {
 
 export type SentFolderPreview =
   | { outcome: 'NOT_ENABLED' | 'NOT_AVAILABLE' | 'NOT_SENT_SOURCE' | 'FOLDER_IDENTITY_MISMATCH' |
-    'INVALID_CURSOR' | 'NEEDS_BASELINE' | 'INVALID_LIMIT' | 'FETCH_INTEGRITY_ERROR'; observations: [] }
+    'INVALID_CURSOR' | 'NEEDS_BASELINE' | 'INVALID_LIMIT' | 'BOUNDED_SEARCH_UNAVAILABLE' |
+    'FETCH_INTEGRITY_ERROR'; observations: [] }
   | { outcome: 'UIDVALIDITY_CHANGED'; currentUidValidity: bigint; observations: [] }
   | { outcome: 'PREVIEW_ONLY'; observations: SentFolderObservation[]; highestObservedUid: bigint | null };
 
-export const SENT_PREVIEW_MAX_MESSAGES = 50;
+export const SENT_PREVIEW_MAX_MESSAGES = MAX_SENT_OBSERVATIONS;
 
 /**
  * Explicitly authorized caller-supplied preview only. The disabled-by-default
@@ -47,12 +48,12 @@ export const SENT_PREVIEW_MAX_MESSAGES = 50;
  */
 export async function previewSentFolderObservations(
   checkpoint: SentFolderPreviewCheckpoint,
-  reader: Pick<MailboxReader, 'fetchMessagesSince'>,
+  reader: SentMailboxReader,
   requestedLimit = SENT_PREVIEW_MAX_MESSAGES,
 ): Promise<SentFolderPreview> {
   const empty = (outcome:
     | 'NOT_ENABLED' | 'NOT_AVAILABLE' | 'NOT_SENT_SOURCE' | 'FOLDER_IDENTITY_MISMATCH'
-    | 'INVALID_CURSOR' | 'NEEDS_BASELINE' | 'INVALID_LIMIT' | 'FETCH_INTEGRITY_ERROR',
+    | 'INVALID_CURSOR' | 'NEEDS_BASELINE' | 'INVALID_LIMIT' | 'BOUNDED_SEARCH_UNAVAILABLE' | 'FETCH_INTEGRITY_ERROR',
   ): SentFolderPreview => ({ outcome, observations: [] });
 
   if (!checkpoint.syncEnabled) return empty('NOT_ENABLED');
@@ -76,14 +77,18 @@ export async function previewSentFolderObservations(
   if (cursorState === 'INCONSISTENT') return empty('INVALID_CURSOR');
   if (cursorState === 'UNINITIALIZED') return empty('NEEDS_BASELINE');
   // UIDVALIDITY cannot be zero and stored last UID must not be negative.
-  if (checkpoint.uidValidity! <= 0n || checkpoint.lastUid! < 0n) return empty('INVALID_CURSOR');
+  if (checkpoint.uidValidity! <= 0n || checkpoint.uidValidity! > MAX_IMAP_UID ||
+      checkpoint.lastUid! < 0n || checkpoint.lastUid! > MAX_IMAP_UID) return empty('INVALID_CURSOR');
 
   const limit = Math.min(requestedLimit, SENT_PREVIEW_MAX_MESSAGES);
-  const result = await reader.fetchMessagesSince(
+  const result = await reader.fetchSentMessagesSince(
     checkpoint.folderName, checkpoint.uidValidity!, checkpoint.lastUid!, limit,
   );
   if (result.outcome === 'uidvalidity_changed') {
     return { outcome: 'UIDVALIDITY_CHANGED', currentUidValidity: result.currentUidValidity, observations: [] };
+  }
+  if (result.outcome !== 'ok') {
+    return empty(result.outcome === 'bounded_search_unavailable' ? 'BOUNDED_SEARCH_UNAVAILABLE' : 'FETCH_INTEGRITY_ERROR');
   }
 
   const canonicalFolder = canonicalizeImapFolder(checkpoint.folderName);
@@ -93,7 +98,7 @@ export async function previewSentFolderObservations(
   if (result.messages.length > limit) return empty('FETCH_INTEGRITY_ERROR');
   let previousUid = checkpoint.lastUid!;
   for (const message of result.messages) {
-    if (message.uid <= previousUid || message.uid <= 0n) {
+    if (typeof message.uid !== 'bigint' || message.uid <= previousUid || message.uid > MAX_IMAP_UID) {
       return empty('FETCH_INTEGRITY_ERROR');
     }
     previousUid = message.uid;
