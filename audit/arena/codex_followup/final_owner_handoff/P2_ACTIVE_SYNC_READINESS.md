@@ -109,3 +109,43 @@ The latest full green source CI in the repo still predates these edits. The curr
 3. Review and approve an explicit per-provider Sent folder discovery and baseline policy. Do **not** guess folder names or copy INBOX UIDs.
 4. Only after P2.B passes, design the durable per-folder CAS and observation persistence with outbox evidence provenance and idempotency. No new worker should be wired until the old-worker and fallback behavior is tested.
 5. Keep DSN/SMTP/provider evidence untrusted until source, attempt and intended recipient can be corroborated. No automatic resend or renewal transition is permitted.
+
+## P2.C observation ledger and atomic checkpoint commit — 2026-11-24
+
+### Implemented on the temporary recovery branch, NOT activated
+
+- Added **MailSentObservation** in Prisma and the strictly additive migration `20261123015000_p2_sent_observation_ledger`. It creates only `mail_sent_observations`; no existing `mail_configurations`, `email_messages`, INBOX cursors or P2.B folder rows are modified or backfilled. There is no seed, new job or activation flag.
+- Each observation is attached to one existing **MailEvidenceFolderCheckpoint** with a RESTRICT foreign key, a globally unique frozen v1 IMAP source identity key, and a second unique constraint on folder checkpoint + UIDVALIDITY + UID. Only bounded metadata (internal date, optional Message-ID, parse-failure flag and source identifiers) is stored; never raw body/HTML, recipient addresses or credentials. Delivery status defaults to `UNKNOWN` and an exact-case MariaDB CHECK prohibits any other value, even under case-insensitive table collation. CHECK also requires positive UID and UIDVALIDITY.
+- Added `prepareSentObservationWritePlan()`, a **pure** safety boundary that recomputes all stable hashes, requires an explicitly enabled, available SENT folder, validates the epoch, monotonic UIDs, current expected cursor, storage limits, and rejects fabricated delivery assertions or malformed preview batches.
+- Added `commitSentObservationPreview()` as an **unregistered, uninvoked transaction primitive**. It locks and reloads the real folder checkpoint, checks that its parent mailbox remains enabled and its cursor/scope are unchanged, revalidates the batch from persisted source identity, inserts observation rows, checks the inserted count and conditionally advances **only the new folder checkpoint** in one Prisma transaction. A duplicate, stale claim, disabled source, failing insert or failed cursor CAS raises an error and should roll back the full transaction. This path does not send/retry email and never touches the existing INBOX worker.
+- Added Jest cases for scope/identity tampering, disabled/stale source, wrong delivery state, malformed UID, bounded headers, no-op empty preview, duplicate insert, partial insertion and losing CAS. Expanded the isolated MariaDB P2 fixture to check unique keys, FK, uppercase-only UNKNOWN, positive UIDs, two concurrent commits, failed duplicate insert with no cursor advance and preservation of the existing INBOX cursor values. **The MariaDB scenarios are written, not executed after these commits.**
+- Updated the manual-only source-validation workflow with focused P2 ledger tests and `p2-sent-observation-migration.test.mjs`. The manual-only disposable MariaDB workflow already includes the expanded `p2-evidence-folder-mariadb-live.spec.ts` fixture.
+
+### Verified in this authoring session
+
+Twelve direct **source-structure checks** passed on the checked-in branch: only two new-table DDL statements; no old table DML; matching Prisma relationship; exact source/epoch uniqueness; all six SQL names within the 64-character MariaDB limit; exact-case UNKNOWN-only and positive UID constraints; no message bodies/recipients; explicit transaction/row lock; insert and cursor CAS within the same transaction; no registration in mail module, worker app or old inbound ingestion; and both workflow triggers still `workflow_dispatch` only.
+
+**These checks do NOT prove that generated Prisma Client compiles or the new migration passes on MariaDB.** No CI dispatch, MariaDB transaction, IMAP session, SMTP send, application deployment, production migration or main-branch update was performed in this round. Historical MariaDB suite failures from the earlier run remain unresolved until rerun.
+
+### Exact verification gates for the current head
+
+Use the existing manual-only GitHub workflows on `work/p1-chatgpt-recovery`, or run in an isolated checkout with dependencies:
+
+```powershell
+npm run db:generate
+npm run typecheck
+npm run lint
+npm run test -w @cp/api -- --runTestsByPath src/modules/mail/mail-evidence-sent-preview.spec.ts src/modules/mail/mail-evidence-folder-identity.spec.ts src/modules/mail/mail-sent-observation-plan.spec.ts src/modules/mail/mail-sent-observation-commit.spec.ts
+node --test apps/api/prisma/p2-sent-observation-migration.test.mjs
+```
+
+In a *throwaway* MariaDB instance with an explicitly verified local test URL and freshly generated Prisma Client, rehearse `prisma migrate deploy` and `prisma migrate status` first, then run `apps/api/prisma/p2-evidence-folder-mariadb-live.spec.ts` using the repository's disposable DB workflow. Separately test a representative legacy schema/upgrade snapshot and verify pre/post existing INBOX UIDVALIDITY, UID, sync-enabled flags and table counts. Do **not** run these migration commands against `crm.nusrv.com` or production data.
+
+### Remaining before P2.C/P2.D is eligible for release
+
+1. Current-head generation, TypeScript, lint, full Jest and live disposable MariaDB migration/transaction tests **must pass**, including the concurrent two-writer case and correct transaction rollback.
+2. Approve explicit provider-specific Sent folder selection, capability/UID baseline policy and a responsible ADMIN activation path; no guessing folder names or copying INBOX UIDs.
+3. Add and verify a bounded authenticated orchestration layer with provider/environment gates and worker fencing before binding this primitive to real polling. Its absence is intentional.
+4. Implement trusted DSN/provider/recipient/attempt provenance and operator Action/Error Queue separately under OD-12 and CL-5/6. A Sent copy still never proves message delivery, and no automatic resend or decision transition is authorized.
+
+**Current status: P2.C observation persistence architecture and tests committed, but not compiled, executed, activated or release-approved.**
