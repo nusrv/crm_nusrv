@@ -58,9 +58,17 @@ function harness(options: {
     mailConfiguration: { enabled: !options.mailboxDisabled },
   };
   const tx = {
-    $queryRaw: jest.fn(() => {
-      sequence.push('lock');
-      return Promise.resolve([{ id: 'sent-checkpoint-1' }]);
+    $queryRaw: jest.fn((strings: TemplateStringsArray) => {
+      const statement = strings.join('?');
+      if (statement.includes('mail_configurations')) {
+        sequence.push('lock-mailbox');
+        return Promise.resolve([{ id: 'mail-1' }]);
+      }
+      if (statement.includes('mail_evidence_folder_checkpoints')) {
+        sequence.push('lock-folder');
+        return Promise.resolve([{ id: 'sent-checkpoint-1' }]);
+      }
+      throw new Error('Unexpected table locking order');
     }),
     mailEvidenceFolderCheckpoint: {
       findUnique: jest.fn(() => {
@@ -91,7 +99,7 @@ describe('P2.C offline atomic Sent evidence commit, no registered worker', () =>
     const h = harness();
     const result = await commitSentObservationPreview(h.prisma, checkpoint(), preview());
     expect(result).toEqual({ outcome: 'COMMITTED', inserted: 1, lastUid: 201n });
-    expect(h.sequence).toEqual(['lock', 'find', 'insert', 'cas']);
+    expect(h.sequence).toEqual(['lock-mailbox', 'lock-folder', 'find', 'insert', 'cas']);
     expect(h.tx.mailSentObservation.createMany).toHaveBeenCalledWith({
       data: [{
         folderCheckpointId: 'sent-checkpoint-1',
@@ -118,7 +126,7 @@ describe('P2.C offline atomic Sent evidence commit, no registered worker', () =>
       const h = harness(options);
       await expect(commitSentObservationPreview(h.prisma, checkpoint(), preview()))
         .rejects.toBeInstanceOf(ConflictException);
-      expect(h.sequence).toEqual(['lock', 'find']);
+      expect(h.sequence).toEqual(['lock-mailbox', 'lock-folder', 'find']);
     }
   });
 
@@ -126,7 +134,7 @@ describe('P2.C offline atomic Sent evidence commit, no registered worker', () =>
     const h = harness({ casCount: 0 });
     await expect(commitSentObservationPreview(h.prisma, checkpoint(), preview()))
       .rejects.toBeInstanceOf(ConflictException);
-    expect(h.sequence).toEqual(['lock', 'find', 'insert', 'cas']);
+    expect(h.sequence).toEqual(['lock-mailbox', 'lock-folder', 'find', 'insert', 'cas']);
     // Mock fixtures cannot prove SQL rollback; disposable MariaDB must do that.
   });
 
@@ -134,14 +142,14 @@ describe('P2.C offline atomic Sent evidence commit, no registered worker', () =>
     const h = harness({ insertCount: 0 });
     await expect(commitSentObservationPreview(h.prisma, checkpoint(), preview()))
       .rejects.toBeInstanceOf(ConflictException);
-    expect(h.sequence).toEqual(['lock', 'find', 'insert']);
+    expect(h.sequence).toEqual(['lock-mailbox', 'lock-folder', 'find', 'insert']);
   });
 
   it('does not advance when a duplicate evidence insert fails', async () => {
     const h = harness({ insertFails: true });
     await expect(commitSentObservationPreview(h.prisma, checkpoint(), preview()))
       .rejects.toThrow('Unique source identity collision');
-    expect(h.sequence).toEqual(['lock', 'find', 'insert']);
+    expect(h.sequence).toEqual(['lock-mailbox', 'lock-folder', 'find', 'insert']);
   });
 
   it('does not open a transaction for an empty preview', async () => {
