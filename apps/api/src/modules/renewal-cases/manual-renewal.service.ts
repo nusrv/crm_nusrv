@@ -1,3 +1,4 @@
+import { summarizeSmtpEvidence } from '../mail/smtp-evidence-summary';
 import { randomUUID, createHash } from 'node:crypto';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
@@ -151,10 +152,10 @@ export class ManualRenewalService {
     const events = await this.prisma.auditEvent.findMany({
       where: { subjectId: outboxId, subjectType: 'CommunicationOutbox' },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, eventKey: true, actorId: true, metadata: true, createdAt: true },
-      take: 100,
+      select: { id: true, eventKey: true, actorId: true, actorType: true, metadata: true, createdAt: true },
+      take: 101,
     });
-    return { ...row, events };
+    return { ...row, events: events.slice(0, 100), smtpEvidence: summarizeSmtpEvidence('CommunicationOutbox', events, events.length > 100) };
   }
 
   async replies(id: string) {

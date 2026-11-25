@@ -1,3 +1,4 @@
+import { summarizeSmtpEvidence } from '../mail/smtp-evidence-summary';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../database/prisma.service';
@@ -58,10 +59,10 @@ export class OperatorReplyService {
     const events = await this.prisma.auditEvent.findMany({
       where: { subjectType: 'OperatorReplyOutbox', subjectId: outboxId },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, eventKey: true, actorId: true, metadata: true, createdAt: true },
-      take: 100,
+      select: { id: true, eventKey: true, actorId: true, actorType: true, metadata: true, createdAt: true },
+      take: 101,
     });
-    return { ...row, events };
+    return { ...row, events: events.slice(0, 100), smtpEvidence: summarizeSmtpEvidence('OperatorReplyOutbox', events, events.length > 100) };
   }
 
   async resend(threadId: string, outboxId: string, value: unknown, actorId: string) {

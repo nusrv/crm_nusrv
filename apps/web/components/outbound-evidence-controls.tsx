@@ -10,6 +10,7 @@ interface Evidence {
   status: string;
   resendOfId: string | null;
   lastError: string | null;
+  smtpEvidence?: { state: 'SMTP_ACCEPTED' | 'MOCK_ONLY' | 'UNVERIFIED' | 'REVIEW_REQUIRED'; responseCode: number | null };
   events: { id: string; eventKey: string; actorId: string | null; metadata: unknown; createdAt: string }[];
 }
 
@@ -61,17 +62,22 @@ export function OutboundEvidenceControls({ path, onChanged }: { path: string; on
       {evidence && (
         <div className="space-y-2 text-sm">
           <p>{mailDispatchStatus(evidence.status, evidence.smtpUncertain)}</p>
+          <p>{evidence.smtpEvidence?.state === 'SMTP_ACCEPTED'
+            ? 'Sending SMTP server accepted this attempt (code ' + evidence.smtpEvidence.responseCode + '). Recipient delivery is not verified.'
+            : evidence.smtpEvidence?.state === 'MOCK_ONLY' ? 'Simulated dispatch only; no real SMTP acceptance.'
+            : evidence.smtpEvidence?.state === 'REVIEW_REQUIRED' ? 'SMTP evidence requires review; recipient delivery is not verified.'
+            : 'No verified SMTP acceptance in the recorded audit history.'}</p>
           <p>{evidence.attempts} attempted dispatches{evidence.lastError ? ` · ${evidence.lastError}` : ''}</p>
           {evidence.resendOfId && <p>Original outbox entry {evidence.resendOfId}</p>}
-          <ul className="space-y-2">
+          <details><summary>Advanced: recorded dispatch audit</summary><ul className="space-y-2">
             {evidence.events.map((event) => (
               <li className="break-all" key={event.id}>
                 <p>{new Date(event.createdAt).toLocaleString()} · {event.eventKey}</p>
                 {event.metadata != null && <pre className="whitespace-pre-wrap">{JSON.stringify(event.metadata, null, 2)}</pre>}
               </li>
             ))}
-          </ul>
-          {evidence.smtpUncertain && evidence.status === 'FAILED' && requestKey && (
+          </ul></details>
+          {evidence.smtpUncertain && evidence.status === 'FAILED' && evidence.smtpEvidence?.state !== 'SMTP_ACCEPTED' && requestKey && (
             <>
               <label className="flex items-start gap-2">
                 <input checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} type="checkbox" />
