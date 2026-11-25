@@ -1,4 +1,5 @@
 import { hasAsciiControl } from './mail-evidence-text';
+import { classifyDsnMimeShape } from './dsn-mime-shape';
 
 /**
  * P2.D, source-only. Parse an RFC 3464-style message/delivery-status part as
@@ -57,15 +58,6 @@ const MAX_DSN_RECIPIENTS = 32;
 
 function unusable(problem: DsnCandidateProblem): DsnCandidateParseResult {
   return { kind: 'UNUSABLE_DSN', problem, deliveryStatus: 'UNKNOWN' };
-}
-
-function isReportContentType(outer: string): boolean {
-  const segments = outer.split(';').map((segment) => segment.trim());
-  if (segments[0]?.toLowerCase() !== 'multipart/report') return false;
-  const reportTypes = segments.slice(1)
-    .filter((item) => /^report-type\s*=/i.test(item))
-    .map((item) => item.replace(/^report-type\s*=\s*/i, '').replace(/^"|"$/g, '').toLowerCase());
-  return reportTypes.length === 1 && reportTypes[0] === 'delivery-status';
 }
 
 function parseFields(section: string): Map<string, string[]> | null {
@@ -141,16 +133,12 @@ export function parseDsnCandidate(input: DsnMimeReportInput): DsnCandidateParseR
     return unusable('MISSING_SOURCE_IDENTITY');
   }
 
-  // The MIME adapter is a runtime trust boundary; never assume its declared
-  // TypeScript field types or sizes are enforced by the remote message.
-  if (typeof input.outerContentType !== 'string' ||
-      input.outerContentType.length > 1024 ||
-      !isReportContentType(input.outerContentType)) return { kind: 'NOT_DSN' };
-
-  if (typeof input.reportPartContentType !== 'string' ||
-      input.reportPartContentType.length > 256 ||
-      input.reportPartContentType.split(';')[0]?.trim().toLowerCase() !== 'message/delivery-status' ||
-      typeof input.reportPartText !== 'string' || !input.reportPartText) {
+  // Ambiguous or malformed report-shaped metadata must not fall through
+  // to ordinary customer-reply correlation.
+  const shape = classifyDsnMimeShape(input.outerContentType, input.reportPartContentType, input.reportPartText);
+  if (shape === 'ORDINARY') return { kind: 'NOT_DSN' };
+  if (shape === 'MALFORMED_REPORT') return unusable('INVALID_REPORT_FORMAT');
+  if (shape === 'MISSING_STRUCTURED_PART' || typeof input.reportPartText !== 'string') {
     return unusable('MISSING_STRUCTURED_PART');
   }
 

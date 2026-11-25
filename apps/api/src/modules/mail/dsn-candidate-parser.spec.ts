@@ -54,15 +54,22 @@ describe('P2.D isolated DSN candidate parsing (no provider trust and no side eff
     expect(JSON.stringify(value)).not.toContain('CONFIRMED_BOUNCE');
   });
 
-  it('does not treat subject-like or plain inbound text as a DSN', () => {
+  it('does not treat genuine ordinary inbound MIME without an extracted report as a DSN', () => {
+    for (const outerContentType of ['text/plain', 'multipart/mixed']) {
+      expect(parseDsnCandidate(input({ outerContentType, reportPartContentType: null, reportPartText: null })))
+        .toEqual({ kind: 'NOT_DSN' });
+    }
+  });
+
+  it('keeps ambiguous or contradictory MIME reports in specialist review', () => {
     for (const outerContentType of [
-      'text/plain',
-      'multipart/mixed',
-      'multipart/report; report-type=delivery-status-other',
-      'multipart/report; report-type=delivery-status; report-type=other',
-      'multipart/report',
+      'text/plain', 'multipart/mixed', 'multipart/report; report-type=delivery-status-other',
+      'multipart/report; report-type=delivery-status; report-type=other', 'multipart/report',
+      'multipart/report; boundary="x;report-type=delivery-status"',
     ]) {
-      expect(parseDsnCandidate(input({ outerContentType }))).toEqual({ kind: 'NOT_DSN' });
+      const parsed = parseDsnCandidate(input({ outerContentType }));
+      expect(parsed).toEqual({ kind: 'UNUSABLE_DSN', problem: 'INVALID_REPORT_FORMAT', deliveryStatus: 'UNKNOWN' });
+      expect(selectDsnInboundTriage(parsed).mayUseCustomerReplyCorrelation).toBe(false);
     }
   });
 
@@ -139,7 +146,7 @@ describe('P2.D isolated DSN candidate parsing (no provider trust and no side eff
       deliveryStatus: 'UNKNOWN',
       evidenceKind: 'UNUSABLE_DSN',
     });
-    const normal = parseDsnCandidate(input({ outerContentType: 'text/plain' }));
+    const normal = parseDsnCandidate(input({ outerContentType: 'text/plain', reportPartContentType: null, reportPartText: null }));
     expect(selectDsnInboundTriage(normal)).toEqual({
       lane: 'ORDINARY_INBOUND',
       mayUseCustomerReplyCorrelation: true,
@@ -148,7 +155,7 @@ describe('P2.D isolated DSN candidate parsing (no provider trust and no side eff
 
   it('fails safely on malformed runtime MIME fields and control characters in source identifiers', () => {
     expect(parseDsnCandidate(input({ outerContentType: 123 as never })))
-      .toEqual({ kind: 'NOT_DSN' });
+      .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'INVALID_REPORT_FORMAT' });
     expect(parseDsnCandidate(input({ reportPartContentType: {} as never })))
       .toMatchObject({ kind: 'UNUSABLE_DSN', problem: 'MISSING_STRUCTURED_PART' });
     expect(parseDsnCandidate(input({ reportPartText: 12 as never })))
