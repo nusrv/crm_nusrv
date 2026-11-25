@@ -49,6 +49,7 @@ const navigation: Array<{ href: string; label: string; roles: RoleCode[] }> = [
     label: 'Communication Center',
     roles: ['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT', 'MANAGEMENT'],
   },
+  { href: '/dashboard/action-queue', label: 'Action / Error Queue', roles: ['ADMIN'] },
   {
     href: '/dashboard/service-types',
     label: 'Service Types',

@@ -2,6 +2,7 @@ import { jest } from '@jest/globals';
 import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtStrategy } from './jwt.strategy';
+import { readVerifiedAccessContext } from './verified-access-context';
 
 describe('JwtStrategy session-bound authorization', () => {
   const config = new ConfigService({ JWT_ACCESS_SECRET: 'test-secret'.repeat(4) });
@@ -25,6 +26,15 @@ describe('JwtStrategy session-bound authorization', () => {
   it('uses current persisted roles rather than the claims from token issuance', async () => {
     const { strategy } = build(currentSession());
     await expect(strategy.validate(claims())).resolves.toMatchObject({ id: 'account', roles: ['ACCOUNTANT'] });
+  });
+
+  it('keeps verified session identity server-only, not in the public user object', async () => {
+    const { strategy } = build(currentSession());
+    const payload = claims();
+    const user = await strategy.validate(payload);
+    expect(readVerifiedAccessContext(user)).toEqual({ actorId: 'account', sessionId: 'session', accessExpiresAt: payload.exp * 1000 });
+    expect(JSON.stringify(user)).not.toContain('session');
+    expect(readVerifiedAccessContext({ ...user })).toBeNull();
   });
 
   it('rejects legacy access tokens before reading a session', async () => {

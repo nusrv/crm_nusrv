@@ -7,6 +7,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ACCESS_COOKIE } from './auth.constants';
 import { PrismaService } from '../database/prisma.service';
 import { isBoundAccessToken, isCurrentSession } from './session-policy';
+import { attachVerifiedAccessContext } from './verified-access-context';
 
 interface AccessTokenPayload {
   sub?: unknown;
@@ -59,11 +60,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!session?.user.active || !isCurrentSession(session, payload.sub, now) || !isBoundAccessToken(payload, now)) {
       throw new UnauthorizedException('Invalid session.');
     }
-    return {
+    const user: AuthenticatedUser = {
       id: session.user.id,
       email: session.user.email,
       displayName: session.user.displayName,
       roles: session.user.roles.map(({ role }) => role.code as RoleCode),
     };
+    return attachVerifiedAccessContext(user, payload.sid, payload.exp * 1000);
   }
 }

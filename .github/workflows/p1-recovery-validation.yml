@@ -76,6 +76,7 @@ jobs:
             apps/api/prisma/p2-dsn-follow-up-migration.test.mjs \
             apps/api/prisma/p2-provider-invalidation-migration.test.mjs \
             apps/api/src/identity/session-policy.test.mjs \
+            apps/api/src/identity/verified-access-context.test.mjs \
             apps/api/src/modules/mail/smtp-attempt-policy.test.mjs \
             apps/web/lib/api.session.test.mjs
       - name: P2 provider binding and DSN ledger planning contracts (no database)

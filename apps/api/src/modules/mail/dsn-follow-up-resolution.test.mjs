@@ -15,7 +15,7 @@ function store({ currentActor = actor, task = open, count = 1, failAudit = false
     async transaction(operation) {
       calls.push('transaction'); const old = structuredClone(row); const oldCount = audits.length;
       try { return await operation({
-        async lockCurrentActor(c) { calls.push('actor'); assert.deepEqual(c, context); return currentActor; },
+        async lockCurrentActor(c) { calls.push('actor'); assert.equal(c.actorId, context.actorId); assert.equal(c.sessionId, context.sessionId); return currentActor; },
         async lockTask(id) { calls.push('task'); assert.equal(id, open.id); return row; },
         async compareAndResolve(id, version, change) { calls.push('update'); assert.equal(id, open.id); assert.equal(version, 1);
           if (count === 1) row = { ...row, ...change }; return count; },
@@ -71,4 +71,12 @@ test('audit failure and impossible update count throw so the transaction rolls b
   for (const options of [{ failAudit: true }, { count: 2 }]) {
     const s = store(options); await assert.rejects(run(s)); assert.deepEqual(s.row(), open); assert.equal(s.audits.length, 0);
   }
+});
+
+test('HTTP access expiry is rechecked after transaction locking', async () => {
+  const s = store(); let reads = 0;
+  const auth = { ...context, accessExpiresAt: instant.getTime() + 200 };
+  assert.deepEqual(await run(s, command, auth, () => new Date(instant.getTime() + (reads++ ? 200 : 0))), { outcome: 'FORBIDDEN' });
+  assert.deepEqual(s.calls, ['transaction', 'actor', 'task']);
+  assert.equal(s.audits.length, 0);
 });

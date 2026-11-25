@@ -95,6 +95,8 @@ const environmentSchema = z
     MAIL_SEND_CUTOVER_AT: z.string().optional(),
     // See SMTP_MODE's doc comment — the identical infrastructure-capability concept for IMAP.
     IMAP_MODE: z.enum(['mock', 'real']).default('mock'),
+    // Operator queue only; never authorizes provider polling or sending.
+    P2_ACTION_QUEUE_ENABLED: z.enum(['true', 'false']).default('false'),
     // Phase 3.1 §D/§Q correction — DEPRECATED / PARSED-ONLY, same reasoning as MAIL_SEND_ENABLED.
     // MailConfiguration.inboundSyncEnabled is the sole per-mailbox runtime authority.
     IMAP_SYNC_ENABLED: z.enum(['true', 'false']).default('false'),

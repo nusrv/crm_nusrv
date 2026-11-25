@@ -2,6 +2,8 @@
 export interface ResolutionActorContext {
   actorId: string;
   sessionId: string;
+  /** Server-verified access JWT expiration, when invoked through HTTP. */
+  accessExpiresAt?: number;
 }
 
 export interface CurrentResolutionActor extends ResolutionActorContext {
@@ -53,6 +55,7 @@ function isAuthorized(actor: CurrentResolutionActor | null, context: ResolutionA
   if (!actor || !Number.isFinite(now) || actor.active !== true || !Array.isArray(actor.roles) ||
       !actor.roles.includes('ADMIN') || actor.actorId !== context.actorId || actor.sessionId !== context.sessionId ||
       actor.sessionUserId !== context.actorId || actor.sessionRevokedAt !== null) return false;
+  if (context.accessExpiresAt !== undefined && (!Number.isSafeInteger(context.accessExpiresAt) || now >= context.accessExpiresAt)) return false;
   const start = time(actor.sessionCreatedAt);
   const expiry = time(actor.sessionExpiresAt);
   return Number.isFinite(start) && Number.isFinite(expiry) && start <= now && now < Math.min(expiry, start + 86_400_000);
