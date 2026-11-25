@@ -963,3 +963,10 @@ request occurred. Payment Receipt remains deferred without its source stamp/seal
 - Operator labels distinguish dispatch from recipient delivery and official invoice recording from live JoFotara submission. Added identity and disposable database repoint regression coverage.
 - 16 isolated Node contracts passed; exact helper blobs matched, isolated UI TypeScript checks passed. Full workspace, browser and physical migration/worker tests remain pending.
 - Plesk runbook includes live preflight, old-worker freeze, database backup/restore, migration boundaries, destructive test isolation and default-off features. No deployment occurred.
+
+
+## 2026-11-25 — release-blocker hardening and owner sequencing
+
+- OAuth secret rotation uses process-local HMAC cache identities; invoice creation modal cannot close during save; production env samples corrected; explicit release-only MAIL_WORKERS_PAUSED freeze and independent SMTP/IMAP readiness; UTC cutover preserves unchanged values, supports explicit clear; optional P2 worker startup schema checks. No live mail or database mutation.
+- Nine isolated Node tests (3 OAuth, 2 maintenance, 4 UTC cutover) passed against matching source blobs; strict isolated TypeScript passed. Source validation script syntax and two refusal guards tested. Full source build/Jest/lint/Prisma/browser not run on current head. Manual workflow delegates to isolated source runner; no automatic triggers.
+- Owner directed physical MariaDB tests after deployment, still on separate disposable DBs/restored copy. Before live start, backups, migration application, verified configuration and stopping old processes remain prerequisites. Maintain worker freeze and feature gates until acceptance. Provider-authenticated event adapter remains open; no invented provider proof and no silent scope waiver.

@@ -20,32 +20,19 @@ npm --version
 
 Stop on a dirty checkout or unexpected SHA. Never copy production .env into this worktree. Do not register a Plesk deployment action or launch an API/worker yet. The operator must provide isolated credentials for fixtures, not customer secrets. Source validation can run without MariaDB or Redis.
 
-## 2. Source checks before database changes
+## 2. Source checks before deployment (owner sequencing 2026-11-25)
 
-Use a clean shell and no reachable production services. Set only test values; review environment files for connection overrides before running commands.
+Use the separate clean checkout from section 1, with Node >=22.12, npm >=10, access to locked npm packages and an installed Chrome/Chromium executable. Do not copy production environment files. Run:
 
 ```bash
-set -e
-export NODE_ENV=test SMTP_MODE=mock IMAP_MODE=mock AI_PROVIDER=mock
-export P2_ACTION_QUEUE_ENABLED=false P2_DSN_REVIEW_CAPTURE_ENABLED=false P2_SENT_OBSERVATION_ENABLED=false
-unset MARIADB_TEST_DATABASE_URL MARIADB_TEST_SUITE_URLS
-unset MARIADB_PHASE4_TEST_DATABASE_URL MARIADB_BRANDING_TEST_DATABASE_URL
-export DATABASE_URL='mysql://example:example@127.0.0.1:3306/unconnected_ci'
-export JWT_ACCESS_SECRET='validation-only-access-not-a-production-secret'
-export JWT_REFRESH_SECRET='validation-only-refresh-not-a-production-secret'
-export ENCRYPTION_KEY_BASE64='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
-npm ci --no-audit --no-fund
-npm run db:generate
-(cd apps/api && ../../node_modules/.bin/prisma validate)
-npm run typecheck
-npm run lint
-npm run test -w @cp/api
-npm run build
+bash scripts/validate-release-source.sh
 ```
 
-Run all explicit Node and renderer checks in `.github/workflows/p1-recovery-validation.yml`, including review capture, launcher isolation and invoice/receipt rendering. Both GitHub workflows remain manual-only; alternatively execute their documented commands on the isolated checkout. Preserve complete test output and compare actual pass/fail/skip counts. Any compile, schema, Jest, lint or build failure blocks further release acceptance. Standalone contracts do not replace these checks.
+This is also the single entry point of the manual-only recovery source workflow. It refuses a dirty checkout and dotenv files, uses a clean child environment with deliberately unreachable localhost dependency endpoints, installs locked packages, generates/validates Prisma offline, typechecks, lints, runs all non-live API Jest tests plus real Chrome profile restart/Next UI checks, runs tracked standalone Node contracts and renderer checks, and builds the production workspace. All live MariaDB test files are explicitly excluded. Failure of any of these source checks blocks production switch. Do not treat a historical CI run, a synthetic browser-only harness, or partial standalone tests as a pass for the current commit.
 
-## 3. Fresh disposable MariaDB rehearsal
+The owner directed actual database tests to follow deployment. Sections 3–5 describe those post-deployment rehearsals using separate disposable schemas and a restored copy, NEVER the live customer database. Before the deployed application starts, migration execution itself, verified backup/restore readiness, database identity, grants, migration status and stopping old processes remain mandatory safety preconditions; these are deployment steps, not destructive test fixtures. Deploy with MAIL_WORKERS_PAUSED=true and the three P2 release flags false, then perform the designated DB and acceptance checks before removing the maintenance freeze. This sequencing accepts the added risk of applying a not-yet-rehearsed migration; record the owner's decision and preserve an approved recovery path. Do not interpret it as authorization to omit migration steps or run destructive tests on production.
+
+## 3. Post-deployment: fresh disposable MariaDB rehearsal
 
 Have the DB administrator create an EMPTY dedicated `nusrv_rehearsal_test` schema on loopback port 3306 with a new non-privileged test account restricted to that schema (including permissions required to execute test migrations and triggers). Use a protected shell/environment mechanism to supply the actual URL; never print it or paste it into chat or a committed file. Test names alone do not prove a target is disposable. Verify the server, account grants, schema emptiness and owner approval independently. No production credentials, Redis queues or network-capable mail worker.
 
@@ -62,7 +49,7 @@ npm run test -w @cp/api -- --runTestsByPath prisma/p2-dsn-prisma-mariadb-live.sp
 
 The DSN fixture uses synthetic attestations, not real provider identity. Verify new review table/constraints/triggers on the disposable schema. Exercise insert, duplicate, immutable update/delete rejection, audit rollback and no customer EmailMessage or outbox/renewal changes. Exercise actual reader parsing with ordinary MIME, report MIME, malformed/duplicate headers, nested reports, truncated source and replay. Review-capture gate is false by default; enable only in a controlled disposable test process with test mailbox fixtures and no customer traffic. Keep original mailbox evidence; captured text is bounded, and digest is of fetched bytes, not necessarily full original message.
 
-## 4. Twelve independent historical fixtures
+## 4. Post-deployment: twelve independent historical fixtures
 
 Do NOT run the old combined legacy suite against one database. Each fixture owns an initially empty `nusrv_legacy_<suite>_test` schema with dedicated credentials restricted to it. Required suite IDs: core, phase2, phase21, subscription_backfill, subscription_sequence_delete, phase3a, phase3b, phase3c, phase3d, phase3e, phase4, branding.
 
@@ -72,7 +59,7 @@ npm run test:db:mariadb -w @cp/api -- --suite phase3c
 ```
 Replace phase3c with the intended suite ID. Launcher preflights schema emptiness; do not pre-migrate these legacy fixtures. Do not reuse a failed/timed-out schema until it has been explicitly disposed of and recreated by the test DB administrator. Previous combined run (8 passed / 98 failed) was not an acceptance result; twelve isolated executions remain mandatory.
 
-## 5. Populated upgrade and application acceptance
+## 5. Post-deployment: populated upgrade and application acceptance
 
 Use a separate restored copy of the current deployed database on a controlled test server, with non-production grants and no running old workers, not the fresh/legacy fixture databases. Inventory applied migration IDs and schema drift; verify backup and restore, before/after record counts and financial balances. Apply checked-in pending migrations only to the copy using migrate deploy. Verify constraints, triggers, receipts, invoices, QR history, renewal transitions and audit retention. Never use migrate dev, migrate reset, db push or unconditional seed on a populated target.
 
@@ -98,8 +85,8 @@ The owner intends to validate on the Plesk host. Destructive fixtures must never
 - Pin the exact recovery SHA in a separate release directory. Install locked packages, generate Prisma, validate schema, typecheck, test, lint and build before switching the live directory. No production credentials in source checks.
 - Identify actual Plesk process manager, Node and Redis configuration. Record deployed SHA and applied migration history. Preserve encrypted configuration and secrets securely. Obtain independently verified restorable backups, approved maintenance window and recovery plan.
 - Stop all old workers and scheduler producers, prevent supervisor restart, verify no active old consumers or SMTP operations, and stop writes before migration. Preserve queued, processing and uncertain mail metadata. Never purge queues or reset cursors.
-- Check production database identity, grants, migration history and drift read-only. Rehearse on the populated copy first. The Sent epoch migration creates a table, adds a column, replaces the composite unique index and adds an invalidation trigger; preserves existing rows. MariaDB DDL is not fully transactional: on partial failure inspect actual schema and recover, do not blindly re-run or mark migrations applied. Only approved `npm run db:migrate:deploy` is permitted on the verified production target. No seed, reset, schema push or destructive fixtures.
-- Keep the three P2 release flags false initially. Keep actual mail dispatch paused at the mailbox/worker boundary until verified cutover and explicit owner approval. Start new API/web, verify authentication, RBAC, customer/subscription, renewal, official invoice and receipt. Start new workers only after isolation and queue checks. Use designated test customers and mailboxes for live smoke tests.
+- Check production database identity, grants, migration history and drift read-only. Per owner sequencing, rehearse on a populated restored copy after the deployment; record the elevated cutover risk and ensure a verified backup and recovery plan before the production migration. The Sent epoch migration creates a table, adds a column, replaces the composite unique index and adds an invalidation trigger; preserves existing rows. MariaDB DDL is not fully transactional: on partial failure inspect actual schema and recover, do not blindly re-run or mark migrations applied. Only approved `npm run db:migrate:deploy` is permitted on the verified production target. No seed, reset, schema push or destructive fixtures.
+- Set MAIL_WORKERS_PAUSED=true in BOTH API and worker process environments and keep all three P2 release flags false initially. Restart only the new executable after the schema is ready. This freeze returns empty worker batches without claiming messages or advancing cursors; it does not stop old executables or in-flight sends. Old workers must already be stopped. Health displays the maintenance pause. Keep the freeze in effect until the post-deployment database and acceptance checks are verified and the owner approves unpausing. Start new API/web, verify authentication, RBAC, customer/subscription, renewal, official invoice and receipt. Start new workers only after isolation and queue checks. Use designated test customers and mailboxes for live smoke tests.
 - Rollback requires pausing writers/consumers, checking migration effects, and restoring a verified compatible release or backup through the approved recovery plan. Never assume an old executable is schema compatible or replay mail automatically.
 - On a designated test mailbox, enable Sent only after source, database and browser checks pass. ADMIN opens Settings > Mail > Inspect Sent observation, confirms future-only, and activates. Verify secure real IMAP, unique server-flagged Sent folder and ESEARCH/IMAP4rev2 support. Test empty/new polls, stop, concurrent polls, UIDVALIDITY rollover, A→B→A settings change and explicit new baseline. A Sent copy remains UNKNOWN delivery.
 - Independent provider-confirmed delivery/hard-bounce integration remains open: an actual authorized provider source and account/attempt verification are needed. No authentication from MIME or IMAP login alone. The current Sent, review-only capture and action queue do not constitute that integration.
@@ -107,3 +94,12 @@ The owner intends to validate on the Plesk host. Destructive fixtures must never
 ## 8. Additional programming-pass source evidence
 
 At source checkpoint `ee87db500e70eba9eac959367099463e7e904279`, 16 independent Node 22.16 tests passed: invoice selection (5), navigation (4), status (4), Sent identity (3). Exact Git blob hashes matched. The local extension resolver was adjusted for the extensionless .util import before the final successful run; no production change. Strict isolated TypeScript checks passed for the three UI helpers. Full Jest, Prisma, MariaDB, browser and workspace checks remain unexecuted at this checkpoint. No actual provider access, mail send, database mutation or deployment occurred.
+
+
+## 9. Release-blocker hardening checkpoint
+
+2026-11-25: OAuth cache identity now includes the actual credential tuple via process-local HMAC; bounded in-memory cache, never logs secrets. The invoice create modal cannot be closed during the save. Environment examples use production-valid SMTP/IMAP modes and 24h refresh TTL. Deployment-only worker freeze reports truthful health and no invented send outcomes, preserves outbox/cursors and blocks Sent activation. Cutover is explicitly UTC; unchanged values are not rewritten and clearing is explicit. When P2 Sent or report capture is enabled, worker bootstrap checks their table projections before registering consumers. No database connection was made to verify these runtime guards here.
+
+At d62752e, nine standalone tests passed (OAuth 3, maintenance 2, UTC cutover 4), exact Git blob hashes matched, strict isolated TypeScript passed. The pre-deployment shell script hash b842e9eeee0ae071f0d3ed1e67f6f0b0dd6e26ef was syntax-checked and rejected both a dirty checkout and a hidden production-style dotenv file in disposable Git fixtures. No dependency install, full Jest/Prisma/Next/ESLint or real browser run at the final head was possible in this environment (direct GitHub DNS unavailable, project dependencies absent; GitHub connector has no workflow dispatch action). Previous TypeScript failure from 2026-11-23 was in an old UUID fixture whose default argument is now explicitly typed string; this is source inspection, not a current passing CI result. The source validation remains mandatory before deployment.
+
+The independent provider-authenticated delivery/DSN integration is still an open programming/integration requirement: no verified provider event API, authorized credentials and representative proof were supplied. The base CRM can be considered for a maintenance-mode deployment only after source validation and owner acceptance of this explicit limitation. Do not mark full OD-12 coverage complete. No real mail, production database mutation, main merge or deployment was performed.
