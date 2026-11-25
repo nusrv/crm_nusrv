@@ -96,7 +96,7 @@ describe('MicrosoftOAuthTokenProvider', () => {
   it('requires a fresh token request on secret replacement even for the same tenant and client', async () => {
     const provider = new MicrosoftOAuthTokenProvider();
     const fetchImpl = jest.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'old', expires_in: 3600 }) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ access_token: 'old', expires_in: 3600 }) } as Response)
       .mockResolvedValueOnce({ ok: false, status: 401 } as Response);
     provider.fetchImpl = fetchImpl;
     await expect(provider.getAccessToken(CREDENTIALS)).resolves.toBe('old');

@@ -1,3 +1,4 @@
+import { hasAsciiControl } from './mail-ascii-control';
 /** Inert P2 operator-resolution contract; not a controller or database adapter. */
 export interface ResolutionActorContext {
   actorId: string;
@@ -38,13 +39,13 @@ export type ResolutionResult =
 
 function identity(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 36 &&
-    value === value.trim() && !/[\u0000-\u001f\u007f\ud800-\udfff]/u.test(value);
+    value === value.trim() && !hasAsciiControl(value) && !/[\ud800-\udfff]/u.test(value);
 }
 function validRevision(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value < 2_147_483_647;
 }
 function cleanReason(value: unknown): string | null {
-  if (typeof value !== 'string' || /[\u0000-\u001f\u007f\ud800-\udfff]/u.test(value)) return null;
+  if (typeof value !== 'string' || hasAsciiControl(value) || /[\ud800-\udfff]/u.test(value)) return null;
   const reason = value.trim();
   return reason.length > 0 && reason.length <= 500 ? reason : null;
 }

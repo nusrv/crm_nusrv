@@ -474,7 +474,7 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
           canonicalFolder: folder, connectionGeneration: currentGeneration, uidValidity: 900n, uid }),
           uid, internalDate: null, messageIdHeader: null, parseFailed: false, deliveryStatus: 'UNKNOWN' as const }],
       });
-      await commitSentObservationPreview(prisma as never, row, makePreview(generation, 11n));
+      await commitSentObservationPreview(prisma, row, makePreview(generation, 11n));
       await prisma.mailConfiguration.update({ where: { id: configurationId }, data: { imapUsername: 'repointed@example.test' } });
       await prisma.mailConfiguration.update({ where: { id: configurationId }, data: { imapUsername: config.imapUsername } });
       expect(await prisma.mailSentConnectionEpoch.findUnique({ where: { mailConfigurationId: configurationId } })).toBeNull();
@@ -489,7 +489,7 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
         folderIdentityKey: row.folderIdentityKey, sourceKind: 'SENT', syncEnabled: true, capability: 'AVAILABLE',
         uidValidity: 900n, lastUid: 10n,
       } });
-      await commitSentObservationPreview(prisma as never, fresh, makePreview(nextGeneration, 11n));
+      await commitSentObservationPreview(prisma, fresh, makePreview(nextGeneration, 11n));
       expect(await prisma.mailSentObservation.count({ where: { folderCheckpointId: { in: [row.id, fresh.id] } } })).toBe(2);
     } finally {
       await prisma.mailSentConnectionEpoch.deleteMany({ where: { mailConfigurationId: configurationId } });

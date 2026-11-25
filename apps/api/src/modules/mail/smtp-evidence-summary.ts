@@ -1,3 +1,4 @@
+import { hasAsciiControl } from './mail-ascii-control';
 /** Read-only summary of the existing, server-written SMTP audit records.
  * SMTP acceptance is not recipient delivery, and does not authorize a resend.
  * A truncated or contradictory history is never upgraded to confirmed evidence. */
@@ -8,7 +9,7 @@ type Summary = { state: 'SMTP_ACCEPTED' | 'MOCK_ONLY' | 'UNVERIFIED' | 'REVIEW_R
 const object = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const identity = (value: unknown): value is string => typeof value === 'string' && value.length > 0 &&
-  value.length <= 500 && value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
+  value.length <= 500 && value === value.trim() && !hasAsciiControl(value);
 
 export function summarizeSmtpEvidence(subject: SubjectType, events: readonly Event[], truncated = false): Summary {
   const result = (state: Summary['state'], responseCode: number | null = null): Summary => ({ state, responseCode });

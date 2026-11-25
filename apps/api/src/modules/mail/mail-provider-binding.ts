@@ -1,3 +1,4 @@
+import { hasAsciiControl } from './mail-ascii-control';
 import { createHash } from 'node:crypto';
 
 /** Future durable binding, not the mutable MailConfiguration.updatedAt. */
@@ -24,7 +25,7 @@ export type ProviderBindingResult =
 
 function exactIdentity(value: unknown, limit: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= limit &&
-    value === value.trim() && !/[\u0000-\u001f\u007f\ud800-\udfff]/u.test(value);
+    value === value.trim() && !hasAsciiControl(value) && !/[\ud800-\udfff]/u.test(value);
 }
 
 function validAccount(value: VerifiedProviderAccount | null): value is VerifiedProviderAccount {

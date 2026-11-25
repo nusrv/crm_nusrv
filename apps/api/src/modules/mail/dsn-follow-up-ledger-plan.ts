@@ -1,3 +1,4 @@
+import { hasAsciiControl } from './mail-ascii-control';
 import { createHash } from 'node:crypto';
 import type { planDsnFollowUp, VerifiedDsnProvenance } from './dsn-follow-up-plan';
 
@@ -33,7 +34,7 @@ export type DsnLedgerDecision =
 
 function identity(value: unknown, maximum: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= maximum &&
-    value === value.trim() && !/[\u0000-\u001f\u007f]/u.test(value) &&
+    value === value.trim() && !hasAsciiControl(value) &&
     !/[\ud800-\udfff]/u.test(value);
 }
 

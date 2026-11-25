@@ -1,3 +1,4 @@
+import { hasAsciiControl } from './mail-ascii-control';
 import { prepareDsnLedgerEntry, decideDsnLedgerWrite, type DsnLedgerEntry, type ExistingDsnFollowUp } from './dsn-follow-up-ledger-plan';
 import { resolveCurrentProviderBinding, type ProviderBindingSnapshot, type VerifiedProviderAccount } from './mail-provider-binding';
 import type { VerifiedDsnProvenance } from './dsn-follow-up-plan';
@@ -44,7 +45,7 @@ export type DsnEvidenceCommitResult =
 
 function validId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 36 &&
-    value === value.trim() && !/[\u0000-\u001f\u007f\ud800-\udfff]/u.test(value);
+    value === value.trim() && !hasAsciiControl(value) && !/[\ud800-\udfff]/u.test(value);
 }
 
 /** Unregistered coordinator. Does not authenticate a provider, modify delivery, or send anything.

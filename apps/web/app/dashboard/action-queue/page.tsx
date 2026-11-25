@@ -46,8 +46,10 @@ export default function ActionQueuePage() {
   }, [admin, lane, page, status]);
 
   useEffect(() => {
-    void load();
-    return () => { request.current += 1; };
+    let active = true;
+    // Start the asynchronous read after effect setup; cancelled effects must not start a request.
+    void Promise.resolve().then(() => { if (active) return load(); });
+    return () => { active = false; request.current += 1; };
   }, [load]);
 
   async function closeTask() {
