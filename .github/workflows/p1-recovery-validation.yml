@@ -78,6 +78,13 @@ jobs:
             src/modules/mail/integration-health.service.spec.ts \
             src/modules/mail/integration-health.controller.spec.ts \
             src/modules/communications/operator-reply.service.spec.ts
+      - name: Verify Chrome is available for real browser restart and Next UI checks
+        run: |
+          chrome="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          test -x "$chrome"
+          echo "P0_TEST_CHROME=$chrome" >> "$GITHUB_ENV"
+          echo "P0_TEST_PROCESS_RESTART=1" >> "$GITHUB_ENV"
+          echo "P0_TEST_NEXT_UI=1" >> "$GITHUB_ENV"
       - name: Complete API Jest regression (explicitly excludes live DB fixtures)
         run: npm run test -w @cp/api -- --testPathIgnorePatterns='mariadb.*live\.spec\.ts
       - name: P0 invariant Node tests (source only)
@@ -111,7 +118,7 @@ jobs:
       - name: Workspace ESLint checks
         run: npm run lint
       - name: Workspace production build (no deployment)
-        run: npm run build
+        run: NODE_ENV=production npm run build
 
 
       - name: Deployment maintenance policy (no database)
@@ -168,3 +175,6 @@ jobs:
 
       - name: UTC cutover contracts (no database)
         run: node --experimental-strip-types --test apps/web/lib/mail-cutover.test.mjs
+
+      - name: Manual QR structural contracts (no database)
+        run: node --import tsx --test apps/api/src/modules/invoices/manual-qr.test.mjs
