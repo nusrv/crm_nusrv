@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   disposable-db:
-    name: Fresh schema migration and existing MariaDB integration (disposable only)
+    name: Fresh schema migration and focused P1/P2 checks (disposable only)
     runs-on: ubuntu-latest
     timeout-minutes: 22
     services:
@@ -74,6 +74,47 @@ jobs:
       - name: P2 independent folder cursor guard on disposable MariaDB
         working-directory: apps/api
         run: node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --runInBand prisma/p2-evidence-folder-mariadb-live.spec.ts
-      - name: Existing historical MariaDB integration regression (isolated fixtures, destructive)
+
+  legacy-db:
+    name: Historical MariaDB / ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        suite: [core, phase2, phase21, subscription_backfill, subscription_sequence_delete, phase3a, phase3b, phase3c, phase3d, phase3e]
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: ci-legacy-throwaway-root
+          MARIADB_DATABASE: nusrv_legacy_${{ matrix.suite }}_test
+          MARIADB_USER: nusrv_legacy
+          MARIADB_PASSWORD: ci-legacy-throwaway-user
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      DATABASE_URL: mysql://nusrv_legacy:ci-legacy-throwaway-user@127.0.0.1:3306/nusrv_legacy_${{ matrix.suite }}_test
+      MARIADB_TEST_DATABASE_URL: mysql://nusrv_legacy:ci-legacy-throwaway-user@127.0.0.1:3306/nusrv_legacy_${{ matrix.suite }}_test
+      SMTP_MODE: none
+      IMAP_MODE: none
+      AI_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Generate Prisma client
+        run: npm run db:generate
+      - name: Run isolated historical fixture
         working-directory: apps/api
-        run: node scripts/run-mariadb-integration.mjs
+        run: node scripts/run-mariadb-integration.mjs --suite ${{ matrix.suite }}
