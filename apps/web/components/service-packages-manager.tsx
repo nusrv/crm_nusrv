@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -37,6 +38,7 @@ export function ServicePackagesManager() {
   const [types, setTypes] = useState<ServiceType[]>([]);
   const [editing, setEditing] = useState<ServicePackage | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const saveState = useModalSave();
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -66,8 +68,9 @@ export function ServicePackagesManager() {
         return { termMonths: Number(months), currency, standardSellingPrice: price };
       });
     const specifications = value('specifications');
+    if (!saveState.begin()) return;
     try {
-      await apiRequest(`/service-packages${editing ? `/${editing.id}` : ''}`, {
+      const saved = await apiRequest<ServicePackage>(`/service-packages${editing ? `/${editing.id}` : ''}`, {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify({
           ...(editing ? {} : { code: value('code') }),
@@ -80,13 +83,15 @@ export function ServicePackagesManager() {
           ...(editing ? { active: value('active') === 'true' } : {}),
         }),
       });
-      setFormOpen(false);
-      setEditing(null);
+      setEditing(saved);
+      saveState.markSaved();
       setMessage('Package catalog entry saved and audited.');
       setError('');
-      await load();
+      await load().catch(() => setError('Saved successfully, but the list could not be refreshed.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -108,7 +113,7 @@ export function ServicePackagesManager() {
             className="button-primary"
             onClick={() => {
               setEditing(null);
-              setFormOpen(true);
+              setError(''); setMessage(''); setFormOpen(true);
             }}
             type="button"
           >
@@ -119,14 +124,15 @@ export function ServicePackagesManager() {
       {formOpen && (
         <Modal
           maxWidth="56rem"
-          onClose={() => setFormOpen(false)}
+          closeDisabled={saveState.busy}
+          onClose={() => { if (!saveState.busy) setFormOpen(false); }}
           title={editing ? `Edit ${editing.code}` : 'Create package'}
         >
           <Notice message={error} />
           <Notice message={message} tone="success" />
           <form
             className="form-grid"
-            key={editing?.id ?? 'new'}
+            key={`${editing?.id ?? 'new'}:${saveState.revision}`}
             onSubmit={(event) => void save(event)}
           >
             {!editing && <Field label="Code" name="code" required />}
@@ -190,10 +196,10 @@ export function ServicePackagesManager() {
               />
             </label>
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
+              <button className="button-primary" disabled={saveState.busy} type="submit">
                 Save package
               </button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+              <button className="button-secondary" disabled={saveState.busy} onClick={() => setFormOpen(false)} type="button">
                 Cancel
               </button>
             </div>
@@ -244,7 +250,7 @@ export function ServicePackagesManager() {
                         className="button-small"
                         onClick={() => {
                           setEditing(item);
-                          setFormOpen(true);
+                          setError(''); setMessage(''); setFormOpen(true);
                         }}
                         type="button"
                       >

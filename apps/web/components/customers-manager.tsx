@@ -6,6 +6,7 @@ import { apiRequest, type PageResult } from '../lib/api';
 import { customerDisplayName, customerSecondaryName } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -78,6 +79,7 @@ export function CustomersManager() {
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const saveState = useModalSave();
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -113,7 +115,7 @@ export function CustomersManager() {
     const target = customers?.data.find((item) => item.id === pendingEditId);
     if (target) {
       setEditing(target);
-      setFormOpen(true);
+      setError(''); setSuccess(''); setFormOpen(true);
       setPendingEditId('');
       return;
     }
@@ -122,7 +124,7 @@ export function CustomersManager() {
     void apiRequest<Customer>(`/customers/${pendingEditId}`)
       .then((customer) => {
         setEditing(customer);
-        setFormOpen(true);
+        setError(''); setSuccess(''); setFormOpen(true);
       })
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'))
       .finally(() => setPendingEditId(''));
@@ -130,12 +132,12 @@ export function CustomersManager() {
 
   function openCreate() {
     setEditing(null);
-    setFormOpen(true);
+    setError(''); setSuccess(''); setFormOpen(true);
   }
 
   function openEdit(customer: Customer) {
     setEditing(customer);
-    setFormOpen(true);
+    setError(''); setSuccess(''); setFormOpen(true);
   }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
@@ -170,17 +172,20 @@ export function CustomersManager() {
       ...(editing ? {} : { status: value('status') }),
       notes: value('notes') || undefined,
     };
+    if (!saveState.begin()) return;
     try {
-      await apiRequest(`/customers${editing ? `/${editing.id}` : ''}`, {
+      const saved = await apiRequest<Customer>(`/customers${editing ? `/${editing.id}` : ''}`, {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
       setSuccess(editing ? 'Customer updated and audited.' : 'Customer created and audited.');
-      setFormOpen(false);
-      setEditing(null);
-      await load();
+      setEditing(saved);
+      saveState.markSaved();
+      await load().catch(() => setError('Saved successfully, but the list could not be refreshed.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -323,7 +328,8 @@ export function CustomersManager() {
       )}
       {formOpen && (
         <Modal
-          onClose={() => setFormOpen(false)}
+          closeDisabled={saveState.busy}
+          onClose={() => { if (!saveState.busy) setFormOpen(false); }}
           title={editing ? `Edit ${customerDisplayName(editing)}` : 'Create customer'}
         >
           <Notice message={error} />
@@ -336,7 +342,7 @@ export function CustomersManager() {
           )}
           <form
             className="form-grid"
-            key={editing?.id ?? 'new'}
+            key={`${editing?.id ?? 'new'}:${saveState.revision}`}
             onSubmit={(event) => void save(event)}
           >
             <Field label="Customer Name (English)" name="nameEn" value={String(defaults.nameEn)} />
@@ -422,10 +428,10 @@ export function CustomersManager() {
               <textarea defaultValue={String(defaults.notes)} name="notes" rows={3} />
             </label>
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
+              <button className="button-primary" disabled={saveState.busy} type="submit">
                 {editing ? 'Save changes' : 'Create customer'}
               </button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+              <button className="button-secondary" disabled={saveState.busy} onClick={() => setFormOpen(false)} type="button">
                 Cancel
               </button>
             </div>

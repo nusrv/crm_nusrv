@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -29,6 +30,7 @@ export function BillingEntitiesManager() {
   const [items, setItems] = useState<BillingEntity[]>([]);
   const [editing, setEditing] = useState<BillingEntity | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const saveState = useModalSave();
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -57,18 +59,21 @@ export function BillingEntitiesManager() {
       active: value('active') === 'true',
       bankDetails: value('bankDetails') || undefined,
     };
+    if (!saveState.begin()) return;
     try {
-      await apiRequest(`/billing-entities${editing ? `/${editing.id}` : ''}`, {
+      const saved = await apiRequest<BillingEntity>(`/billing-entities${editing ? `/${editing.id}` : ''}`, {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
-      setFormOpen(false);
-      setEditing(null);
+      setEditing(saved);
+      saveState.markSaved();
       setMessage('Billing Entity saved and audited.');
       setError('');
-      await load();
+      await load().catch(() => setError('Saved successfully, but the list could not be refreshed.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -90,7 +95,7 @@ export function BillingEntitiesManager() {
             className="button-primary"
             onClick={() => {
               setEditing(null);
-              setFormOpen(true);
+              setError(''); setMessage(''); setFormOpen(true);
             }}
             type="button"
           >
@@ -108,24 +113,25 @@ export function BillingEntitiesManager() {
         ))}
       {formOpen && (
         <Modal
-          onClose={() => setFormOpen(false)}
-          title={editing ? `Edit ${editing.code}` : 'Create Billing Entity'}
+          closeDisabled={saveState.busy}
+          onClose={() => { if (!saveState.busy) setFormOpen(false); }}
+          title={editing ? `Edit ${editing.name}` : 'Create Billing Entity'}
         >
           <Notice message={error} />
           <Notice message={message} tone="success" />
           <form
             className="form-grid"
-            key={editing?.id ?? 'new'}
+            key={`${editing?.id ?? 'new'}:${saveState.revision}`}
             onSubmit={(event) => void save(event)}
           >
-            {!editing && <Field label="System code" name="code" required />}
-            {!editing && (
-              <Field
-                label="Customer code prefix (e.g. FF, NS)"
-                name="customerCodePrefix"
-                required
-              />
-            )}
+            {!editing && <details className="field-wide" open>
+              <summary>Advanced / internal identifiers (required once)</summary>
+              <p className="muted text-sm">The system code identifies the issuer internally. The prefix is used to allocate customer codes.</p>
+              <div className="form-grid mt-2">
+                <Field label="System code" name="code" required />
+                <Field label="Customer code prefix (e.g. FF, NS)" name="customerCodePrefix" required />
+              </div>
+            </details>}
             <label>
               Issuer type
               <select name="issuerType" defaultValue={editing?.issuerType ?? 'COMPANY'}>
@@ -171,10 +177,10 @@ export function BillingEntitiesManager() {
               <textarea name="bankDetails" rows={4} />
             </label>
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
+              <button className="button-primary" disabled={saveState.busy} type="submit">
                 Save
               </button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+              <button className="button-secondary" disabled={saveState.busy} onClick={() => setFormOpen(false)} type="button">
                 Cancel
               </button>
             </div>
@@ -213,7 +219,7 @@ export function BillingEntitiesManager() {
                       className="button-small"
                       onClick={() => {
                         setEditing(item);
-                        setFormOpen(true);
+                        setError(''); setMessage(''); setFormOpen(true);
                       }}
                       type="button"
                     >
