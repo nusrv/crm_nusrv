@@ -38,13 +38,24 @@ export class MailActionQueueController {
     const selected = lane ?? 'FOLLOW_UP';
     const selectedStatus = status ?? 'OPEN';
     const rawPage = page ?? '1';
-    if ((selected !== 'FOLLOW_UP' && selected !== 'UNCERTAIN_COMMUNICATION' && selected !== 'UNCERTAIN_REPLY') ||
+    if ((selected !== 'FOLLOW_UP' && selected !== 'REVIEW_ONLY' && selected !== 'UNCERTAIN_COMMUNICATION' && selected !== 'UNCERTAIN_REPLY') ||
         (selectedStatus !== 'OPEN' && selectedStatus !== 'RESOLVED') ||
         typeof rawPage !== 'string' || !/^[1-9][0-9]{0,2}$/.test(rawPage) || Number(rawPage) > 400) {
       throw new BadRequestException('Invalid action queue filter.');
     }
     const pagination = { skip: (Number(rawPage) - 1) * PAGE_SIZE, take: PAGE_SIZE + 1,
       orderBy: [{ createdAt: 'desc' as const }, { id: 'desc' as const }] };
+    if (selected === 'REVIEW_ONLY') {
+      const rows = await this.prisma.mailDsnReview.findMany({ ...pagination, select: {
+        id: true, subject: true, fromAddress: true, reason: true, folder: true,
+        sourceSha256: true, bodyText: true, occurredAt: true, createdAt: true, uid: true, uidValidity: true,
+        mailConfiguration: { select: { label: true } },
+      } });
+      return { enabled: true, items: rows.slice(0, PAGE_SIZE).map(row => ({
+        ...row, uid: row.uid.toString(), uidValidity: row.uidValidity.toString(),
+        recipient: row.fromAddress, status: 'REVIEW_ONLY',
+      })), hasMore: rows.length > PAGE_SIZE };
+    }
     if (selected === 'FOLLOW_UP') {
       const rows = await this.prisma.mailDsnFollowUp.findMany({
         ...pagination, where: { status: selectedStatus }, select: {

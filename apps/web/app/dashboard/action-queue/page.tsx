@@ -7,8 +7,9 @@ import { PageHeading } from '../../../components/page-heading';
 import { Notice } from '../../../components/notice';
 import { apiRequest } from '../../../lib/api';
 
-type Lane = 'FOLLOW_UP' | 'UNCERTAIN_COMMUNICATION' | 'UNCERTAIN_REPLY';
+type Lane = 'REVIEW_ONLY' | 'FOLLOW_UP' | 'UNCERTAIN_COMMUNICATION' | 'UNCERTAIN_REPLY';
 type QueueItem = {
+  subject?: string; reason?: string; folder?: string; sourceSha256?: string; bodyText?: string; uid?: string; uidValidity?: string;
   id: string; recipient: string; status: string; createdAt: string; lastAttemptAt?: string | null;
   subjectType?: string; subjectId?: string; attemptId?: string; originalMessageId?: string; revision?: number;
   resolutionReason?: string | null; resolvedById?: string | null; resolvedAt?: string | null;
@@ -71,6 +72,7 @@ export default function ActionQueuePage() {
           <select aria-label="Evidence lane" disabled={busy || selection !== null} value={lane}
             onChange={e => { setResult(null); setLane(e.target.value as Lane); setPage(1); }}>
             <option value="FOLLOW_UP">Corroborated DSN follow-ups</option>
+            <option value="REVIEW_ONLY">Untrusted transport reports</option>
             <option value="UNCERTAIN_COMMUNICATION">Uncertain renewal communication</option>
             <option value="UNCERTAIN_REPLY">Uncertain operator replies</option>
           </select>
@@ -80,11 +82,15 @@ export default function ActionQueuePage() {
           </select>}
           <button type="button" className="button-secondary" disabled={busy || selection !== null} onClick={() => void load()}>Refresh</button>
         </div>
-        {lane !== 'FOLLOW_UP' && <p className="muted mt-3">An uncertain attempt is not proof of delivery or failure. Review its original communication before using the separate warned manual resend workflow.</p>}
+        {lane === 'REVIEW_ONLY' && <p className="muted mt-3">Untrusted evidence only. Review the original mailbox if necessary; these reports do not prove delivery or failure.</p>}
+        {lane !== 'FOLLOW_UP' && lane !== 'REVIEW_ONLY' && <p className="muted mt-3">An uncertain attempt is not proof of delivery or failure. Review its original communication before using the separate warned manual resend workflow.</p>}
         <div className="table-wrap mt-4"><table className="data-table">
           <thead><tr><th>Recipient / recorded identity</th><th>Evidence / status</th><th>Action</th></tr></thead>
           <tbody>{result?.items.map(item => <tr key={item.id}>
             <td><strong>{item.recipient}</strong><div className="muted text-xs">{item.mailConfiguration?.label ?? item.id}</div>
+              {item.subject && <div>{item.subject}</div>}
+              {item.reason && <div>{item.reason} · {item.folder} · UID {item.uidValidity}/{item.uid}</div>}
+              {item.bodyText !== undefined && <details><summary>Untrusted text</summary><pre className="whitespace-pre-wrap break-all">{item.bodyText}</pre><div className="text-xs break-all">Fetched bytes SHA-256: {item.sourceSha256}</div></details>}
               {item.subjectId && <div className="muted text-xs">{item.subjectType}: {item.subjectId}</div>}
               {item.attemptId && <div className="muted text-xs">Attempt: {item.attemptId}</div>}
               {item.originalMessageId && <div className="muted text-xs break-all">{item.originalMessageId}</div>}
