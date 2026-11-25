@@ -30,6 +30,7 @@ export function SentObservationControls({ mailboxId }: { mailboxId: string }) {
   }
   const labels: Record<string, string> = {
     BLOCKED_BY_DEPLOYMENT: 'Not released for this deployment',
+    PAUSED_FOR_MAINTENANCE: 'Paused for deployment maintenance',
     DISABLED_OR_NOT_CONFIGURED: 'Requires enabled, secure, real IMAP',
     BASELINE_REQUIRED: 'Awaiting explicit activation',
     OBSERVING: 'Observation configured (not delivery proof)',
@@ -45,7 +46,7 @@ export function SentObservationControls({ mailboxId }: { mailboxId: string }) {
         <label className="flex items-start gap-2"><input type="checkbox" checked={confirmed} disabled={busy} onChange={e => setConfirmed(e.target.checked)} />Start with future messages only; do not import historical Sent mail.</label>
         <button type="button" className="button-small" disabled={busy || !confirmed} onClick={() => void act('activate')}>Activate Sent observation</button>
       </>}
-      {state.state === 'OBSERVING' && <button type="button" className="button-small" disabled={busy} onClick={() => void act('stop')}>Stop observation (retain history)</button>}
+      {(state.state === 'OBSERVING' || state.state === 'PAUSED_FOR_MAINTENANCE') && <button type="button" className="button-small" disabled={busy} onClick={() => void act('stop')}>Stop observation (retain history)</button>}
       <p className="muted">A Sent copy is not proof of delivery, acceptance or bounce.</p>
     </div>}
     {message && <p role="status">{message}</p>}

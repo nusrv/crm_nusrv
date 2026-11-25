@@ -102,6 +102,8 @@ jobs:
         run: npm run build
 
 
+      - name: Deployment maintenance policy (no database)
+        run: node --experimental-strip-types --test apps/api/src/modules/mail/mail-worker-maintenance.test.mjs
       - name: OAuth cache identity contracts (no database)
         run: node --experimental-strip-types --test apps/api/src/modules/mail/oauth-cache-key.test.mjs
       - name: Sent generation identity contracts (no database)

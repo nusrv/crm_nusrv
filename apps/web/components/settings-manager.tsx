@@ -62,7 +62,7 @@ interface MailChannelStatus {
   configured: boolean;
   operationallyEnabled: boolean;
   deploymentAdapter: 'REAL' | 'MOCK';
-  effective: 'READY' | 'NOT_CONFIGURED' | 'DISABLED' | 'BLOCKED_BY_DEPLOYMENT';
+  effective: 'READY' | 'NOT_CONFIGURED' | 'DISABLED' | 'BLOCKED_BY_DEPLOYMENT' | 'PAUSED_FOR_MAINTENANCE';
 }
 
 interface HealthOverview {
@@ -93,6 +93,7 @@ function aiProviderLabel(id: string): string {
 
 const EFFECTIVE_STATUS_LABEL: Record<MailChannelStatus['effective'], string> = {
   READY: 'Ready',
+  PAUSED_FOR_MAINTENANCE: 'Paused for deployment maintenance',
   NOT_CONFIGURED: 'Not configured',
   DISABLED: 'Disabled in Settings',
   BLOCKED_BY_DEPLOYMENT: 'BLOCKED — deployment has no real adapter',
@@ -707,7 +708,7 @@ function IntegrationHealthSection() {
             <td>{overview.ai.health?.status ?? 'Never checked'}</td>
             <td>{overview.ai.health ? new Date(overview.ai.health.checkedAt).toLocaleString() : '—'}</td>
             <td>{overview.ai.health?.message ?? '—'}</td>
-            <td className="muted">No deployment-capability gate — see Settings → AI.</td>
+            <td className="muted">Deferred — operational AI processing is inactive.</td>
           </tr>
         </tbody>
       </table>

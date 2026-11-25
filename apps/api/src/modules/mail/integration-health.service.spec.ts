@@ -62,6 +62,22 @@ describe('IntegrationHealthService.getOverview — Phase 3.1 §3 effective statu
     expect(overview.mail[0]!.imapStatus.effective).toBe('READY');
   });
 
+  it('reports SMTP and IMAP credential readiness independently', async () => {
+    const { service } = harness({ configRow: baseConfigRow({ imapCredentialsCiphertext: null }), configValues: { SMTP_MODE: 'production', IMAP_MODE: 'real' } });
+    const overview = await service.getOverview();
+    expect(overview.mail[0]!.smtpStatus.effective).toBe('READY');
+    expect(overview.mail[0]!.imapStatus.effective).toBe('NOT_CONFIGURED');
+  });
+  it('reports maintenance pause rather than misleading readiness', async () => {
+    const { service } = harness({ configValues: { SMTP_MODE: 'production', IMAP_MODE: 'real', MAIL_WORKERS_PAUSED: 'true', P2_SENT_OBSERVATION_ENABLED: 'true' } });
+    const overview = await service.getOverview();
+    expect(overview.mail[0]!.smtpStatus.effective).toBe('PAUSED_FOR_MAINTENANCE');
+    expect(overview.mail[0]!.imapStatus.effective).toBe('PAUSED_FOR_MAINTENANCE');
+    const rows = await service.getEvidenceSources();
+    expect(rows[0]!.inboundFolder).toBe('PAUSED_FOR_MAINTENANCE');
+    expect(rows[0]!.sentFolder).toBe('PAUSED_FOR_MAINTENANCE');
+  });
+
   it('regression §6.6/§6.7 — never reports READY when the deployment adapter is MOCK, even though DB config says fully enabled (no misleading readiness)', async () => {
     const { service } = harness({ configValues: { SMTP_MODE: 'mock', IMAP_MODE: 'mock' } });
     const overview = await service.getOverview();

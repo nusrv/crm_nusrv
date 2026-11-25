@@ -47,6 +47,7 @@ export class MailSentObservationService {
 
   async status(id: string) {
     if (!this.enabled()) return { enabled: false, state: 'BLOCKED_BY_DEPLOYMENT' };
+    if (mailWorkersPaused(this.config.get<string>('MAIL_WORKERS_PAUSED'))) return { enabled: true, state: 'PAUSED_FOR_MAINTENANCE' };
     const row = await this.prisma.mailConfiguration.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Mailbox not found.');
     if (!this.eligible(row)) return { enabled: true, state: 'DISABLED_OR_NOT_CONFIGURED' };
