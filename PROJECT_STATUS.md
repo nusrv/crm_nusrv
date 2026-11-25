@@ -955,3 +955,11 @@ CSS browser/PDF examples are single-page A4. See docs/multi-issuer-branding-veri
 Existing baseline dependency audit has five critical advisories requiring separate pre-production
 review; this pass adds none. Owner review remains required before push/deployment. No real JoFotara
 request occurred. Payment Receipt remains deferred without its source stamp/seal.
+
+
+## 2026-11-25 — continued release programming pass
+
+- Explicit Sent future-only baseline, bounded periodic observation and stop wired behind default-off P2_SENT_OBSERVATION_ENABLED. Local connection epoch and generation-scoped keys preserve history and fence settings A→B→A. ADMIN activation/stop audit and session recheck. No delivery inference from Sent. Independent provider account/event authentication remains unimplemented; do not claim confirmed-provider coverage or full release acceptance.
+- Operator labels distinguish dispatch from recipient delivery and official invoice recording from live JoFotara submission. Added identity and disposable database repoint regression coverage.
+- 16 isolated Node contracts passed; exact helper blobs matched, isolated UI TypeScript checks passed. Full workspace, browser and physical migration/worker tests remain pending.
+- Plesk runbook includes live preflight, old-worker freeze, database backup/restore, migration boundaries, destructive test isolation and default-off features. No deployment occurred.

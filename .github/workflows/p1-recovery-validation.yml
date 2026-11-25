@@ -102,5 +102,7 @@ jobs:
         run: npm run build
 
 
-      - name: Invoice creation selection policy (no database)
+      - name: Sent generation identity contracts (no database)
+        run: node --import tsx --test apps/api/src/modules/mail/mail-sent-source-identity.test.mjs
+      - name: Workspace UI policy contracts (no database)
         run: node --experimental-strip-types --test apps/web/lib/invoice-create-selection.test.mjs apps/web/lib/workspace-navigation.test.mjs apps/web/lib/workspace-status.test.mjs

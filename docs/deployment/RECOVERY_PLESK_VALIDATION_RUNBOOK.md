@@ -27,7 +27,7 @@ Use a clean shell and no reachable production services. Set only test values; re
 ```bash
 set -e
 export NODE_ENV=test SMTP_MODE=mock IMAP_MODE=mock AI_PROVIDER=mock
-export P2_ACTION_QUEUE_ENABLED=false P2_DSN_REVIEW_CAPTURE_ENABLED=false
+export P2_ACTION_QUEUE_ENABLED=false P2_DSN_REVIEW_CAPTURE_ENABLED=false P2_SENT_OBSERVATION_ENABLED=false
 unset MARIADB_TEST_DATABASE_URL MARIADB_TEST_SUITE_URLS
 unset MARIADB_PHASE4_TEST_DATABASE_URL MARIADB_BRANDING_TEST_DATABASE_URL
 export DATABASE_URL='mysql://example:example@127.0.0.1:3306/unconnected_ci'
@@ -76,12 +76,12 @@ Replace phase3c with the intended suite ID. Launcher preflights schema emptiness
 
 Use a separate restored copy of the current deployed database on a controlled test server, with non-production grants and no running old workers, not the fresh/legacy fixture databases. Inventory applied migration IDs and schema drift; verify backup and restore, before/after record counts and financial balances. Apply checked-in pending migrations only to the copy using migrate deploy. Verify constraints, triggers, receipts, invoices, QR history, renewal transitions and audit retention. Never use migrate dev, migrate reset, db push or unconditional seed on a populated target.
 
-Use isolated Redis and credentials for any subsequent app smoke test. Verify authenticated browser restart, logout, role changes, old-worker fencing and queues; disable all real outbound/inbound connectors until separate approval. Compare authenticated company invoice/receipt print to approved visual references. Keep both P2 gates off on the production environment until tests pass and the owner authorizes enabling them. User-facing resolution is ADMIN-only and never resends or changes renewal decisions.
+Use isolated Redis and credentials for any subsequent app smoke test. Verify authenticated browser restart, logout, role changes, old-worker fencing and queues; disable all real outbound/inbound connectors until separate approval. Compare authenticated company invoice/receipt print to approved visual references. Keep all three P2 gates off on the production environment until tests pass and the owner authorizes enabling them. User-facing resolution is ADMIN-only and never resends or changes renewal decisions.
 
 ## 6. Remaining provider/activation gates (not implemented by this runbook)
 
 - A real provider adapter must independently verify mailbox/account and exact message/recipient/attempt evidence. IMAP or DSN headers, SMTP acceptance and Sent presence alone are insufficient. Do not manufacture attestation from these fields.
-- Establish a verified provider binding generation and explicitly approved fresh folder baseline; old Sent cursor is not transferable after a mailbox repoint. Complete safe scheduling/polling and real provider-bound delivery-status transitions with duplicate/replay and old-worker fencing tests. The current DSN transaction/store is not registered as a provider polling worker.
+- Sent observation has a separate local connection generation, future-only ADMIN baseline, bounded worker, explicit stop and history retention. The local generation is NOT a verified provider account binding. Test TLS IMAP discovery, bounded search, rollover/repoint and worker races before enabling P2_SENT_OBSERVATION_ENABLED. The independent provider-authenticated DSN transaction/store is still not registered as a real provider polling worker; do not promote unverified evidence.
 - Review-only capture is bounded, gated, and not a complete MIME/provider assurance or a confirmed bounce. Confirm actual capture, cursor replay, configuration changes including ABA/repoint races, and rollback; never silently backfill or rewind a production cursor.
 - Individual/personal invoice reference and historical invoice association remain separately owner-gated. No invented personal template or historical inference.
 - Before any live deployment: report exact commit, source build/test results, fresh and populated upgrade results, each legacy suite, browser/print and provider evidence, backup/restore proof, worker fencing plan and owner approval. No live deployment is authorized here.
@@ -89,3 +89,21 @@ Use isolated Redis and credentials for any subsequent app smoke test. Verify aut
 ## Evidence available at handoff
 
 56 isolated Node contracts passed in the local Node 22.16 environment (including synthetic transaction ports, static SQL, binding/session/DSN and report-shape capture), plus 5 isolated launcher contracts. The new full workspace checks and physical MariaDB fixtures are staged, not executed at this head. No real mail, production database mutation, worker activation or main merge occurred.
+
+
+## 7. Owner-authorized release to crm.nusrv.com (only after source checks and production preflight)
+
+The owner intends to validate on the Plesk host. Destructive fixtures must never use live customer data. Test schemas and a restored upgrade copy may be hosted on the same server with independently verified database names, credentials and isolation.
+
+- Pin the exact recovery SHA in a separate release directory. Install locked packages, generate Prisma, validate schema, typecheck, test, lint and build before switching the live directory. No production credentials in source checks.
+- Identify actual Plesk process manager, Node and Redis configuration. Record deployed SHA and applied migration history. Preserve encrypted configuration and secrets securely. Obtain independently verified restorable backups, approved maintenance window and recovery plan.
+- Stop all old workers and scheduler producers, prevent supervisor restart, verify no active old consumers or SMTP operations, and stop writes before migration. Preserve queued, processing and uncertain mail metadata. Never purge queues or reset cursors.
+- Check production database identity, grants, migration history and drift read-only. Rehearse on the populated copy first. The Sent epoch migration creates a table, adds a column, replaces the composite unique index and adds an invalidation trigger; preserves existing rows. MariaDB DDL is not fully transactional: on partial failure inspect actual schema and recover, do not blindly re-run or mark migrations applied. Only approved `npm run db:migrate:deploy` is permitted on the verified production target. No seed, reset, schema push or destructive fixtures.
+- Keep the three P2 release flags false initially. Keep actual mail dispatch paused at the mailbox/worker boundary until verified cutover and explicit owner approval. Start new API/web, verify authentication, RBAC, customer/subscription, renewal, official invoice and receipt. Start new workers only after isolation and queue checks. Use designated test customers and mailboxes for live smoke tests.
+- Rollback requires pausing writers/consumers, checking migration effects, and restoring a verified compatible release or backup through the approved recovery plan. Never assume an old executable is schema compatible or replay mail automatically.
+- On a designated test mailbox, enable Sent only after source, database and browser checks pass. ADMIN opens Settings > Mail > Inspect Sent observation, confirms future-only, and activates. Verify secure real IMAP, unique server-flagged Sent folder and ESEARCH/IMAP4rev2 support. Test empty/new polls, stop, concurrent polls, UIDVALIDITY rollover, A→B→A settings change and explicit new baseline. A Sent copy remains UNKNOWN delivery.
+- Independent provider-confirmed delivery/hard-bounce integration remains open: an actual authorized provider source and account/attempt verification are needed. No authentication from MIME or IMAP login alone. The current Sent, review-only capture and action queue do not constitute that integration.
+
+## 8. Additional programming-pass source evidence
+
+At source checkpoint `ee87db500e70eba9eac959367099463e7e904279`, 16 independent Node 22.16 tests passed: invoice selection (5), navigation (4), status (4), Sent identity (3). Exact Git blob hashes matched. The local extension resolver was adjusted for the extensionless .util import before the final successful run; no production change. Strict isolated TypeScript checks passed for the three UI helpers. Full Jest, Prisma, MariaDB, browser and workspace checks remain unexecuted at this checkpoint. No actual provider access, mail send, database mutation or deployment occurred.
