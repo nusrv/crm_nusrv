@@ -1,4 +1,4 @@
-import { computeImapIdentityKey } from './imap-identity.util';
+import { sentSourceIdentity } from './mail-sent-source-identity';
 import { hasAsciiControl } from './mail-evidence-text';
 import { MAX_IMAP_UID } from './mailbox-reader';
 import { classifyFolderCursor, mailEvidenceFolderIdentityKey } from './mail-evidence-folder-identity';
@@ -104,7 +104,8 @@ export function prepareSentObservationWritePlan(
         (!(item.internalDate instanceof Date) || !Number.isFinite(item.internalDate.getTime()))) {
       return fail('invalid IMAP internal date');
     }
-    const expectedSourceIdentity = computeImapIdentityKey({
+    const expectedSourceIdentity = sentSourceIdentity({
+      connectionGeneration: checkpoint.connectionGeneration,
       mailConfigurationId: checkpoint.mailConfigurationId,
       canonicalFolder: checkpoint.folderName,
       uidValidity: checkpoint.uidValidity,

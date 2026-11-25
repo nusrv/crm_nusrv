@@ -1401,6 +1401,7 @@ model MailConfiguration {
   healthEvents              IntegrationHealthEvent[]
   operatorReplyOutbox       OperatorReplyOutbox[]
   evidenceFolderCheckpoints MailEvidenceFolderCheckpoint[]
+  sentConnectionEpoch       MailSentConnectionEpoch?
   providerEvidenceBindings  MailProviderEvidenceBinding[]
   dsnFollowUps              MailDsnFollowUp[]
   dsnReviews                MailDsnReview[]
@@ -1423,6 +1424,7 @@ model MailEvidenceFolderCheckpoint {
   mailConfigurationId String             @map("mail_configuration_id") @db.VarChar(36)
   folderName          String             @map("folder_name") @db.VarChar(255)
   folderIdentityKey   String             @map("folder_identity_key") @db.VarChar(67)
+  connectionGeneration String            @default("legacy") @map("connection_generation") @db.VarChar(36)
   sourceKind          String             @map("source_kind") @db.VarChar(24)
   syncEnabled         Boolean            @default(false) @map("sync_enabled")
   uidValidity         BigInt?            @map("uid_validity")
@@ -1437,7 +1439,7 @@ model MailEvidenceFolderCheckpoint {
   // P2.C: independent observational metadata; no delivery or customer decision.
   sentObservations    MailSentObservation[]
 
-  @@unique([mailConfigurationId, folderIdentityKey], map: "mail_evidence_folder_checkpoints_config_identity_uq")
+  @@unique([mailConfigurationId, folderIdentityKey, connectionGeneration], map: "mail_evidence_folder_checkpoints_config_identity_uq")
   @@index([mailConfigurationId, sourceKind], map: "mail_evidence_folder_checkpoints_config_kind_idx")
   @@index([syncEnabled], map: "mail_evidence_folder_checkpoints_sync_enabled_idx")
   @@map("mail_evidence_folder_checkpoints")
@@ -1913,4 +1915,13 @@ model MailDsnReview {
   mailConfiguration   MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "mail_dsn_reviews_config_fk")
   @@index([createdAt, id], map: "mail_dsn_reviews_created_idx")
   @@map("mail_dsn_reviews")
+}
+
+// Local connection fence only; never provider-authenticated delivery evidence.
+model MailSentConnectionEpoch {
+  mailConfigurationId String @id @map("mail_configuration_id") @db.VarChar(36)
+  generation String @db.VarChar(36)
+  mailConfiguration MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "mail_sent_connection_epochs_config_fk")
+
+  @@map("mail_sent_connection_epochs")
 }

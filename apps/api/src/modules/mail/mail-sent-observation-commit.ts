@@ -38,6 +38,11 @@ export async function commitSentObservationPreview(
     // serialize with this write, not race between reading `enabled` and CAS.
     // The stored FK/scope are checked below; the passed IDs are not trusted.
     await tx.$queryRaw`SELECT id FROM mail_configurations WHERE id = ${checkpoint.mailConfigurationId} FOR UPDATE`;
+    const generation = checkpoint.connectionGeneration ?? 'legacy';
+    if (generation !== 'legacy') {
+      const epoch = await tx.mailSentConnectionEpoch.findUnique({ where: { mailConfigurationId: checkpoint.mailConfigurationId } });
+      if (epoch?.generation !== generation) throw new ConflictException('Sent connection generation retired.');
+    }
     // Next lock the folder row. Competing Sent writers then observe the
     // winning cursor after waiting for this same lock.
     await tx.$queryRaw`SELECT id FROM mail_evidence_folder_checkpoints WHERE id = ${plan.folderCheckpointId} FOR UPDATE`;
@@ -46,7 +51,7 @@ export async function commitSentObservationPreview(
       include: { mailConfiguration: { select: { enabled: true } } },
     });
 
-    if (!actual || actual.uidValidity !== plan.expectedUidValidity ||
+    if (!actual || (actual.connectionGeneration ?? 'legacy') !== generation || actual.uidValidity !== plan.expectedUidValidity ||
         actual.lastUid !== plan.expectedLastUid ||
         actual.folderName !== checkpoint.folderName ||
         actual.folderIdentityKey !== checkpoint.folderIdentityKey ||
@@ -61,6 +66,7 @@ export async function commitSentObservationPreview(
     // proof of a trusted mailbox or cursor.
     const verifiedPlan = prepareSentObservationWritePlan({
       id: actual.id,
+      connectionGeneration: actual.connectionGeneration,
       mailConfigurationId: actual.mailConfigurationId,
       folderName: actual.folderName,
       folderIdentityKey: actual.folderIdentityKey,

@@ -1,4 +1,5 @@
-import { computeImapIdentityKey, canonicalizeImapFolder } from './imap-identity.util';
+import { canonicalizeImapFolder } from './imap-identity.util';
+import { sentSourceIdentity } from './mail-sent-source-identity';
 import { classifyFolderCursor, mailEvidenceFolderIdentityKey } from './mail-evidence-folder-identity';
 import { MAX_IMAP_UID, MAX_SENT_OBSERVATIONS, type FetchedMailboxMessage, type SentMailboxReader } from './mailbox-reader';
 
@@ -12,6 +13,7 @@ import { MAX_IMAP_UID, MAX_SENT_OBSERVATIONS, type FetchedMailboxMessage, type S
  */
 export interface SentFolderPreviewCheckpoint {
   mailConfigurationId: string;
+  connectionGeneration?: string;
   folderName: string;
   folderIdentityKey: string;
   sourceKind: string;
@@ -107,7 +109,8 @@ export async function previewSentFolderObservations(
 
   // No cursor update, no sender/recipient matching, no provider/DSN assertion.
   const observations: SentFolderObservation[] = messages.map((message) => ({
-    sourceIdentityKey: computeImapIdentityKey({
+    sourceIdentityKey: sentSourceIdentity({
+      connectionGeneration: checkpoint.connectionGeneration,
       mailConfigurationId: checkpoint.mailConfigurationId,
       canonicalFolder,
       uidValidity: checkpoint.uidValidity!,
