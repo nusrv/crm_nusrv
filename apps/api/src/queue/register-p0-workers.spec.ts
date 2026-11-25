@@ -53,6 +53,32 @@ describe('P0 worker startup gate', () => {
     expect(register).toHaveBeenCalledTimes(1);
   });
 
+  it('checks all enabled P2 evidence projections before registering consumers', async () => {
+    const statements: string[] = [];
+    const query = jest.fn((parts: TemplateStringsArray) => {
+      statements.push(parts.join(''));
+      return Promise.resolve([]);
+    });
+    const register = jest.fn(() => expect(statements).toHaveLength(8));
+    await registerP0Workers({ $queryRaw: query } as never, { register }, { sent: true, review: true });
+    expect(statements.slice(4)).toEqual([
+      expect.stringContaining('FROM mail_sent_connection_epochs LIMIT 0'),
+      expect.stringContaining('FROM mail_evidence_folder_checkpoints LIMIT 0'),
+      expect.stringContaining('FROM mail_sent_observations LIMIT 0'),
+      expect.stringContaining('FROM mail_dsn_reviews LIMIT 0'),
+    ]);
+    expect(register).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([5, 6, 7, 8])('blocks consumers when enabled P2 projection %i is missing', async (failure) => {
+    let queries = 0;
+    const query = jest.fn(() => ++queries === failure ? Promise.reject(new Error('missing evidence table')) : Promise.resolve([]));
+    const register = jest.fn();
+    await expect(registerP0Workers({ $queryRaw: query } as never, { register }, { sent: true, review: true }))
+      .rejects.toThrow('P2 worker schema check failed.');
+    expect(register).not.toHaveBeenCalled();
+  });
+
   it.each([1, 2, 3, 4])('does not attach any processors if projection %i fails', async (failure) => {
     let queries = 0;
     const query = jest.fn(() => ++queries === failure
