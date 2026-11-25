@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus } from '../lib/workspace-status';
+
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiRequest, type PageResult } from '../lib/api';
@@ -122,7 +124,7 @@ export function CommunicationsManager() {
                   </td>
                   <td>{new Date(thread.lastMessageAt).toLocaleString()}</td>
                   <td>
-                    <span className="status-pill">{thread.status}</span>
+                    <span className="status-pill">{workspaceStatus(thread.status)}</span>
                   </td>
                   <td>
                     {thread.requiresAttention ? (

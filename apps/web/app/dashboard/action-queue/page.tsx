@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus, mailDispatchStatus } from '../../../lib/workspace-status';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useControlPanel } from '../../../components/app-shell';
@@ -95,7 +97,7 @@ export default function ActionQueuePage() {
               {item.attemptId && <div className="muted text-xs">Attempt: {item.attemptId}</div>}
               {item.originalMessageId && <div className="muted text-xs break-all">{item.originalMessageId}</div>}
             </td>
-            <td>{item.status}<div className="muted text-xs">{new Date(item.lastAttemptAt ?? item.createdAt).toLocaleString()}</div>
+            <td>{lane === 'UNCERTAIN_COMMUNICATION' || lane === 'UNCERTAIN_REPLY' ? mailDispatchStatus(item.status, true) : workspaceStatus(item.status)}<div className="muted text-xs">{new Date(item.lastAttemptAt ?? item.createdAt).toLocaleString()}</div>
               {item._count && <div>{item._count.observations} observation(s)</div>}
               {item.observations?.map(o => <div className="muted text-xs" key={o.id}>{o.enhancedStatus} · {o.folder} · {new Date(o.createdAt).toLocaleString()}</div>)}
               {item.resolutionReason && <div>{item.resolutionReason}</div>}

@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus } from '../lib/workspace-status';
+
 import Link from 'next/link';
 import {
   readIssuerPresentation,
@@ -254,7 +256,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
       <PageHeading
         eyebrow="Human-controlled JoFotara invoicing"
         title={invoice.internalReference}
-        description={`${invoice.status} · ${invoice.customerCodeSnapshot} · ${invoice.sourceSubscription?.name ?? 'Independent invoice'}`}
+        description={`${workspaceStatus(invoice.status)} · ${invoice.customerCodeSnapshot} · ${invoice.sourceSubscription?.name ?? 'Independent invoice'}`}
         actions={
           <div className="no-print flex gap-2">
             <Link className="button-secondary" href="/dashboard/invoices">

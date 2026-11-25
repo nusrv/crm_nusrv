@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { mailDispatchStatus } from '../lib/workspace-status';
 import { apiRequest } from '../lib/api';
 
 interface Evidence {
@@ -59,6 +60,7 @@ export function OutboundEvidenceControls({ path, onChanged }: { path: string; on
       </button>
       {evidence && (
         <div className="space-y-2 text-sm">
+          <p>{mailDispatchStatus(evidence.status, evidence.smtpUncertain)}</p>
           <p>{evidence.attempts} attempted dispatches{evidence.lastError ? ` · ${evidence.lastError}` : ''}</p>
           {evidence.resendOfId && <p>Original outbox entry {evidence.resendOfId}</p>}
           <ul className="space-y-2">

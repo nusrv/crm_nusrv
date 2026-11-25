@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus } from '../lib/workspace-status';
+
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
 import type { CurrencyOption } from './currencies-manager';
@@ -211,7 +213,7 @@ export function SubscriptionsManager() {
             value={status}
           >
             <option value="">All statuses</option>
-            <option>ACTIVE</option>
+            <option value="ACTIVE">Active</option>
             <option>SUSPENDED</option>
             <option>CLOSED</option>
           </select>
@@ -357,7 +359,7 @@ export function SubscriptionsManager() {
                     <span className="muted">Cost {subscription.supplierCost ?? '—'}</span>
                   </td>
                   <td>{subscription.connections.length}</td>
-                  <td>{subscription.status}</td>
+                  <td>{workspaceStatus(subscription.status)}</td>
                   <td>
                     <button
                       className="button-small"
