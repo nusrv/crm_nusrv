@@ -102,6 +102,8 @@ jobs:
         run: npm run build
 
 
+      - name: OAuth cache identity contracts (no database)
+        run: node --experimental-strip-types --test apps/api/src/modules/mail/oauth-cache-key.test.mjs
       - name: Sent generation identity contracts (no database)
         run: node --import tsx --test apps/api/src/modules/mail/mail-sent-source-identity.test.mjs
       - name: Workspace UI policy contracts (no database)

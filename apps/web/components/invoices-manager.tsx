@@ -15,6 +15,7 @@ import { PageHeading } from './page-heading';
 export function InvoicesManager() {
   const { can } = useControlPanel();
   const [manualOpen, setManualOpen] = useState(false);
+  const [manualBusy, setManualBusy] = useState(false);
   const [result, setResult] = useState<PageResult<InvoiceView> | null>(null);
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
@@ -52,8 +53,9 @@ export function InvoicesManager() {
         </div>
       )}
       {manualOpen && (
-        <Modal title="Create Invoice" maxWidth="54rem" onClose={() => setManualOpen(false)}>
+        <Modal title="Create Invoice" maxWidth="54rem" closeDisabled={manualBusy} onClose={() => setManualOpen(false)}>
           <ManualInvoiceDraftForm
+            onBusyChange={setManualBusy}
             onCancel={() => setManualOpen(false)}
             onCreated={() => {
               void load().catch((cause: unknown) =>

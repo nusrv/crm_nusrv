@@ -43,9 +43,11 @@ function sourceLabel(row: SourceRow): string {
 export function ManualInvoiceDraftForm({
   onCancel,
   onCreated,
+  onBusyChange,
 }: {
   onCancel: () => void;
   onCreated: () => void;
+  onBusyChange: (busy: boolean) => void;
 }) {
   const [mode, setMode] = useState<InvoiceCreateMode>('SUBSCRIPTION');
   const [search, setSearch] = useState('');
@@ -79,7 +81,7 @@ export function ManualInvoiceDraftForm({
   }, []);
 
   const query = invoiceSourceQuery(mode, issuerId, search);
-  const sourceOptions = sourceResult?.query === query
+  const sourceOptions = sourceResult && sourceResult.query === query
     ? sourceResult.rows.filter(row => eligibleInvoiceSource(mode, issuerId, row)) : [];
   useEffect(() => {
     if (!query) return;
@@ -151,6 +153,7 @@ export function ManualInvoiceDraftForm({
     saving.current = true;
     try {
       setBusy(true);
+      onBusyChange(true);
       setError('');
       const created = await apiRequest<{ id: string }>(target.path, {
         method: 'POST',
@@ -162,6 +165,7 @@ export function ManualInvoiceDraftForm({
       setError(cause instanceof Error ? cause.message : 'Unable to create manual invoice draft.');
     } finally {
       setBusy(false);
+      onBusyChange(false);
       saving.current = false;
     }
   }

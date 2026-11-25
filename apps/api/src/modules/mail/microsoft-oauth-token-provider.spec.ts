@@ -93,6 +93,17 @@ describe('MicrosoftOAuthTokenProvider', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('requires a fresh token request on secret replacement even for the same tenant and client', async () => {
+    const provider = new MicrosoftOAuthTokenProvider();
+    const fetchImpl = jest.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'old', expires_in: 3600 }) } as Response)
+      .mockResolvedValueOnce({ ok: false, status: 401 } as Response);
+    provider.fetchImpl = fetchImpl;
+    await expect(provider.getAccessToken(CREDENTIALS)).resolves.toBe('old');
+    await expect(provider.getAccessToken({ ...CREDENTIALS, clientSecret: 'invalid-replacement' })).rejects.toThrow('status 401');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it('never includes the client secret or an access token in a thrown error when the token endpoint rejects the request', async () => {
     const fetchImpl = fakeFetchOnce({ ok: false, status: 401 });
     const provider = new MicrosoftOAuthTokenProvider();
