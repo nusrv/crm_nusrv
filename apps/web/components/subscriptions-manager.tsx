@@ -159,10 +159,10 @@ export function SubscriptionsManager() {
     setLockedCustomer(undefined);
   }
 
-  function handleSaved() {
-    closeForm();
+  function handleSaved(id: string) {
+    setEditingId(id);
     setMessage('Subscription saved and audited.');
-    void load();
+    void load().catch(() => setError('Subscription saved; refresh the list to see it.'));
   }
 
   function handleDeleted() {

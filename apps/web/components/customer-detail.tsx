@@ -8,6 +8,7 @@ import { customerCombinedLabel } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
 import { CustomerChannelsManager } from './customer-channels-manager';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 import { SubscriptionModal } from './subscription-modal';
@@ -65,6 +66,8 @@ export function CustomerDetail() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [contactFormOpen, setContactFormOpen] = useState(false);
+  const [contactSaved, setContactSaved] = useState(false);
+  const saveState = useModalSave();
   const [subscriptionModalOpen, setSubscriptionModalOpen] = useState(false);
   const [subscriptionModalId, setSubscriptionModalId] = useState<string | null>(null);
 
@@ -96,8 +99,10 @@ export function CustomerDetail() {
 
   async function addContact(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (contactSaved) return;
     const form = new FormData(event.currentTarget);
     const value = (name: string) => String(form.get(name) ?? '').trim();
+    if (!saveState.begin()) return;
     try {
       await apiRequest(`/customers/${customerId}/contacts`, {
         method: 'POST',
@@ -111,10 +116,12 @@ export function CustomerDetail() {
       });
       setSuccess('Customer contact saved and audited.');
       setError('');
-      setContactFormOpen(false);
-      await load();
+      setContactSaved(true);
+      await load().catch(() => setError('Contact saved; refresh the customer to see it.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Contact save failed.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -137,10 +144,13 @@ export function CustomerDetail() {
     }
   }
 
-  async function handleSubscriptionSaved() {
-    closeSubscriptionModal();
+  async function handleSubscriptionSaved(id: string) {
+    setSubscriptionModalId(id);
+    if (searchParams.get('newSubscription') === '1') {
+      router.replace(`/dashboard/customers/${customerId}`, { scroll: false });
+    }
     setSuccess('Subscription saved and audited.');
-    await load();
+    await load().catch(() => setError('Subscription saved; refresh the customer to see it.'));
   }
 
   async function handleSubscriptionDeleted() {
@@ -224,7 +234,7 @@ export function CustomerDetail() {
         <div className="mt-6 flex items-center justify-between gap-3">
           <h4 className="font-medium">Legacy combined contacts</h4>
           {canManage && (
-            <button className="button-small" onClick={() => setContactFormOpen(true)} type="button">
+            <button className="button-small" onClick={() => { setContactSaved(false); setSuccess(''); setError(''); setContactFormOpen(true); }} type="button">
               + Add contact
             </button>
           )}
@@ -247,10 +257,10 @@ export function CustomerDetail() {
           )}
         </div>
         {contactFormOpen && (
-          <Modal onClose={() => setContactFormOpen(false)} title="Add contact">
+          <Modal closeDisabled={saveState.busy} onClose={() => setContactFormOpen(false)} title="Add contact">
             <Notice message={error} />
             <Notice message={success} tone="success" />
-            <form className="form-grid" onSubmit={(event) => void addContact(event)}>
+            {!contactSaved && <form className="form-grid" onSubmit={(event) => void addContact(event)}>
               <label className="field">
                 <span>Contact role</span>
                 <select name="role">
@@ -272,18 +282,19 @@ export function CustomerDetail() {
                 </select>
               </label>
               <div className="field-wide flex gap-3">
-                <button className="button-primary" type="submit">
+                <button className="button-primary" disabled={saveState.busy} type="submit">
                   Add contact
                 </button>
                 <button
                   className="button-secondary"
+                  disabled={saveState.busy}
                   onClick={() => setContactFormOpen(false)}
                   type="button"
                 >
                   Cancel
                 </button>
               </div>
-            </form>
+            </form>}
           </Modal>
         )}
       </section>
@@ -323,7 +334,7 @@ export function CustomerDetail() {
           }}
           onClose={closeSubscriptionModal}
           onDeleted={() => void handleSubscriptionDeleted()}
-          onSaved={() => void handleSubscriptionSaved()}
+          onSaved={id => void handleSubscriptionSaved(id)}
           subscriptionId={subscriptionModalId}
         />
       )}

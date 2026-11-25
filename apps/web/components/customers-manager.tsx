@@ -9,6 +9,7 @@ import { Modal } from './modal';
 import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
+import { SubscriptionModal } from './subscription-modal';
 
 interface BillingEntity {
   id: string;
@@ -436,6 +437,8 @@ export function CustomersManager() {
               </button>
             </div>
           </form>
+          {editing && can('ADMIN', 'ACCOUNTANT') && <CustomerSubscriptionPanel key={editing.id} customer={editing}
+            onChanged={() => void load().catch(() => setError('Saved; refresh the customer list.'))} />}
         </Modal>
       )}
       <section className="panel">
@@ -696,4 +699,38 @@ function Pagination({
       </button>
     </div>
   );
+}
+
+
+// A child dialog stays inside the parent customer dialog. Closing it restores
+// the same mounted customer form, search, filters and list position.
+function CustomerSubscriptionPanel({ customer, onChanged }: { customer: Customer; onChanged: () => void }) {
+  const [rows, setRows] = useState<Array<{ id: string; name: string; subscriptionCode: string; status: string }> | null>(null);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+  const [id, setId] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const result = await apiRequest<PageResult<{ id: string; name: string; subscriptionCode: string; status: string }>>(
+      '/subscriptions?' + new URLSearchParams({ customerId: customer.id, pageSize: '50' }).toString());
+    setRows(result.data);
+  }, [customer.id]);
+  useEffect(() => { void load().catch(() => setError('Unable to load subscriptions.')); }, [load]);
+  function changed(savedId?: string) {
+    if (savedId) setId(savedId);
+    void load().catch(() => setError('Saved, but the subscription list could not be refreshed.'));
+    onChanged();
+  }
+  return <section className="mt-6 border-t border-[var(--line)] pt-5">
+    <h4 className="font-semibold">Subscriptions</h4>
+    <Notice message={error} />
+    <div className="mt-3 flex flex-wrap gap-2">
+      <button className="button-small" type="button" onClick={() => { setId(null); setOpen(true); }}>Add subscription</button>
+      {rows?.map(row => <button className="button-secondary" type="button" key={row.id}
+        onClick={() => { setId(row.id); setOpen(true); }}>{row.name} · {row.subscriptionCode}</button>)}
+    </div>
+    {rows?.length === 50 && <p className="muted text-sm mt-2">Showing the first 50 subscriptions. Open the customer details for the full list.</p>}
+    {open && <SubscriptionModal subscriptionId={id} lockedCustomer={customer}
+      onClose={() => { setOpen(false); setId(null); }}
+      onSaved={changed} onDeleted={() => { setOpen(false); setId(null); changed(); }} />}
+  </section>;
 }

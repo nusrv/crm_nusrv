@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 
 interface EmailAddress {
@@ -47,6 +48,7 @@ export function CustomerChannelsManager({
   const [emailFormOpen, setEmailFormOpen] = useState(false);
   const [editingPhone, setEditingPhone] = useState<PhoneNumber | null>(null);
   const [phoneFormOpen, setPhoneFormOpen] = useState(false);
+  const saveState = useModalSave();
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const load = useCallback(async () => {
@@ -63,8 +65,9 @@ export function CustomerChannelsManager({
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const value = (name: string) => String(form.get(name) ?? '').trim();
+    if (!saveState.begin()) return;
     try {
-      await apiRequest(
+      const saved = await apiRequest<EmailAddress>(
         `/customers/${customerId}/channels/emails${editingEmail ? `/${editingEmail.id}` : ''}`,
         {
           method: editingEmail ? 'PATCH' : 'POST',
@@ -83,11 +86,13 @@ export function CustomerChannelsManager({
           : 'Email address saved as an individual audited record.',
       );
       setError('');
-      setEditingEmail(null);
-      setEmailFormOpen(false);
-      await load();
+      setEditingEmail(saved);
+      saveState.markSaved();
+      await load().catch(() => setError('Saved successfully, but the contact list could not be refreshed.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to save email address.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -114,8 +119,9 @@ export function CustomerChannelsManager({
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const value = (name: string) => String(form.get(name) ?? '').trim();
+    if (!saveState.begin()) return;
     try {
-      await apiRequest(
+      const saved = await apiRequest<PhoneNumber>(
         `/customers/${customerId}/channels/phones${editingPhone ? `/${editingPhone.id}` : ''}`,
         {
           method: editingPhone ? 'PATCH' : 'POST',
@@ -136,11 +142,13 @@ export function CustomerChannelsManager({
           : 'E.164 phone number saved as an individual audited record.',
       );
       setError('');
-      setEditingPhone(null);
-      setPhoneFormOpen(false);
-      await load();
+      setEditingPhone(saved);
+      saveState.markSaved();
+      await load().catch(() => setError('Saved successfully, but the contact list could not be refreshed.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to save phone number.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -181,7 +189,7 @@ export function CustomerChannelsManager({
               className="button-small"
               onClick={() => {
                 setEditingEmail(null);
-                setEmailFormOpen(true);
+                setError(''); setMessage(''); setEmailFormOpen(true);
               }}
               type="button"
             >
@@ -210,7 +218,7 @@ export function CustomerChannelsManager({
                     className="button-small"
                     onClick={() => {
                       setEditingEmail(item);
-                      setEmailFormOpen(true);
+                      setError(''); setMessage(''); setEmailFormOpen(true);
                     }}
                     type="button"
                   >
@@ -233,6 +241,7 @@ export function CustomerChannelsManager({
         </div>
         {emailFormOpen && (
           <Modal
+            closeDisabled={saveState.busy}
             onClose={() => setEmailFormOpen(false)}
             title={editingEmail ? 'Edit email address' : 'Add email address'}
           >
@@ -240,7 +249,7 @@ export function CustomerChannelsManager({
             <Notice message={message} tone="success" />
             <form
               className="form-grid"
-              key={editingEmail?.id ?? 'new-email'}
+              key={`${editingEmail?.id ?? 'new-email'}:${saveState.revision}`}
               onSubmit={(event) => void saveEmail(event)}
             >
               <Field
@@ -259,9 +268,10 @@ export function CustomerChannelsManager({
               <Field label="Optional label" name="label" value={editingEmail?.label ?? undefined} />
               <PrimaryField value={editingEmail?.primary} />
               <div className="field-wide flex gap-3">
-                <Submit label={editingEmail ? 'Save changes' : 'Add email address'} />
+                <Submit disabled={saveState.busy} label={editingEmail ? 'Save changes' : 'Add email address'} />
                 <button
                   className="button-secondary"
+                  disabled={saveState.busy}
                   onClick={() => setEmailFormOpen(false)}
                   type="button"
                 >
@@ -280,7 +290,7 @@ export function CustomerChannelsManager({
               className="button-small"
               onClick={() => {
                 setEditingPhone(null);
-                setPhoneFormOpen(true);
+                setError(''); setMessage(''); setPhoneFormOpen(true);
               }}
               type="button"
             >
@@ -313,7 +323,7 @@ export function CustomerChannelsManager({
                     className="button-small"
                     onClick={() => {
                       setEditingPhone(item);
-                      setPhoneFormOpen(true);
+                      setError(''); setMessage(''); setPhoneFormOpen(true);
                     }}
                     type="button"
                   >
@@ -336,6 +346,7 @@ export function CustomerChannelsManager({
         </div>
         {phoneFormOpen && (
           <Modal
+            closeDisabled={saveState.busy}
             onClose={() => setPhoneFormOpen(false)}
             title={editingPhone ? 'Edit phone number' : 'Add phone number'}
           >
@@ -343,7 +354,7 @@ export function CustomerChannelsManager({
             <Notice message={message} tone="success" />
             <form
               className="form-grid"
-              key={editingPhone?.id ?? 'new-phone'}
+              key={`${editingPhone?.id ?? 'new-phone'}:${saveState.revision}`}
               onSubmit={(event) => void savePhone(event)}
             >
               <Field
@@ -386,9 +397,10 @@ export function CustomerChannelsManager({
               />
               <PrimaryField value={editingPhone?.primary} />
               <div className="field-wide flex gap-3">
-                <Submit label={editingPhone ? 'Save changes' : 'Add phone number'} />
+                <Submit disabled={saveState.busy} label={editingPhone ? 'Save changes' : 'Add phone number'} />
                 <button
                   className="button-secondary"
+                  disabled={saveState.busy}
                   onClick={() => setPhoneFormOpen(false)}
                   type="button"
                 >
@@ -454,10 +466,10 @@ function PrimaryField({ value }: { value?: boolean }) {
     </label>
   );
 }
-function Submit({ label }: { label: string }) {
+function Submit({ label, disabled }: { label: string; disabled: boolean }) {
   return (
     <div className="field-wide">
-      <button className="button-small" type="submit">
+      <button className="button-small" disabled={disabled} type="submit">
         {label}
       </button>
     </div>

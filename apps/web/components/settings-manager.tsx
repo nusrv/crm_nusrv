@@ -6,6 +6,7 @@ import { visibleSettingsGroups, canViewIntegrationSettings } from '../lib/worksp
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -175,6 +176,7 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
   const [items, setItems] = useState<MailSettingsRow[]>([]);
   const [editing, setEditing] = useState<MailSettingsRow | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const saveState = useModalSave();
   const [scopeType, setScopeType] = useState<'GLOBAL' | 'BILLING_ENTITY'>('GLOBAL');
   const [authMode, setAuthMode] = useState<'BASIC' | 'MICROSOFT_OAUTH2'>('BASIC');
   const [error, setError] = useState('');
@@ -192,19 +194,20 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
     setEditing(null);
     setScopeType('GLOBAL');
     setAuthMode('BASIC');
-    setFormOpen(true);
+    setMessage(''); setError(''); setFormOpen(true);
   }
   function openEdit(item: MailSettingsRow) {
     setEditing(item);
     setScopeType(item.scope === 'GLOBAL' ? 'GLOBAL' : 'BILLING_ENTITY');
     setAuthMode(item.authMode ?? 'BASIC');
-    setFormOpen(true);
+    setMessage(''); setError(''); setFormOpen(true);
   }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const value = (name: string) => String(form.get(name) ?? '').trim();
+    if (!saveState.begin()) return;
     try {
       const scope = scopeType === 'GLOBAL' ? 'GLOBAL' : `BILLING_ENTITY:${value('billingEntityId')}`;
       const body: Record<string, unknown> = {
@@ -235,17 +238,20 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
       }
       if (editing && form.get('clearCredentials') === 'on') body.clearCredentials = true;
 
-      await apiRequest(`/settings/mail${editing ? `/${editing.id}` : ''}`, {
+      const saved = await apiRequest<MailSettingsRow>(`/settings/mail${editing ? `/${editing.id}` : ''}`, {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
-      setFormOpen(false);
-      setEditing(null);
+      setEditing(saved);
+      setAuthMode(saved.authMode ?? 'BASIC');
+      saveState.markSaved();
       setError('');
       setMessage('Mail configuration saved. Credentials (if provided) were encrypted and the change was audited.');
-      await load();
+      await load().catch(() => setError('Settings saved, but the list could not be refreshed.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -283,9 +289,10 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
         </div>
       )}
       {formOpen && (
-        <Modal maxWidth="42rem" onClose={() => setFormOpen(false)} title={editing ? `Edit ${editing.label}` : 'Create Mail Configuration'}>
+        <Modal maxWidth="42rem" closeDisabled={saveState.busy} onClose={() => setFormOpen(false)} title={editing ? `Edit ${editing.label}` : 'Create Mail Configuration'}>
           <Notice message={error} />
-          <form className="form-grid" id="mail-settings-form" key={editing?.id ?? 'new'} onSubmit={(e) => void save(e)}>
+          <Notice message={message} tone="success" />
+          <form className="form-grid" id="mail-settings-form" key={`${editing?.id ?? 'new'}:${saveState.revision}`} onSubmit={(e) => void save(e)}>
             <h4 className="field-wide mt-2 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">General</h4>
             {!editing && (
               <label className="field">
@@ -427,10 +434,10 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
             </label>
 
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
+              <button className="button-primary" disabled={saveState.busy} type="submit">
                 Save
               </button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+              <button className="button-secondary" disabled={saveState.busy} onClick={() => setFormOpen(false)} type="button">
                 Cancel
               </button>
             </div>
@@ -504,6 +511,7 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
 function AiSettingsSection({ canManage }: { canManage: boolean }) {
   const [settings, setSettings] = useState<AiSettingsView | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const saveState = useModalSave();
   const [provider, setProvider] = useState('OPENAI');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -524,13 +532,14 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
     setModel(settings!.model ?? '');
     setApiKey('');
     setError('');
-    setFormOpen(true);
+    setMessage(''); setFormOpen(true);
   }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
     const threshold = String(fields.get('confidenceThreshold') ?? '');
+    if (!saveState.begin()) return;
     try {
       const updated = await apiRequest<AiSettingsView>('/settings/ai', {
         method: 'PATCH',
@@ -544,11 +553,13 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
       });
       setSettings(updated);
       setApiKey('');
-      setFormOpen(false);
+      saveState.markSaved();
       setError('');
       setMessage('AI settings saved. Processing remains inactive.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -557,9 +568,10 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
       {!formOpen && <Notice message={error} />}
       <Notice message={message} tone="success" />
       {formOpen && (
-        <Modal maxWidth="36rem" onClose={() => setFormOpen(false)} title="Edit AI Settings">
+        <Modal maxWidth="36rem" closeDisabled={saveState.busy} onClose={() => setFormOpen(false)} title="Edit AI Settings">
           <Notice message={error} />
-          <form className="form-grid" onSubmit={(event) => void save(event)}>
+          <Notice message={message} tone="success" />
+          <form className="form-grid" key={saveState.revision} onSubmit={(event) => void save(event)}>
             <label className="field">
               <span>Provider</span>
               <select
@@ -600,8 +612,8 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
               <input defaultValue={settings.confidenceThreshold ?? ''} max={1} min={0} name="confidenceThreshold" step={0.01} type="number" />
             </label>
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">Save</button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">Cancel</button>
+              <button className="button-primary" disabled={saveState.busy} type="submit">Save</button>
+              <button className="button-secondary" disabled={saveState.busy} onClick={() => setFormOpen(false)} type="button">Close</button>
             </div>
           </form>
         </Modal>
