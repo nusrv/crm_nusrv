@@ -215,6 +215,7 @@ export class InvoicesService {
           data: { lastInvoiceCounter: { increment: 1 } },
           include: { invoiceBranding: true },
         });
+        if (!currentIssuer.active) throw new BadRequestException('Choose an active invoice issuer.');
         const presentation = snapshotPresentation(currentIssuer, currentIssuer.invoiceBranding);
         const line = calculated.lines[0]!;
         const invoice = await tx.invoice.create({
@@ -312,12 +313,17 @@ export class InvoicesService {
         !input.lines?.length) {
       throw new BadRequestException('Supply an invoice date, currency and at least one line.');
     }
+    if (!input.customerId && !this.optionalText(input.customerNameEn) && !this.optionalText(input.customerNameAr)) {
+      throw new BadRequestException('Supply a one-time buyer name in English or Arabic.');
+    }
     const totals = calculateInvoice(input.lines.map((line) =>
       this.toCalculationInput(line, undefined, null, periodStart, periodEnd)));
     try {
       return await this.prisma.$transaction(async (tx) => {
         const customer = input.customerId
-          ? await tx.customer.findUnique({ where: { id: input.customerId } })
+          ? await tx.customer.findUnique({ where: { id: input.customerId }, include: {
+              phoneNumbers: { where: { active: true }, orderBy: [{ primary: 'desc' }, { createdAt: 'asc' }], take: 1 },
+            } })
           : null;
         if (input.customerId && (!customer || customer.billingEntityId !== input.billingEntityId ||
             customer.status !== 'ACTIVE')) {
@@ -350,7 +356,7 @@ export class InvoicesService {
             customerNameArSnapshot: this.optionalText(input.customerNameAr) ?? customer?.nameAr,
             customerAddressSnapshot: this.optionalText(input.customerAddress) ?? customer?.address,
             customerCountrySnapshot: this.optionalText(input.customerCountry) ?? customer?.country,
-            customerPhoneSnapshot: this.optionalText(input.customerPhone) ?? customer?.phone,
+            customerPhoneSnapshot: this.optionalText(input.customerPhone) ?? customer?.phoneNumbers[0]?.phoneNumber ?? customer?.phone,
             customerTaxNumberSnapshot: this.optionalText(input.customerTaxNumber) ?? customer?.taxNumber,
             issuerCodeSnapshot: issuer.code,
             issuerLegalNameSnapshot: issuer.legalName,

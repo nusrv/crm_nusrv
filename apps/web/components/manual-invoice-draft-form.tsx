@@ -70,7 +70,7 @@ export function ManualInvoiceDraftForm({
     void apiRequest<Issuer[]>('/billing-entities')
       .then((result) => {
         if (!active) return;
-        const eligible = result.filter((issuer) => issuer.active && issuer.issuerType === 'COMPANY');
+        const eligible = result.filter((issuer) => issuer.active);
         setIssuers(eligible);
         setIssuerId((existing) => existing || eligible[0]?.id || '');
       })
@@ -200,13 +200,13 @@ export function ManualInvoiceDraftForm({
         </select>
       </label>
       {mode !== 'SUBSCRIPTION' && <label className="field field-wide">
-        <span>Legal invoice issuer (company)</span>
+        <span>Legal invoice issuer</span>
         <select disabled={busy} required value={issuerId} onChange={(event) => {
           setIssuerId(event.target.value); setSelected(null); setSearch('');
         }}>
-          {issuers.length === 0 && <option value="">No active company issuers available</option>}
+          {issuers.length === 0 && <option value="">No active issuers available</option>}
           {issuers.map((issuer) => <option key={issuer.id} value={issuer.id}>
-            {issuer.legalName || issuer.name}
+            {issuer.legalName || issuer.name}{issuer.issuerType === 'INDIVIDUAL' ? ' (Individual — draft only)' : ''}
           </option>)}
         </select>
       </label>}
@@ -290,7 +290,7 @@ export function ManualInvoiceDraftForm({
       </label>
       <p className="field-wide muted text-sm">
         Additional invoice lines and tax categorization can be entered in the draft editor
-        after creation. The company issuer details are snapshotted on creation.
+        after creation. The legal issuer details are snapshotted on creation. Individual issuer officialization remains unavailable until its template is approved.
       </p>
       </>}
       <div className="field-wide flex flex-wrap gap-2">

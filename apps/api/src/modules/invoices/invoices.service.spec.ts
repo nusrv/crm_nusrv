@@ -140,6 +140,7 @@ function subscription(status: SubscriptionStatus = SubscriptionStatus.ACTIVE) {
         id: 'entity-1',
         code: 'NS',
         legalName: 'New Serve',
+        active: true,
         taxNumber: 'ISSUER-TAX',
         address: 'Issuer Address',
         invoiceEmail: 'billing@example.com',
@@ -277,6 +278,14 @@ describe('InvoicesService creation', () => {
     expect(result.issuerLogoAssetId).toBe('original-logo');
   });
 
+  it('refuses subscription invoice creation for an inactive legal issuer', async () => {
+    const source = subscription();
+    source.customer.billingEntity.active = false;
+    const { service, create } = harness(source);
+    await expect(service.createFromSubscription('subscription-1', context)).rejects.toThrow('active invoice issuer');
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('rejects every non-ACTIVE subscription on the server', async () => {
     const { service } = harness(subscription(SubscriptionStatus.SUSPENDED));
     await expect(service.createFromSubscription('subscription-1', context)).rejects.toThrow(
@@ -309,7 +318,7 @@ describe('InvoicesService creation', () => {
 });
 
 describe('InvoicesService independent manual drafts (P1.1)', () => {
-  function manualHarness(active = true) {
+  function manualHarness(active = true, customer: Record<string, unknown> | null = null) {
     const issuer = {
       ...subscription().customer.billingEntity,
       active,
@@ -329,9 +338,9 @@ describe('InvoicesService independent manual drafts (P1.1)', () => {
         sourceSubscriptionId: null,
         sourceRenewalCaseId: null,
         activeDraftKey: null,
-        customerId: null,
+        customerId: data.customerId ?? null,
         sourceSubscription: null,
-        customer: null,
+        customer,
         billingEntity: issuer,
         lines: lines.map((line, index) => ({
           id: `manual-line-${index + 1}`,
@@ -343,6 +352,7 @@ describe('InvoicesService independent manual drafts (P1.1)', () => {
     const tx = {
       invoiceSequence: { upsert: jest.fn(() => Promise.resolve({ year: 2026, lastValue: 2 })) },
       billingEntity: { update: jest.fn(() => Promise.resolve(issuer)) },
+      customer: { findUnique: jest.fn(() => Promise.resolve(customer)) },
       invoice: { create },
     };
     const prisma = {
@@ -389,6 +399,26 @@ describe('InvoicesService independent manual drafts (P1.1)', () => {
       expect.objectContaining({ eventKey: 'invoice.manual_draft_created' }),
       expect.anything(),
     );
+  });
+
+  it('snapshots a registered buyer and primary active phone without a fake subscription', async () => {
+    const customer = { ...subscription().customer, id: 'customer-1', billingEntityId: 'entity-1' };
+    const h = manualHarness(true, customer);
+    const result = await h.service.createManualDraft({
+      ...oneTimeInput, customerId: 'customer-1', customerNameEn: undefined,
+      customerAddress: undefined, customerCountry: undefined,
+    }, context);
+    expect(result.customerId).toBe('customer-1');
+    expect(result.sourceSubscriptionId).toBeNull();
+    expect(result.customerNameEnSnapshot).toBe('Original Customer');
+    expect(result.customerPhoneSnapshot).toBe('+962700000000');
+  });
+
+  it('rejects a registered buyer of another issuer and a nameless one-time buyer', async () => {
+    const h = manualHarness(true, { ...subscription().customer, id: 'customer-1', billingEntityId: 'another-issuer' });
+    await expect(h.service.createManualDraft({ ...oneTimeInput, customerId: 'customer-1' }, context)).rejects.toThrow('belonging to the invoice issuer');
+    await expect(h.service.createManualDraft({ ...oneTimeInput, customerNameEn: ' ' }, context)).rejects.toThrow('buyer name');
+    expect(h.create).not.toHaveBeenCalled();
   });
 
   it('does not officialize or collect a zero-priced draft on creation', async () => {
