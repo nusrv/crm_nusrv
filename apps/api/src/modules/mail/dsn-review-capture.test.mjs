@@ -20,3 +20,8 @@ test('digest covers exact fetched bytes', () => {
   assert.deepEqual(captureDsnReview(a),captureDsnReview(a));
   assert.notEqual(captureDsnReview(a).sourceSha256,captureDsnReview(b).sourceSha256);
 });
+
+test('oversized header region is review-only rather than assumed to be ordinary mail', () => {
+  const source = raw('X-Filler: ' + 'a'.repeat(65_536) + '\r\nContent-Type: multipart/report\r\n\r\nbody');
+  assert.equal(captureDsnReview(source).reason, 'HEADER_LIMIT_EXCEEDED');
+});

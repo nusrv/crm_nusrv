@@ -394,9 +394,13 @@ export class MailInboundIngestService {
     const referenceTokens = parseMessageIdTokens(message.referencesHeader);
     const references = buildReferencesStorageValue(referenceTokens, MAX_BODY_TEXT_BYTES);
 
-    // Gated review-only lane: retain detected reports before customer correlation.
-    // Cursor advances only after this transaction commits. No delivery assertion.
-    if (this.config.get<string>('P2_DSN_REVIEW_CAPTURE_ENABLED') === 'true' && message.dsnReview) {
+    // A recognized report is never a customer reply, even with capture disabled.
+    // With the gate off, retain it on IMAP and stop before advancing this UID.
+    // With the gate on, persist review-only evidence before allowing cursor advancement.
+    if (message.dsnReview) {
+      if (this.config.get<string>('P2_DSN_REVIEW_CAPTURE_ENABLED') !== 'true') {
+        throw new Error('Report-shaped mail awaits review capture activation; cursor retained.');
+      }
       const review = message.dsnReview;
       return this.prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT id FROM mail_configurations WHERE id = ${mailConfiguration.id} FOR UPDATE`;

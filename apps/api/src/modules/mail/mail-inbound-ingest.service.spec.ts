@@ -116,7 +116,7 @@ function harness(options: {
     aiEnqueue as never,
   );
 
-  return { service, findMany, healthRecord, auditRecord, updateMany, findUniqueOrThrow, enqueueIfEnabled };
+  return { service, findMany, healthRecord, auditRecord, updateMany, findUniqueOrThrow, enqueueIfEnabled, correlate };
 }
 
 const uninitialized: FakeConfigRow = {
@@ -129,6 +129,29 @@ const uninitialized: FakeConfigRow = {
 };
 
 describe('MailInboundIngestService', () => {
+  it('does not correlate or skip report-shaped mail when review capture is disabled', async () => {
+    const established = { ...uninitialized, lastSyncUidValidity: 5n, lastSyncUid: 8n };
+    const report = { uid: 9n, internalDate: new Date('2026-01-01T00:00:00Z'),
+      subject: 'Delivery report', fromAddress: 'postmaster@example.test', toAddresses: [],
+      messageIdHeader: '<report@example.test>', inReplyToHeader: '<customer@example.test>',
+      text: 'Not delivered', parseFailed: false,
+      dsnReview: { reason: 'REPORT_SHAPED' as const, sourceSha256: 'a'.repeat(64) } };
+    const { reader } = fakeReader({ fetchMessagesSince: jest.fn(() => Promise.resolve({
+      outcome: 'ok' as const, messages: [report],
+    })) });
+    const { service, updateMany, correlate, enqueueIfEnabled, healthRecord } = harness({
+      configs: [established], readers: { 'config-1': reader },
+      configValues: { NODE_ENV: 'test', P2_DSN_REVIEW_CAPTURE_ENABLED: 'false' },
+    });
+    const result = await service.syncAll();
+    expect(result.messagesIngested).toBe(0);
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(correlate).not.toHaveBeenCalled();
+    expect(enqueueIfEnabled).not.toHaveBeenCalled();
+    expect(healthRecord).toHaveBeenCalledWith('config-1', HealthStatus.DEGRADED,
+      expect.stringContaining('cursor retained'));
+  });
+
   it('Phase 3.1 §D — filters candidate configs by the per-mailbox inboundSyncEnabled DB flag, in addition to enabled', async () => {
     const { service, findMany } = harness({
       configs: [uninitialized],
