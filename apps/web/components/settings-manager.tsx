@@ -1,5 +1,6 @@
 'use client';
 
+import { cutoverInputUtc, cutoverUpdate } from '../lib/mail-cutover';
 import { SentObservationControls } from './sent-observation-controls';
 
 import { Fragment, useEffect, useState } from 'react';
@@ -230,7 +231,7 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
         smtpPort: Number(value('smtpPort')),
         smtpSecure: form.get('smtpSecure') === 'on',
         outboundSendEnabled: form.get('outboundSendEnabled') === 'on',
-        outboundSendCutoverAt: value('outboundSendCutoverAt') ? new Date(value('outboundSendCutoverAt')).toISOString() : undefined,
+        outboundSendCutoverAt: cutoverUpdate(value('outboundSendCutoverAt'), editing?.outboundSendCutoverAt, Boolean(editing)),
       };
       if (authMode === 'BASIC') {
         if (value('password')) body.password = value('password');
@@ -428,9 +429,9 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
               </p>
             )}
             <label className="field field-wide">
-              <span>Outbound send cutover (messages queued before this instant are never sent)</span>
+              <span>Outbound send cutover (UTC; earlier queued reminders are not sent)</span>
               <input
-                defaultValue={editing?.outboundSendCutoverAt ? editing.outboundSendCutoverAt.slice(0, 16) : ''}
+                defaultValue={cutoverInputUtc(editing?.outboundSendCutoverAt)}
                 name="outboundSendCutoverAt"
                 type="datetime-local"
               />
