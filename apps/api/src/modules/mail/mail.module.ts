@@ -11,6 +11,8 @@ import { MailHealthService } from './mail-health.service';
 import { MAIL_QUEUE } from './mail-queue.constants';
 import { MailQueueService } from './mail-queue.service';
 import { MailActionQueueController } from './mail-action-queue.controller';
+import { MailSentObservationController } from './mail-sent-observation.controller';
+import { MailSentObservationService } from './mail-sent-observation.service';
 import { MailSettingsController } from './mail-settings.controller';
 import { MailSettingsService } from './mail-settings.service';
 import { MicrosoftOAuthTokenProvider } from './microsoft-oauth-token-provider';
@@ -37,11 +39,12 @@ import { SmtpMailTransport } from './smtp-mail-transport';
  */
 @Module({
   imports: [BullModule.registerQueue({ name: MAIL_QUEUE }), BullModule.registerQueue({ name: IMAP_QUEUE })],
-  controllers: [MailSettingsController, IntegrationHealthController, MailActionQueueController],
+  controllers: [MailSettingsController, IntegrationHealthController, MailActionQueueController, MailSentObservationController],
   providers: [
     MailQueueService,
     MailImapQueueService,
     MailSettingsService,
+    MailSentObservationService,
     SmtpMailTransport,
     ImapMailboxReaderFactory,
     MicrosoftOAuthTokenProvider,
