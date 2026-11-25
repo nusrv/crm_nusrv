@@ -4,6 +4,7 @@ import { PrismaClient } from '../src/generated/prisma/client';
 import { PaymentScope } from '../src/generated/prisma/enums';
 import { toMariaDbDriverUrl } from '../src/database/mariadb-url';
 import { mailEvidenceFolderIdentityKey } from '../src/modules/mail/mail-evidence-folder-identity';
+import { sentSourceIdentity } from '../src/modules/mail/mail-sent-source-identity';
 import { computeImapIdentityKey } from '../src/modules/mail/imap-identity.util';
 import { commitSentObservationPreview } from '../src/modules/mail/mail-sent-observation-commit';
 
@@ -452,6 +453,48 @@ run('P2.B disabled folder checkpoint migration (isolated MariaDB)', () => {
     expect(await prisma.mailSentObservation.count({
       where: { folderCheckpointId: row.id },
     })).toBe(1);
+  });
+
+  it('fences a retired connection across a mailbox repoint and preserves old observations', async () => {
+    const folder = 'Generation fence fixture';
+    const generation = randomUUID();
+    const nextGeneration = randomUUID();
+    const config = await prisma.mailConfiguration.findUniqueOrThrow({ where: { id: configurationId } });
+    await prisma.mailConfiguration.update({ where: { id: configurationId }, data: { inboundSyncEnabled: true, imapSecure: true } });
+    try {
+      await prisma.mailSentConnectionEpoch.create({ data: { mailConfigurationId: configurationId, generation } });
+      const row = await prisma.mailEvidenceFolderCheckpoint.create({ data: {
+        mailConfigurationId: configurationId, connectionGeneration: generation, folderName: folder,
+        folderIdentityKey: mailEvidenceFolderIdentityKey(folder), sourceKind: 'SENT',
+        syncEnabled: true, capability: 'AVAILABLE', uidValidity: 900n, lastUid: 10n,
+      } });
+      const makePreview = (currentGeneration: string, uid: bigint) => ({
+        outcome: 'PREVIEW_ONLY' as const, highestObservedUid: uid,
+        observations: [{ sourceIdentityKey: sentSourceIdentity({ mailConfigurationId: configurationId,
+          canonicalFolder: folder, connectionGeneration: currentGeneration, uidValidity: 900n, uid }),
+          uid, internalDate: null, messageIdHeader: null, parseFailed: false, deliveryStatus: 'UNKNOWN' as const }],
+      });
+      await commitSentObservationPreview(prisma as never, row, makePreview(generation, 11n));
+      await prisma.mailConfiguration.update({ where: { id: configurationId }, data: { imapUsername: 'repointed@example.test' } });
+      await prisma.mailConfiguration.update({ where: { id: configurationId }, data: { imapUsername: config.imapUsername } });
+      expect(await prisma.mailSentConnectionEpoch.findUnique({ where: { mailConfigurationId: configurationId } })).toBeNull();
+      await expect(commitSentObservationPreview(prisma as never, { ...row, lastUid: 11n }, makePreview(generation, 12n))).rejects.toThrow();
+      const old = await prisma.mailEvidenceFolderCheckpoint.findUniqueOrThrow({ where: { id: row.id } });
+      expect(old.syncEnabled).toBe(false);
+      expect(old.lastUid).toBe(11n);
+      expect(await prisma.mailSentObservation.count({ where: { folderCheckpointId: row.id } })).toBe(1);
+      await prisma.mailSentConnectionEpoch.create({ data: { mailConfigurationId: configurationId, generation: nextGeneration } });
+      const fresh = await prisma.mailEvidenceFolderCheckpoint.create({ data: {
+        mailConfigurationId: configurationId, connectionGeneration: nextGeneration, folderName: folder,
+        folderIdentityKey: row.folderIdentityKey, sourceKind: 'SENT', syncEnabled: true, capability: 'AVAILABLE',
+        uidValidity: 900n, lastUid: 10n,
+      } });
+      await commitSentObservationPreview(prisma as never, fresh, makePreview(nextGeneration, 11n));
+      expect(await prisma.mailSentObservation.count({ where: { folderCheckpointId: { in: [row.id, fresh.id] } } })).toBe(2);
+    } finally {
+      await prisma.mailSentConnectionEpoch.deleteMany({ where: { mailConfigurationId: configurationId } });
+      await prisma.mailConfiguration.update({ where: { id: configurationId }, data: { imapUsername: config.imapUsername, inboundSyncEnabled: config.inboundSyncEnabled, imapSecure: config.imapSecure } });
+    }
   });
 
   it('preserves an ESTABLISHED legacy INBOX cursor even after creating an unrelated Sent checkpoint', async () => {

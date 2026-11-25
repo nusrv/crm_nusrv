@@ -68,7 +68,7 @@ export interface EvidenceSourceInventory {
   configuredInboundFolder: string | null;
   lastInboundSyncAt: Date | null;
   inboundFolder: EvidenceSourceState;
-  sentFolder: 'BLOCKED_BY_DEPLOYMENT' | 'BASELINE_REQUIRED' | 'OBSERVING' | 'REVIEW_REQUIRED';
+  sentFolder: 'BLOCKED_BY_DEPLOYMENT' | 'BASELINE_REQUIRED' | 'OBSERVING' | 'REVIEW_REQUIRED' | 'DISABLED' | 'NOT_CONFIGURED';
   providerEvents: 'NOT_IMPLEMENTED';
   dsnCorrelation: 'NOT_IMPLEMENTED' | 'REVIEW_CAPTURE_ONLY';
 }
@@ -122,6 +122,7 @@ export class IntegrationHealthService {
         enabled: true,
         inboundSyncEnabled: true,
         imapHost: true,
+        imapSecure: true,
         imapUsername: true,
         imapFolder: true,
         imapCredentialsCiphertext: true,
@@ -144,7 +145,11 @@ export class IntegrationHealthService {
         inboundFolder = 'CONFIGURED_ONLY';
       }
       let sentFolder: EvidenceSourceInventory['sentFolder'] = 'BLOCKED_BY_DEPLOYMENT';
-      if (sentReleased) {
+      if (sentReleased && inboundFolder !== 'CONFIGURED_ONLY') {
+        sentFolder = inboundFolder === 'DISABLED' ? 'DISABLED' : 'NOT_CONFIGURED';
+      } else if (sentReleased && !item.imapSecure) {
+        sentFolder = 'NOT_CONFIGURED';
+      } else if (sentReleased) {
         const epoch = await this.prisma.mailSentConnectionEpoch.findUnique({ where: { mailConfigurationId: item.id } });
         const checkpoint = epoch && await this.prisma.mailEvidenceFolderCheckpoint.findFirst({ where: { mailConfigurationId: item.id, connectionGeneration: epoch.generation, sourceKind: 'SENT', syncEnabled: true, capability: 'AVAILABLE' }, select: { lastError: true } });
         sentFolder = checkpoint ? (checkpoint.lastError ? 'REVIEW_REQUIRED' : 'OBSERVING') : 'BASELINE_REQUIRED';

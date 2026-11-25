@@ -61,6 +61,7 @@ jobs:
             src/modules/mail/mail-evidence-folder-identity.spec.ts \
             src/modules/mail/mail-evidence-sent-preview.spec.ts \
             src/modules/mail/mail-sent-observation-plan.spec.ts \
+            src/modules/mail/mail-sent-source-identity.spec.ts \
             src/modules/mail/mail-sent-observation-commit.spec.ts \
             src/modules/mail/integration-health.service.spec.ts \
             src/modules/mail/integration-health.controller.spec.ts \
