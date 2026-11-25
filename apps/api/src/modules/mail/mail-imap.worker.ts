@@ -1,3 +1,5 @@
+import { ConfigService } from '@nestjs/config';
+import { mailWorkersPaused, pausedInboundBatch } from './mail-worker-maintenance';
 import { Logger } from '@nestjs/common';
 import { MailSentObservationService } from './mail-sent-observation.service';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
@@ -13,7 +15,7 @@ import type { ImapSyncJobData } from './mail-imap-queue.service';
  * lease/CAS). */
 @Processor(IMAP_QUEUE, { concurrency: 1 })
 export class MailImapWorker extends WorkerHost {
-  constructor(private readonly ingest: MailInboundIngestService, private readonly sent: MailSentObservationService) {
+  constructor(private readonly ingest: MailInboundIngestService, private readonly sent: MailSentObservationService, private readonly config: ConfigService = new ConfigService()) {
     super();
   }
 
@@ -21,6 +23,7 @@ export class MailImapWorker extends WorkerHost {
     if (job.name !== IMAP_SYNC_JOB) {
       throw new Error(`Unsupported IMAP job: ${job.name}.`);
     }
+    if (mailWorkersPaused(this.config.get<string>('MAIL_WORKERS_PAUSED'))) return pausedInboundBatch();
     const result = await this.ingest.syncAll();
     await this.sent.syncEnabled().catch(() => new Logger(MailImapWorker.name).warn('Sent observation cycle failed.'));
     return result;

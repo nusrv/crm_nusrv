@@ -97,6 +97,8 @@ const environmentSchema = z
     IMAP_MODE: z.enum(['mock', 'real']).default('mock'),
     // Operator queue only; never authorizes provider polling or sending.
     P2_ACTION_QUEUE_ENABLED: z.enum(['true', 'false']).default('false'),
+    // Temporary deployment maintenance freeze: does not change any mailbox or outbox row.
+    MAIL_WORKERS_PAUSED: z.enum(['true', 'false']).default('false'),
     P2_SENT_OBSERVATION_ENABLED: z.enum(['true', 'false']).default('false'),
     P2_DSN_REVIEW_CAPTURE_ENABLED: z.enum(['true', 'false']).default('false'),
     // Phase 3.1 §D/§Q correction — DEPRECATED / PARSED-ONLY, same reasoning as MAIL_SEND_ENABLED.

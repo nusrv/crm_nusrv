@@ -1,6 +1,7 @@
 import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
+import { mailWorkersPaused } from './mail-worker-maintenance';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../database/prisma.service';
 import type { MailConfiguration, Prisma } from '../../generated/prisma/client';
@@ -59,7 +60,7 @@ export class MailSentObservationService {
 
   /** Explicit future-only baseline; never silently rewinds or imports a historical folder. */
   async activate(id: string, actor: VerifiedAccessContext) {
-    if (!this.enabled()) throw new ServiceUnavailableException('Sent observation release gate is disabled.');
+    if (!this.enabled() || mailWorkersPaused(this.config.get<string>('MAIL_WORKERS_PAUSED'))) throw new ServiceUnavailableException('Sent observation activation is unavailable during maintenance or when the release gate is disabled.');
     const snapshot = await this.prisma.$transaction(async tx => {
       await this.requireAdmin(tx, actor);
       await tx.$queryRaw`SELECT id FROM mail_configurations WHERE id = ${id} FOR UPDATE`;
@@ -151,7 +152,7 @@ export class MailSentObservationService {
   }
 
   async syncEnabled() {
-    if (!this.enabled()) return;
+    if (!this.enabled() || mailWorkersPaused(this.config.get<string>('MAIL_WORKERS_PAUSED'))) return;
     // Bounded fair batch. Legacy rows never enter the operational path.
     const checkpoints = await this.prisma.mailEvidenceFolderCheckpoint.findMany({
       where: { sourceKind: 'SENT', syncEnabled: true, capability: 'AVAILABLE', connectionGeneration: { not: 'legacy' } },
