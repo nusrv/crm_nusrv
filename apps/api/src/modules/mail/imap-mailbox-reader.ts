@@ -1,6 +1,7 @@
 import { ImapFlow } from 'imapflow';
 import type { FetchMessageObject, ImapFlowOptions, MailboxLockObject } from 'imapflow';
 import { simpleParser } from 'mailparser';
+import { captureDsnReview } from './dsn-review-capture';
 import type { AddressObject, HeaderValue } from 'mailparser';
 import type { MailConfiguration } from '../../generated/prisma/client';
 import type { ImapCredentials } from './imap-credentials';
@@ -329,12 +330,13 @@ export class ImapMailboxReader implements MailboxReader, SentMailboxReader {
         text: parsed.text,
         html: parsed.html,
         parseFailed: false,
+        dsnReview: captureDsnReview(message.source, (parsed.attachments ?? []).map(part => part.contentType)) ?? undefined,
       };
     } catch {
       // §26 — one malformed MIME message must not block the mailbox: fall back to a minimal
       // record carrying only what the FETCH response itself already gave us (uid/internalDate),
       // classified HUMAN_REVIEW by the ingest service, and the cursor still advances past it.
-      return { uid, internalDate, ...EMPTY_MESSAGE };
+      return { uid, internalDate, ...EMPTY_MESSAGE, dsnReview: captureDsnReview(message.source) ?? undefined };
     }
   }
 }

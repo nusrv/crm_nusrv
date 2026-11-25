@@ -16,6 +16,7 @@ export interface MailboxSyncState {
 }
 
 export interface FetchedMailboxMessage {
+  dsnReview?: import('./dsn-review-capture').DsnReviewCapture;
   uid: bigint;
   /** Server-assigned receipt timestamp (IMAP INTERNALDATE) — Slice C §6 requires this, NEVER the
    * sender-controlled Date header, for EmailMessage.occurredAt. Undefined only in the documented

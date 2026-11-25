@@ -1403,6 +1403,7 @@ model MailConfiguration {
   evidenceFolderCheckpoints MailEvidenceFolderCheckpoint[]
   providerEvidenceBindings  MailProviderEvidenceBinding[]
   dsnFollowUps              MailDsnFollowUp[]
+  dsnReviews                MailDsnReview[]
 
   @@index([billingEntityId])
   @@index([environment])
@@ -1892,4 +1893,24 @@ model MailDsnObservation {
   @@index([followUpKey, mailConfigurationId], map: "mail_dsn_observations_task_idx")
   @@index([sourceBindingKey, bindingMailboxId], map: "mail_dsn_observations_binding_idx")
   @@map("mail_dsn_observations")
+}
+
+// Untrusted transport reports are not customer EmailMessages or delivery proof.
+model MailDsnReview {
+  id                  String            @id @default(uuid()) @db.VarChar(36)
+  identityKey         String            @unique(map: "mail_dsn_reviews_identity_uq") @map("identity_key") @db.VarChar(80)
+  mailConfigurationId String            @map("mail_configuration_id") @db.VarChar(36)
+  folder              String            @db.VarChar(255)
+  uidValidity         BigInt            @map("uid_validity")
+  uid                 BigInt
+  reason              String            @db.VarChar(32)
+  sourceSha256        String            @map("source_sha256") @db.VarChar(64)
+  subject             String            @db.VarChar(500)
+  fromAddress         String            @map("from_address") @db.VarChar(320)
+  bodyText            String            @map("body_text") @db.Text
+  occurredAt          DateTime          @map("occurred_at")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  mailConfiguration   MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "mail_dsn_reviews_config_fk")
+  @@index([createdAt, id], map: "mail_dsn_reviews_created_idx")
+  @@map("mail_dsn_reviews")
 }
