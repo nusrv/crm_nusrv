@@ -112,6 +112,27 @@ export class MailSentObservationService {
     } finally { await reader.close().catch(() => undefined); }
   }
 
+  /** Explicit stop preserves every checkpoint and observation, even a pending activation. */
+  async stop(id: string, actor: VerifiedAccessContext) {
+    if (!this.enabled()) throw new ServiceUnavailableException('Sent observation release gate is disabled.');
+    return this.prisma.$transaction(async tx => {
+      await this.requireAdmin(tx, actor);
+      await tx.$queryRaw`SELECT id FROM mail_configurations WHERE id = ${id} FOR UPDATE`;
+      const row = await tx.mailConfiguration.findUnique({ where: { id }, select: { id: true } });
+      if (!row) throw new NotFoundException('Mailbox not found.');
+      const epoch = await tx.mailSentConnectionEpoch.findUnique({ where: { mailConfigurationId: id } });
+      if (epoch) {
+        await tx.mailEvidenceFolderCheckpoint.updateMany({ where: { mailConfigurationId: id,
+          connectionGeneration: epoch.generation, sourceKind: 'SENT', syncEnabled: true },
+          data: { syncEnabled: false, capability: 'UNPROBED', lastError: 'STOPPED_BY_ADMIN' } });
+        await tx.mailSentConnectionEpoch.delete({ where: { mailConfigurationId: id } });
+        await this.audit.record({ actorType: ActorType.USER, actorId: actor.actorId, eventKey: 'mail.sent.observation_stopped',
+          subjectType: 'MailConfiguration', subjectId: id, metadata: { generation: epoch.generation } }, tx);
+      }
+      return { enabled: true, state: 'BASELINE_REQUIRED' };
+    }, { isolationLevel: 'ReadCommitted' });
+  }
+
   private async retire(checkpoint: SentObservationPlanCheckpoint, reason: string) {
     await this.prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM mail_configurations WHERE id = ${checkpoint.mailConfigurationId} FOR UPDATE`;

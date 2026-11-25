@@ -68,9 +68,9 @@ export interface EvidenceSourceInventory {
   configuredInboundFolder: string | null;
   lastInboundSyncAt: Date | null;
   inboundFolder: EvidenceSourceState;
-  sentFolder: 'NOT_IMPLEMENTED';
+  sentFolder: 'BLOCKED_BY_DEPLOYMENT' | 'BASELINE_REQUIRED' | 'OBSERVING' | 'REVIEW_REQUIRED';
   providerEvents: 'NOT_IMPLEMENTED';
-  dsnCorrelation: 'NOT_IMPLEMENTED';
+  dsnCorrelation: 'NOT_IMPLEMENTED' | 'REVIEW_CAPTURE_ONLY';
 }
 
 export interface IntegrationHealthOverview {
@@ -129,7 +129,9 @@ export class IntegrationHealthService {
       },
     });
     const adapter = resolveImapAdapterCapability(this.config);
-    return configs.map((item): EvidenceSourceInventory => {
+    const sentReleased = this.config.get<string>('P2_SENT_OBSERVATION_ENABLED') === 'true' && adapter === 'REAL';
+    const dsnReviewReleased = this.config.get<string>('P2_DSN_REVIEW_CAPTURE_ENABLED') === 'true';
+    return Promise.all(configs.map(async (item): Promise<EvidenceSourceInventory> => {
       let inboundFolder: EvidenceSourceState;
       if (!item.enabled || !item.inboundSyncEnabled) {
         inboundFolder = 'DISABLED';
@@ -141,6 +143,12 @@ export class IntegrationHealthService {
       } else {
         inboundFolder = 'CONFIGURED_ONLY';
       }
+      let sentFolder: EvidenceSourceInventory['sentFolder'] = 'BLOCKED_BY_DEPLOYMENT';
+      if (sentReleased) {
+        const epoch = await this.prisma.mailSentConnectionEpoch.findUnique({ where: { mailConfigurationId: item.id } });
+        const checkpoint = epoch && await this.prisma.mailEvidenceFolderCheckpoint.findFirst({ where: { mailConfigurationId: item.id, connectionGeneration: epoch.generation, sourceKind: 'SENT', syncEnabled: true, capability: 'AVAILABLE' }, select: { lastError: true } });
+        sentFolder = checkpoint ? (checkpoint.lastError ? 'REVIEW_REQUIRED' : 'OBSERVING') : 'BASELINE_REQUIRED';
+      }
       return {
         mailConfigurationId: item.id,
         scope: item.scopeKey,
@@ -148,11 +156,11 @@ export class IntegrationHealthService {
         configuredInboundFolder: item.imapFolder.trim() || null,
         lastInboundSyncAt: item.lastSyncedAt,
         inboundFolder,
-        sentFolder: 'NOT_IMPLEMENTED',
+        sentFolder,
         providerEvents: 'NOT_IMPLEMENTED',
-        dsnCorrelation: 'NOT_IMPLEMENTED',
+        dsnCorrelation: dsnReviewReleased ? 'REVIEW_CAPTURE_ONLY' : 'NOT_IMPLEMENTED',
       };
-    });
+    }));
   }
 
   async getOverview(): Promise<IntegrationHealthOverview> {

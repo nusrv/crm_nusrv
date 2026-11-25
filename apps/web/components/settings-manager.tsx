@@ -1,5 +1,7 @@
 'use client';
 
+import { SentObservationControls } from './sent-observation-controls';
+
 import { Fragment, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { visibleSettingsGroups, canViewIntegrationSettings } from '../lib/workspace-navigation';
@@ -490,6 +492,7 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
                       <button className="button-small" onClick={() => void runTest(item.id, 'smtp')} type="button">
                         Test SMTP
                       </button>
+                      <SentObservationControls mailboxId={item.id} />
                     </div>
                   )}
                 </td>

@@ -19,7 +19,7 @@ describe('P2.A mail evidence inventory authorization', () => {
     const expected = [{
       mailConfigurationId: 'mail-1',
       inboundFolder: 'CONFIGURED_ONLY',
-      sentFolder: 'NOT_IMPLEMENTED',
+      sentFolder: 'BLOCKED_BY_DEPLOYMENT',
       providerEvents: 'NOT_IMPLEMENTED',
       dsnCorrelation: 'NOT_IMPLEMENTED',
     }];

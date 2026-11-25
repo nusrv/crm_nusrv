@@ -12,6 +12,14 @@ export class MailSentObservationController {
   @Header('Cache-Control', 'no-store')
   status(@Param('id') id: string) { return this.sent.status(id); }
 
+  @Post('stop')
+  @Header('Cache-Control', 'no-store')
+  stop(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    const actor = readVerifiedAccessContext(req.user);
+    if (!actor) throw new UnauthorizedException('Invalid session.');
+    return this.sent.stop(id, actor);
+  }
+
   @Post('activate')
   @Header('Cache-Control', 'no-store')
   activate(@Param('id') id: string, @Body() body: unknown, @Req() req: AuthenticatedRequest) {

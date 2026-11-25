@@ -125,7 +125,7 @@ describe('P2.A read-only evidence-source inventory', () => {
       configuredInboundFolder: 'INBOX',
       lastInboundSyncAt: null,
       inboundFolder: 'CONFIGURED_ONLY',
-      sentFolder: 'NOT_IMPLEMENTED',
+      sentFolder: 'BLOCKED_BY_DEPLOYMENT',
       providerEvents: 'NOT_IMPLEMENTED',
       dsnCorrelation: 'NOT_IMPLEMENTED',
     }]);
@@ -157,7 +157,7 @@ describe('P2.A read-only evidence-source inventory', () => {
     });
     const row = (await service.getEvidenceSources())[0];
     expect(row?.lastInboundSyncAt).toEqual(new Date('2026-11-23T12:00:00.000Z'));
-    expect(row?.sentFolder).toBe('NOT_IMPLEMENTED');
+    expect(row?.sentFolder).toBe('BLOCKED_BY_DEPLOYMENT');
     expect(row?.dsnCorrelation).toBe('NOT_IMPLEMENTED');
   });
 });
