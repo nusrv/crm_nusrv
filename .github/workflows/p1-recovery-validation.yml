@@ -24,8 +24,8 @@ jobs:
       JWT_ACCESS_SECRET: ci-only-not-a-valid-production-secret-at-least-32-chars
       JWT_REFRESH_SECRET: ci-only-different-not-a-valid-production-secret-32-plus
       ENCRYPTION_KEY_BASE64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-      SMTP_MODE: none
-      IMAP_MODE: none
+      SMTP_MODE: mock
+      IMAP_MODE: mock
       AI_PROVIDER: mock
     steps:
       - uses: actions/checkout@v4

@@ -37,8 +37,8 @@ jobs:
       # to an owner-controlled or production database.
       DATABASE_URL: mysql://nusrv_rehearsal:ci-throwaway-user-only@127.0.0.1:3306/nusrv_rehearsal_test
       MARIADB_TEST_DATABASE_URL: mysql://nusrv_rehearsal:ci-throwaway-user-only@127.0.0.1:3306/nusrv_rehearsal_test
-      SMTP_MODE: none
-      IMAP_MODE: none
+      SMTP_MODE: mock
+      IMAP_MODE: mock
       AI_PROVIDER: mock
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +74,9 @@ jobs:
       - name: P2 independent folder cursor guard on disposable MariaDB
         working-directory: apps/api
         run: node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --runInBand prisma/p2-evidence-folder-mariadb-live.spec.ts
+      - name: P2 DSN physical persistence and invalidation on disposable MariaDB
+        working-directory: apps/api
+        run: node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --runInBand prisma/p2-dsn-prisma-mariadb-live.spec.ts
 
   legacy-db:
     name: Historical MariaDB / ${{ matrix.suite }}
@@ -102,8 +105,8 @@ jobs:
     env:
       DATABASE_URL: mysql://nusrv_legacy:ci-legacy-throwaway-user@127.0.0.1:3306/nusrv_legacy_${{ matrix.suite }}_test
       MARIADB_TEST_DATABASE_URL: mysql://nusrv_legacy:ci-legacy-throwaway-user@127.0.0.1:3306/nusrv_legacy_${{ matrix.suite }}_test
-      SMTP_MODE: none
-      IMAP_MODE: none
+      SMTP_MODE: mock
+      IMAP_MODE: mock
       AI_PROVIDER: mock
     steps:
       - uses: actions/checkout@v4
