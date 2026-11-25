@@ -2,6 +2,8 @@
 
 ## Current status
 
+- **WIP recovery checkpoint.** Legacy MariaDB fixtures now have a finite 120-second lifecycle budget. Dedicated per-suite schemas and cancellation-safe cleanup are still pending. The previous 8 passed and 98 failed remain the latest confirmed legacy counts. See the [WIP handoff](audit/arena/codex_followup/final_owner_handoff/P2_ACTIVE_SYNC_READINESS.md#wip-recovery-checkpoint).
+
 - **Disposable MariaDB validation at `ac28a27b2d3f0864642b3a0cf1941d0eced3e019`.** A loopback-only MariaDB 11.4.12 rehearsal passed all 26 fresh migrations, populated pre-P2 upgrade, backup and restore, and 11 focused finance and P2 cases. Two concurrent fulfillment requests for the same official unpaid renewal produced one fulfillment and one audit event. The Sent reader now checks the exact selected folder. An unwired audit reader corroborates independently verified DSN evidence against the exact outbound subject, SMTP attempt and recipient. Full database-free API regression passed 1,396 tests with 140 skipped. Active P2 release remains gated by provider verification, durable mailbox identity and human review persistence. [P2 evidence and release gates](audit/arena/codex_followup/final_owner_handoff/P2_ACTIVE_SYNC_READINESS.md#disposable-mariadb-validation)
 - **Remaining database regression.** The separate legacy shared-schema suite reported 8 passed and 98 failed after setup timeouts and table reset conflicts. Its business assertions remain unverified. Prisma's read-only drift check found five legacy timestamp defaults and no P1/P2 mapped table differences. The disposable rehearsal establishes no facts about the production schema.
 

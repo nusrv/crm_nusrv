@@ -147,7 +147,7 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
       },
     });
     reviewerId = reviewer.id;
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
     await prisma?.$disconnect();
@@ -155,7 +155,7 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
       await reset(connection);
       await connection.end();
     }
-  }, 30_000);
+  }, 120_000);
 
   beforeEach(async () => {
     const mailConfiguration = await prisma.mailConfiguration.create({

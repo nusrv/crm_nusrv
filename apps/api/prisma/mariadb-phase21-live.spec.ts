@@ -56,14 +56,14 @@ liveDescribe('Phase 2.1 MariaDB operational data integration', () => {
     await reset(connection);
     await connection.query(migrations);
     prisma = new PrismaClient({ adapter: new PrismaMariaDb(toMariaDbDriverUrl(url)) });
-  }, 30_000);
+  }, 120_000);
   afterAll(async () => {
     await prisma?.$disconnect();
     if (connection) {
       await reset(connection);
       await connection.end();
     }
-  }, 30_000);
+  }, 120_000);
 
   it('persists catalog JSON/Decimal, UUID identities, contacts, identifiers, and historical snapshots', async () => {
     const billingEntity = await prisma.billingEntity.create({

@@ -222,6 +222,18 @@ Validated source commit `2e01c2603fb7bbcb612370f262cb33ea19072d58`.
 | Disposable MariaDB and provider integration | Blocked by the missing verified environments. Fresh and upgrade migrations, Prisma mappings against migrated tables, finance invariants, worker races and backup/restore remain unverified at this source commit. |
 | P0 full-process browser restart | Prior blocked status retained. The synthetic print smoke tests did not exercise authentication or profile persistence. |
 
+## WIP recovery checkpoint
+
+Continued from `beca204dd648076bb4e7d3bb40831f75c4d4042c`. Read-only specialist review found that the historical runner is already serial, but expired 30-second hooks can leave uncancelled schema setup and cleanup running across suites. The saved run reported 8 passed, 98 failed and open handles. Only explicit migration fixture budgets changed, to 120 seconds. Assertions and migration SQL were preserved. No new test result was captured. The pending focused command was interrupted before a result was available and was not rerun during this checkpoint.
+
+The portable MariaDB 11.4.12 launcher created a disposable loopback server in the ignored cache. Before resuming, verify the prior listener is stopped and provision a fresh run using `node_modules/.cache/nusrv-recovery/start-mariadb-rehearsal.ps1` and the previously verified portable bundle. Verify PID, executable, start time, sole loopback listener, SQL datadir and scoped database account. Set both database URL variables to the new manifest's legacy target, with SMTP and IMAP disabled and AI mocked. Next command from the repository root:
+
+```powershell
+npm.cmd run test -w @cp/api -- --runTestsByPath prisma/mariadb-phase3-slice-c-live.spec.ts
+```
+
+Then isolate each legacy suite's schema and process, close setup and cleanup connections after failure, and rerun the historical suite before classifying business failures. The provider harness and Action/Error Queue remain design-only in this checkpoint. Use scripted IMAP and test-only signed provider evidence with the existing Sent and DSN helpers. Verify exact identities, replay, conflicts and delayed evidence without activating a worker. The five documented legacy timestamp defaults remain untouched.
+
 ## Disposable MariaDB validation
 
 This execution began at `6c6a48d0dfbd427c574dc0af2f52751c92550695` on `work/p1-chatgpt-recovery`. The Docker CLI was present, but the Windows service was stopped and there was no accessible engine pipe. The rehearsal used the official portable MariaDB 11.4.12 Windows ZIP, verified against the published SHA-256 checksum. The server ran with a newly initialized data directory, no registered service, no Docker volumes and one listener bound to `127.0.0.1:3306`. A generated manifest bound the listener to the server PID, executable and start time. Each runner rechecked the database version, data directory, exact schema and dedicated scoped account before writes. All records were synthetic.

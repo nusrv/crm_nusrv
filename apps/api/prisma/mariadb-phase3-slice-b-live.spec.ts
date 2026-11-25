@@ -144,7 +144,7 @@ liveDescribe('Phase 3 Slice B MariaDB outbound-mail integration', () => {
       data: { code: `S3B-ST-${randomUUID()}`, name: 'Slice B Hosting' },
     });
     serviceTypeId = serviceType.id;
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
     await prisma?.$disconnect();
@@ -152,7 +152,7 @@ liveDescribe('Phase 3 Slice B MariaDB outbound-mail integration', () => {
       await reset(connection);
       await connection.end();
     }
-  }, 30_000);
+  }, 120_000);
 
   async function createFixtureCase() {
     const customer = await prisma.customer.create({

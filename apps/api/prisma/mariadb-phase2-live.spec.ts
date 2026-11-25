@@ -181,7 +181,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
         },
       ],
     });
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
     await prisma?.$disconnect();
@@ -189,7 +189,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
       await resetDatabase(connection);
       await connection.end();
     }
-  }, 30_000);
+  }, 120_000);
 
   async function createSubscription(
     code: string,

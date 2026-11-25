@@ -85,7 +85,7 @@ liveDescribe('MariaDB zero migration and Prisma integration', () => {
         },
       })
     ).id;
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
     await prisma?.$disconnect();
@@ -93,7 +93,7 @@ liveDescribe('MariaDB zero migration and Prisma integration', () => {
       await resetDatabase(setupConnection);
       await setupConnection.end();
     }
-  }, 30_000);
+  }, 120_000);
 
   it('supports UUID identities, JSON, Decimal, dates, relations, and Prisma CRUD', async () => {
     const customer = await prisma.customer.create({

@@ -80,7 +80,7 @@ liveDescribe('SubscriptionCodeSequence FK referential action against real pre-ex
     await prisma.serviceType.create({
       data: { id: 'svc-hosting', code: 'HOSTING', name: 'Hosting' },
     });
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
     await prisma?.$disconnect();
@@ -88,7 +88,7 @@ liveDescribe('SubscriptionCodeSequence FK referential action against real pre-ex
       await resetDatabase(setupConnection);
       await setupConnection.end();
     }
-  }, 30_000);
+  }, 120_000);
 
   async function createCustomer(customerCode: string) {
     return prisma.customer.create({
