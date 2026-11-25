@@ -78,6 +78,8 @@ jobs:
             apps/web/lib/api.session.test.mjs
       - name: P2 provider binding and DSN ledger planning contracts (no database)
         run: node --experimental-strip-types --test apps/api/src/modules/mail/mail-provider-binding.test.mjs apps/api/src/modules/mail/dsn-follow-up-ledger-plan.test.mjs apps/api/src/modules/mail/dsn-follow-up-resolution.test.mjs
+      - name: P2 DSN transaction orchestration contracts (no database)
+        run: node --import tsx --test apps/api/src/modules/mail/dsn-follow-up-transaction.test.mjs
       - name: Legacy DB launcher isolation contracts (no database)
         run: node --test apps/api/scripts/mariadb-integration-plan.test.mjs
       - name: Receipt and company invoice static rendering checks
