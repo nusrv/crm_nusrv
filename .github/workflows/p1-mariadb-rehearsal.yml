@@ -83,7 +83,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        suite: [core, phase2, phase21, subscription_backfill, subscription_sequence_delete, phase3a, phase3b, phase3c, phase3d, phase3e]
+        suite: [core, phase2, phase21, subscription_backfill, subscription_sequence_delete, phase3a, phase3b, phase3c, phase3d, phase3e, phase4, branding]
     services:
       mariadb:
         image: mariadb:11.4

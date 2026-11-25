@@ -18,15 +18,14 @@ live('Phase 4 additive migration on populated disposable MariaDB', () => {
       database: name,
       multipleStatements: true,
     });
-    await db.query('SET FOREIGN_KEY_CHECKS=0');
-    const tables = await db.query<Array<{ TABLE_NAME: string }>>(
-      'SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()',
+    // The isolated launcher preflights a new schema; never erase an existing
+    // database if this fixture is invoked directly.
+    const [row] = await db.query<Array<{ db_name: string; table_count: bigint | number }>>(
+      'SELECT DATABASE() AS db_name, (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()) AS table_count',
     );
-    for (const t of tables) {
-      if (!/^[a-z0-9_]+$/.test(t.TABLE_NAME)) throw new Error('Unsafe table.');
-      await db.query('DROP TABLE `' + t.TABLE_NAME + '`');
+    if (row?.db_name !== name || Number(row.table_count) !== 0) {
+      throw new Error('Expected a freshly provisioned empty disposable schema.');
     }
-    await db.query('SET FOREIGN_KEY_CHECKS=1');
     const dir = join(process.cwd(), 'prisma/migrations');
     const dirs = readdirSync(dir)
       .filter((n) => statSync(join(dir, n)).isDirectory())
@@ -41,7 +40,7 @@ live('Phase 4 additive migration on populated disposable MariaDB', () => {
   INSERT INTO invoices(id,customer_id,billing_entity_id,source_subscription_id,status,internal_reference,invoice_date,currency_code,period_start,period_end,customer_code_snapshot,issuer_code_snapshot,issuer_legal_name_snapshot,grand_total,official_grand_total,updated_at) VALUES('invoice-old','customer-a','entity-a','subscription-a','FAWTARA_ACCEPTED','OLD-1','2026-01-01','JOD','2026-01-01','2027-01-01','TA0001','TA','Issuer A',100,110,NOW());`);
     for (const n of dirs.filter((n) => n >= '20261118000000'))
       await db.query(readFileSync(join(dir, n, 'migration.sql'), 'utf8'));
-  }, 60000);
+  }, 120_000);
   afterAll(async () => {
     await db?.end();
   });

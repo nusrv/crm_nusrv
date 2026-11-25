@@ -17,11 +17,11 @@ test('one suite uses its dedicated target and exact Jest path, with mail disable
   assert.equal(run.env.AI_PROVIDER, 'mock');
 });
 
-test('full legacy run preserves all ten suites with distinct targets', () => {
+test('full legacy run preserves all twelve suites with distinct targets', () => {
   const plan = planLegacyRuns([], { MARIADB_TEST_SUITE_URLS: JSON.stringify(all()) });
-  assert.equal(plan.length, 10);
-  assert.equal(new Set(plan.map((run) => run.env.DATABASE_URL)).size, 10);
-  assert.equal(new Set(plan.map((run) => run.args.at(-1))).size, 10);
+  assert.equal(plan.length, 12);
+  assert.equal(new Set(plan.map((run) => run.env.DATABASE_URL)).size, 12);
+  assert.equal(new Set(plan.map((run) => run.args.at(-1))).size, 12);
   assert.ok(plan.every((run) => !('MARIADB_TEST_SUITE_URLS' in run.env)));
 });
 
@@ -63,4 +63,28 @@ test('preflight failure, child timeout and test failure remain visible; later su
   ]);
   assert.equal(new Set(visited).size, 3);
   assert.ok(!visited.includes(target('core')));
+});
+
+test('financial suites use their exact opt-in variables and strip unrelated inherited targets', () => {
+  const inherited = {
+    MARIADB_PHASE4_TEST_DATABASE_URL: 'mysql://unsafe:unsafe@remote.invalid/production',
+    MARIADB_BRANDING_TEST_DATABASE_URL: 'mysql://unsafe:unsafe@remote.invalid/production',
+  };
+  const plan = planLegacyRuns([], { ...inherited, MARIADB_TEST_SUITE_URLS: JSON.stringify(all()) });
+  for (const run of plan) {
+    const expected = run.id === 'phase4' ? 'MARIADB_PHASE4_TEST_DATABASE_URL' :
+      run.id === 'branding' ? 'MARIADB_BRANDING_TEST_DATABASE_URL' : null;
+    for (const key of Object.keys(inherited)) {
+      assert.equal(run.env[key], key === expected ? target(run.id) : undefined);
+    }
+    assert.equal(run.env.DATABASE_URL, target(run.id));
+    assert.equal(run.env.MARIADB_TEST_DATABASE_URL, target(run.id));
+  }
+  for (const id of ['phase4', 'branding']) {
+    const [run] = planLegacyRuns(['--suite', id], { ...single(id), ...inherited });
+    assert.equal(run.args.at(-1), 'prisma/mariadb-' + id + '-live.spec.ts');
+    assert.equal(run.env[id === 'phase4' ? 'MARIADB_PHASE4_TEST_DATABASE_URL' : 'MARIADB_BRANDING_TEST_DATABASE_URL'], target(id));
+  }
+  const incomplete = all(); delete incomplete.branding;
+  assert.throws(() => planLegacyRuns([], { MARIADB_TEST_SUITE_URLS: JSON.stringify(incomplete) }));
 });

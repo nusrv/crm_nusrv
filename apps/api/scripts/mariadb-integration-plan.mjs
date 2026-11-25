@@ -10,9 +10,18 @@ export const LEGACY_SUITES = Object.freeze({
   phase3c: 'prisma/mariadb-phase3-slice-c-live.spec.ts',
   phase3d: 'prisma/mariadb-phase3-slice-d-live.spec.ts',
   phase3e: 'prisma/mariadb-phase3-slice-e-live.spec.ts',
+  phase4: 'prisma/mariadb-phase4-live.spec.ts',
+  branding: 'prisma/mariadb-branding-live.spec.ts',
 });
 export const SUITE_IDS = Object.freeze(Object.keys(LEGACY_SUITES));
 export const CHILD_TIMEOUT_MS = 480_000;
+
+// These financial fixtures have independent opt-in variables. Never inherit
+// an unrelated target from the caller, and never allow an intended suite to skip.
+const SPECIAL_SUITE_URLS = Object.freeze({
+  phase4: 'MARIADB_PHASE4_TEST_DATABASE_URL',
+  branding: 'MARIADB_BRANDING_TEST_DATABASE_URL',
+});
 
 function validateTarget(id, value) {
   let url;
@@ -49,12 +58,14 @@ export function planLegacyRuns(args, env) {
       throw new Error('All-suite mode requires an explicit dedicated URL for each suite.');
     }
   } else {
-    throw new Error('Use --suite <known ID>, or provide all ten isolated targets.');
+    throw new Error('Use --suite <known ID>, or provide all twelve isolated targets.');
   }
   return ids.map((id) => {
     const target = validateTarget(id, targets[id]);
     const childEnv = { ...env };
     delete childEnv.MARIADB_TEST_SUITE_URLS;
+    for (const key of Object.values(SPECIAL_SUITE_URLS)) delete childEnv[key];
+    if (Object.hasOwn(SPECIAL_SUITE_URLS, id)) childEnv[SPECIAL_SUITE_URLS[id]] = target;
     return {
       id,
       args: ['--experimental-vm-modules', '../../node_modules/jest/bin/jest.js',
