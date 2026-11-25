@@ -1401,6 +1401,8 @@ model MailConfiguration {
   healthEvents              IntegrationHealthEvent[]
   operatorReplyOutbox       OperatorReplyOutbox[]
   evidenceFolderCheckpoints MailEvidenceFolderCheckpoint[]
+  providerEvidenceBindings  MailProviderEvidenceBinding[]
+  dsnFollowUps              MailDsnFollowUp[]
 
   @@index([billingEntityId])
   @@index([environment])
@@ -1822,4 +1824,72 @@ model InvoiceQrCorrection {
 
   @@unique([invoiceId, invoiceRevision])
   @@map("invoice_qr_corrections")
+}
+
+
+// P2.D: inactive provider-binding history and corroborated DSN follow-up storage.
+// The nullable unique current mailbox key permits many retired generations but
+// at most one current generation per configuration. No existing row is seeded.
+model MailProviderEvidenceBinding {
+  generation          String            @id @db.VarChar(36)
+  mailConfigurationId String            @map("mail_configuration_id") @db.VarChar(36)
+  currentMailboxKey   String?           @unique(map: "mail_provider_bindings_current_uq") @map("current_mailbox_key") @db.VarChar(36)
+  providerNamespace   String            @map("provider_namespace") @db.VarChar(64)
+  providerAccountId   String            @map("provider_account_id") @db.VarChar(512)
+  sourceBindingKey    String            @unique(map: "mail_provider_bindings_source_uq") @map("source_binding_key") @db.VarChar(96)
+  observationEnabled  Boolean           @default(false) @map("observation_enabled")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  mailConfiguration   MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "mail_provider_bindings_config_fk")
+  observations        MailDsnObservation[]
+
+  @@unique([sourceBindingKey, mailConfigurationId], map: "mail_provider_bindings_scope_uq")
+  @@index([mailConfigurationId, createdAt], map: "mail_provider_bindings_config_idx")
+  @@map("mail_provider_evidence_bindings")
+}
+
+model MailDsnFollowUp {
+  id                  String            @id @default(uuid()) @db.VarChar(36)
+  followUpKey         String            @unique(map: "mail_dsn_follow_ups_key_uq") @map("follow_up_key") @db.VarChar(80)
+  mailConfigurationId String            @map("mail_configuration_id") @db.VarChar(36)
+  subjectType         String            @map("subject_type") @db.VarChar(32)
+  subjectId           String            @map("subject_id") @db.VarChar(36)
+  attemptId           String            @map("attempt_id") @db.VarChar(36)
+  recipient           String            @db.VarChar(320)
+  originalMessageId   String            @map("original_message_id") @db.VarChar(500)
+  status              String            @default("OPEN") @db.VarChar(16)
+  revision            Int               @default(1)
+  // Retain historical actor ID independently of later user administration.
+  resolvedById        String?           @map("resolved_by_id") @db.VarChar(36)
+  resolvedAt          DateTime?         @map("resolved_at")
+  resolutionReason    String?           @map("resolution_reason") @db.VarChar(500)
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  mailConfiguration   MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "mail_dsn_follow_ups_config_fk")
+  observations        MailDsnObservation[]
+
+  @@unique([followUpKey, mailConfigurationId], map: "mail_dsn_follow_ups_scope_uq")
+  @@index([status, createdAt], map: "mail_dsn_follow_ups_status_created_idx")
+  @@index([subjectType, subjectId, attemptId], map: "mail_dsn_follow_ups_subject_idx")
+  @@map("mail_dsn_follow_ups")
+}
+
+model MailDsnObservation {
+  id                  String                      @id @default(uuid()) @db.VarChar(36)
+  observationKey      String                      @unique(map: "mail_dsn_observations_key_uq") @map("observation_key") @db.VarChar(80)
+  followUpKey         String                      @map("follow_up_key") @db.VarChar(80)
+  mailConfigurationId String                      @map("mail_configuration_id") @db.VarChar(36)
+  sourceBindingKey    String                      @map("source_binding_key") @db.VarChar(96)
+  // Separate FK scalar plus SQL CHECK enforces the same mailbox on both relations.
+  bindingMailboxId    String                      @map("binding_mailbox_id") @db.VarChar(36)
+  sourceObjectId      String                      @map("source_object_id") @db.VarChar(256)
+  folder              String                      @db.VarChar(255)
+  enhancedStatus      String                      @map("enhanced_status") @db.VarChar(9)
+  createdAt           DateTime                    @default(now()) @map("created_at")
+  followUp            MailDsnFollowUp             @relation(fields: [followUpKey, mailConfigurationId], references: [followUpKey, mailConfigurationId], onDelete: Restrict, onUpdate: Restrict, map: "mail_dsn_observations_task_fk")
+  binding             MailProviderEvidenceBinding @relation(fields: [sourceBindingKey, bindingMailboxId], references: [sourceBindingKey, mailConfigurationId], onDelete: Restrict, onUpdate: Restrict, map: "mail_dsn_observations_binding_fk")
+
+  @@index([followUpKey, mailConfigurationId], map: "mail_dsn_observations_task_idx")
+  @@index([sourceBindingKey, bindingMailboxId], map: "mail_dsn_observations_binding_idx")
+  @@map("mail_dsn_observations")
 }
