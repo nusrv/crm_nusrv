@@ -74,8 +74,9 @@ export function planLegacyRuns(args, env) {
         ...childEnv,
         DATABASE_URL: target,
         MARIADB_TEST_DATABASE_URL: target,
-        SMTP_MODE: 'none',
-        IMAP_MODE: 'none',
+        NODE_ENV: 'test',
+        SMTP_MODE: 'mock',
+        IMAP_MODE: 'mock',
         AI_PROVIDER: 'mock',
       },
     };

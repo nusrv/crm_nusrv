@@ -95,4 +95,6 @@ jobs:
         run: ../../node_modules/.bin/prisma validate
       - name: Workspace ESLint checks
         run: npm run lint
+      - name: Workspace production build (no deployment)
+        run: npm run build
 

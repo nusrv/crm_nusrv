@@ -12,9 +12,10 @@ test('one suite uses its dedicated target and exact Jest path, with mail disable
   assert.equal(run.args.at(-1), LEGACY_SUITES.phase3c);
   assert.ok(run.args.includes('--runTestsByPath'));
   assert.equal(run.env.DATABASE_URL, run.env.MARIADB_TEST_DATABASE_URL);
-  assert.equal(run.env.SMTP_MODE, 'none');
-  assert.equal(run.env.IMAP_MODE, 'none');
+  assert.equal(run.env.SMTP_MODE, 'mock');
+  assert.equal(run.env.IMAP_MODE, 'mock');
   assert.equal(run.env.AI_PROVIDER, 'mock');
+  assert.equal(run.env.NODE_ENV, 'test');
 });
 
 test('full legacy run preserves all twelve suites with distinct targets', () => {

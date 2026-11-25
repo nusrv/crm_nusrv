@@ -101,7 +101,7 @@ export default function ActionQueuePage() {
               item.renewalCaseId ? <Link href="/dashboard/renewals" className="table-link">Renewals ({item.renewalCaseId})</Link> : '—'}</td>
           </tr>)}</tbody>
         </table></div>
-        {!result ? <p className="muted mt-4">Loading…</p> : result.items.length === 0 && <p className="muted mt-4">No recorded items in this lane.</p>}
+        {!result ? <p className="muted mt-4">{error ? 'Unable to load results.' : 'Loading…'}</p> : result.items.length === 0 && <p className="muted mt-4">No recorded items in this lane.</p>}
         <div className="toolbar mt-4">
           <button type="button" className="button-secondary" disabled={page === 1 || busy || selection !== null} onClick={() => { setResult(null); setPage(p => p - 1); }}>Previous</button>
           <span>Page {page}</span>
@@ -111,7 +111,7 @@ export default function ActionQueuePage() {
     {selection && <section className="panel mt-4">
       <h3 className="font-semibold">Resolve follow-up for {selection.recipient}</h3>
       <p className="muted mt-2">Confirm only after reviewing the recorded evidence. This does not resend any email.</p>
-      <label className="block mt-3">Resolution reason<textarea className="w-full" maxLength={500} rows={3} value={reason} disabled={busy} onChange={e => setReason(e.target.value)} /></label>
+      <label className="block mt-3">Resolution reason<input className="w-full" maxLength={500} value={reason} disabled={busy} onChange={e => setReason(e.target.value)} /></label>
       <div className="toolbar mt-3">
         <button type="button" className="button-primary" disabled={busy || !reason.trim()} onClick={() => void closeTask()}>{busy ? 'Saving…' : 'Resolve follow-up'}</button>
         <button type="button" className="button-secondary" disabled={busy} onClick={() => { setSelection(null); setReason(''); }}>Cancel</button>

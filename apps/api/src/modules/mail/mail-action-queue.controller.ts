@@ -15,7 +15,6 @@ const PAGE_SIZE = 25;
  */
 @Controller('mail/action-queue')
 @Roles('ADMIN')
-@Header('Cache-Control', 'no-store')
 export class MailActionQueueController {
   constructor(private readonly prisma: PrismaService, private readonly audit: AuditService,
     private readonly config: ConfigService) {}
@@ -32,6 +31,7 @@ export class MailActionQueueController {
   }
 
   @Get()
+  @Header('Cache-Control', 'no-store')
   async list(@Req() req: AuthenticatedRequest, @Query('lane') lane: unknown, @Query('page') page: unknown, @Query('status') status: unknown) {
     this.authorize(req);
     if (!this.enabled()) return { enabled: false, items: [], hasMore: false };
@@ -68,6 +68,7 @@ export class MailActionQueueController {
   }
 
   @Post('resolve')
+  @Header('Cache-Control', 'no-store')
   @HttpCode(200)
   async resolve(@Req() req: AuthenticatedRequest, @Body() input: unknown) {
     const context = this.authorize(req);
