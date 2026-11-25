@@ -150,10 +150,11 @@ liveDescribe('Phase 3 Slice D MariaDB AI classification integration', () => {
   }, 120_000);
 
   afterAll(async () => {
-    await prisma?.$disconnect();
-    if (connection) {
-      await reset(connection);
-      await connection.end();
+    try {
+      await prisma?.$disconnect();
+      if (connection) await reset(connection);
+    } finally {
+      if (connection) await connection.end();
     }
   }, 120_000);
 

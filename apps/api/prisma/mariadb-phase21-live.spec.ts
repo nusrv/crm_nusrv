@@ -58,10 +58,11 @@ liveDescribe('Phase 2.1 MariaDB operational data integration', () => {
     prisma = new PrismaClient({ adapter: new PrismaMariaDb(toMariaDbDriverUrl(url)) });
   }, 120_000);
   afterAll(async () => {
-    await prisma?.$disconnect();
-    if (connection) {
-      await reset(connection);
-      await connection.end();
+    try {
+      await prisma?.$disconnect();
+      if (connection) await reset(connection);
+    } finally {
+      if (connection) await connection.end();
     }
   }, 120_000);
 

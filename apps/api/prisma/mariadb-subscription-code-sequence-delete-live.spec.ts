@@ -83,10 +83,11 @@ liveDescribe('SubscriptionCodeSequence FK referential action against real pre-ex
   }, 120_000);
 
   afterAll(async () => {
-    await prisma?.$disconnect();
-    if (setupConnection) {
-      await resetDatabase(setupConnection);
-      await setupConnection.end();
+    try {
+      await prisma?.$disconnect();
+      if (setupConnection) await resetDatabase(setupConnection);
+    } finally {
+      if (setupConnection) await setupConnection.end();
     }
   }, 120_000);
 

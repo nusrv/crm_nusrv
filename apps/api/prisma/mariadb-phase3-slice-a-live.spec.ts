@@ -142,10 +142,11 @@ liveDescribe('Phase 3 Slice A MariaDB communication-domain integration', () => {
   }, 120_000);
 
   afterAll(async () => {
-    await prisma?.$disconnect();
-    if (connection) {
-      await reset(connection);
-      await connection.end();
+    try {
+      await prisma?.$disconnect();
+      if (connection) await reset(connection);
+    } finally {
+      if (connection) await connection.end();
     }
   }, 120_000);
 

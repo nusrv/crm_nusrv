@@ -171,10 +171,11 @@ liveDescribe('Subscription Code backfill migration against real pre-existing dat
     }, 120_000);
 
     afterAll(async () => {
-      await prisma?.$disconnect();
-      if (connection) {
-        await resetDatabase(connection);
-        await connection.end();
+      try {
+        await prisma?.$disconnect();
+        if (connection) await resetDatabase(connection);
+      } finally {
+        if (connection) await connection.end();
       }
     }, 120_000);
 
@@ -265,9 +266,10 @@ liveDescribe('Subscription Code backfill migration against real pre-existing dat
     }, 120_000);
 
     afterAll(async () => {
-      if (connection) {
-        await resetDatabase(connection);
-        await connection.end();
+      try {
+        if (connection) await resetDatabase(connection);
+      } finally {
+        if (connection) await connection.end();
       }
     }, 120_000);
 
@@ -302,9 +304,10 @@ liveDescribe('Subscription Code backfill migration against real pre-existing dat
     }, 120_000);
 
     afterAll(async () => {
-      if (connection) {
-        await resetDatabase(connection);
-        await connection.end();
+      try {
+        if (connection) await resetDatabase(connection);
+      } finally {
+        if (connection) await connection.end();
       }
     }, 120_000);
 
