@@ -37,6 +37,10 @@ type DsnFollowUpPlan =
     mailConfigurationId: string;
     attemptId: string;
     sourceObjectId: string;
+    folder: string;
+    originalMessageId: string;
+    recipient: string;
+    enhancedStatus: string;
   };
 
 /** Plan one human action per exact attempt/recipient across repeated provider reports. */
@@ -90,5 +94,9 @@ export function planDsnFollowUp(
     mailConfigurationId: original.mailConfigurationId,
     attemptId: original.attemptId,
     sourceObjectId: provenance.sourceObjectId,
+    folder: provenance.folder,
+    originalMessageId: provenance.originalMessageId,
+    recipient: provenance.envelopeRecipient,
+    enhancedStatus: provenance.enhancedStatus,
   };
 }

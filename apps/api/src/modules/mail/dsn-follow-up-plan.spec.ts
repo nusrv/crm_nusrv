@@ -74,6 +74,8 @@ describe('DSN human follow-up plan', () => {
       outcome: 'PLAN_HUMAN_FOLLOW_UP', deduplicationKey: first.deduplicationKey,
       subject,
       mailConfigurationId: original.mailConfigurationId, attemptId: original.attemptId, sourceObjectId: 'report-1',
+      folder: provenance.folder, originalMessageId: original.messageId,
+      recipient: original.intendedRecipient, enhancedStatus: provenance.enhancedStatus,
     });
     expect(repeated.deduplicationKey).toBe(first.deduplicationKey);
     expect(repeated.sourceObjectId).toBe('report-2');
