@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../lib/api';
+import { visiblePrimaryNavigation, isNavigationActive, isSettingsChild } from '../lib/workspace-navigation';
 
 interface ControlPanelContextValue {
   user: AuthenticatedUser;
@@ -12,81 +13,6 @@ interface ControlPanelContextValue {
 }
 
 const ControlPanelContext = createContext<ControlPanelContextValue | null>(null);
-
-const navigation: Array<{ href: string; label: string; roles: RoleCode[] }> = [
-  {
-    href: '/dashboard',
-    label: 'Dashboard',
-    roles: ['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT', 'MANAGEMENT'],
-  },
-  {
-    href: '/dashboard/customers',
-    label: 'Customers',
-    roles: ['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT', 'MANAGEMENT'],
-  },
-  {
-    href: '/dashboard/subscriptions',
-    label: 'Subscriptions',
-    roles: ['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT', 'MANAGEMENT'],
-  },
-  {
-    href: '/dashboard/invoices',
-    label: 'Invoices',
-    roles: ['ADMIN', 'ACCOUNTANT'],
-  },
-  {
-    href: '/dashboard/renewals',
-    label: 'Renewals',
-    roles: ['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT', 'MANAGEMENT'],
-  },
-  {
-    href: '/dashboard/renewal-settings',
-    label: 'Renewal Settings',
-    roles: ['ADMIN'],
-  },
-  {
-    href: '/dashboard/communications',
-    label: 'Communication Center',
-    roles: ['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT', 'MANAGEMENT'],
-  },
-  { href: '/dashboard/action-queue', label: 'Action / Error Queue', roles: ['ADMIN'] },
-  {
-    href: '/dashboard/service-types',
-    label: 'Service Types',
-    roles: ['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT', 'MANAGEMENT'],
-  },
-  {
-    href: '/dashboard/packages',
-    label: 'Package Catalog',
-    roles: ['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT', 'MANAGEMENT'],
-  },
-  {
-    href: '/dashboard/currencies',
-    label: 'Currencies / Rates',
-    roles: ['ADMIN', 'ACCOUNTANT', 'MANAGEMENT'],
-  },
-  {
-    href: '/dashboard/technical-connections',
-    label: 'Technical Connections',
-    roles: ['ADMIN', 'IT'],
-  },
-  {
-    href: '/dashboard/settings',
-    label: 'Settings',
-    roles: ['ADMIN', 'IT'],
-  },
-  {
-    href: '/dashboard/billing-entities',
-    label: 'Billing Entities',
-    roles: ['ADMIN', 'ACCOUNTANT', 'MANAGEMENT'],
-  },
-  {
-    href: '/dashboard/legacy-import',
-    label: 'Legacy Import',
-    roles: ['ADMIN', 'ACCOUNTANT', 'SALES_DEVELOPMENT'],
-  },
-  { href: '/dashboard/access', label: 'Users / Roles', roles: ['ADMIN'] },
-];
 
 const SIDEBAR_COLLAPSED_KEY = 'cp.sidebarCollapsed';
 
@@ -176,16 +102,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </p>
               <h1 className="mt-2 text-xl font-semibold">Control Panel</h1>
               <nav className="mt-8 space-y-1" aria-label="Control Panel navigation">
-                {navigation
-                  .filter((item) => item.roles.some((role) => user.roles.includes(role)))
-                  .map((item) => {
-                    const active =
-                      pathname === item.href ||
-                      (item.href !== '/dashboard' && pathname.startsWith(item.href));
+                {visiblePrimaryNavigation(user.roles).map((item) => {
+                    const active = isNavigationActive(pathname, item.href);
                     return (
                       <Link
                         className={`nav-link ${active ? 'nav-link-active' : ''}`}
                         href={item.href}
+                        aria-current={active ? 'page' : undefined}
                         key={item.href}
                       >
                         {item.label}
@@ -264,6 +187,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <main
           className={`min-w-0 flex-1 p-5 lg:py-9 lg:pr-9 ${collapsed ? 'lg:pl-16' : 'lg:pl-9'}`}
         >
+          {isSettingsChild(pathname) && <Link href="/dashboard/settings" className="button-small mb-4 inline-block">Back to Settings</Link>}
           {children}
         </main>
       </div>

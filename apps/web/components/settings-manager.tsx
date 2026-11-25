@@ -1,6 +1,8 @@
 'use client';
 
 import { Fragment, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { visibleSettingsGroups, canViewIntegrationSettings } from '../lib/workspace-navigation';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
@@ -106,29 +108,31 @@ function EffectiveStatusCell({ status }: { status: MailChannelStatus }) {
   );
 }
 
-type TabKey = 'mail' | 'ai' | 'health';
+type TabKey = 'overview' | 'mail' | 'ai' | 'health';
 
 export function SettingsManager() {
-  const { can } = useControlPanel();
+  const { can, user } = useControlPanel();
   const canManage = can('ADMIN');
-  const [tab, setTab] = useState<TabKey>('mail');
+  const canViewIntegrations = canViewIntegrationSettings(user.roles);
+  const [tab, setTab] = useState<TabKey>('overview');
+  const activeTab = canViewIntegrations ? tab : 'overview';
+  const groups = visibleSettingsGroups(user.roles);
 
   return (
     <>
       <PageHeading
         title="Settings"
-        description="Administer Mail/Outlook and AI operational configuration directly from the CRM — no SSH, Plesk, or restart required for routine changes."
+        description="Business configuration, renewal rules, communication settings and advanced administration. Daily operations remain in the main navigation."
       />
-      <div className="mb-6 flex gap-2 border-b border-[var(--line)]">
-        {(
-          [
-            ['mail', 'Email & Mailboxes'],
-            ['ai', 'AI'],
-            ['health', 'Integration Health'],
-          ] as const
-        ).map(([key, label]) => (
+      {canViewIntegrations && <div className="mb-6 flex flex-wrap gap-2 border-b border-[var(--line)]">
+        {([
+          ['overview', 'Overview'],
+          ['mail', 'Email & Mailboxes'],
+          ['health', 'Integration Health'],
+          ['ai', 'Advanced — AI (inactive)'],
+        ] as const).map(([key, label]) => (
           <button
-            className={`px-4 py-2 text-sm font-medium ${tab === key ? 'border-b-2 border-[var(--accent)] text-[var(--accent)]' : 'text-[var(--muted)]'}`}
+            className={`px-4 py-2 text-sm font-medium ${activeTab === key ? 'border-b-2 border-[var(--accent)] text-[var(--accent)]' : 'text-[var(--muted)]'}`}
             key={key}
             onClick={() => setTab(key)}
             type="button"
@@ -136,10 +140,30 @@ export function SettingsManager() {
             {label}
           </button>
         ))}
-      </div>
-      {tab === 'mail' && <MailSettingsSection canManage={canManage} />}
-      {tab === 'ai' && <AiSettingsSection canManage={canManage} />}
-      {tab === 'health' && <IntegrationHealthSection />}
+      </div>}
+      {activeTab === 'overview' && <div className="space-y-5">
+        {groups.map(group => <section key={group.title} className="panel">
+          <h2 className="text-lg font-semibold">{group.title}</h2>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {group.links.map(link => <Link href={link.href} key={link.href} className="rounded-lg border border-[var(--line)] p-3 hover:bg-[var(--surface)]">
+              <strong>{link.label}</strong><p className="muted mt-1 text-sm">{link.description}</p>
+            </Link>)}
+          </div>
+        </section>)}
+        {canViewIntegrations && <section className="panel">
+          <h2 className="text-lg font-semibold">Communications / Integrations</h2>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <button className="button-secondary" type="button" onClick={() => setTab('mail')}>Mail settings</button>
+            <button className="button-secondary" type="button" onClick={() => setTab('health')}>Integration health</button>
+            <button className="button-secondary" type="button" onClick={() => setTab('ai')}>Advanced: AI — inactive</button>
+          </div>
+          <p className="muted mt-3 text-sm">AI processing and external JoFotara issuance remain deferred. Manage issuer legal details and manual invoice presentation under Billing Entities.</p>
+        </section>}
+        {!groups.length && !canViewIntegrations && <Notice message="No settings are available for your current role." />}
+      </div>}
+      {activeTab === 'mail' && canViewIntegrations && <MailSettingsSection canManage={canManage} />}
+      {activeTab === 'ai' && canViewIntegrations && <AiSettingsSection canManage={canManage} />}
+      {activeTab === 'health' && canViewIntegrations && <IntegrationHealthSection />}
     </>
   );
 }
