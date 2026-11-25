@@ -45,16 +45,15 @@ export function InvoicesManager() {
       {can('ADMIN') && (
         <div className="mt-4">
           <button type="button" className="button-primary" onClick={() => setManualOpen(true)}>
-            + Create independent invoice draft
+            + Create Invoice
           </button>
         </div>
       )}
       {manualOpen && (
-        <Modal title="New manual / one-time invoice" maxWidth="54rem" onClose={() => setManualOpen(false)}>
+        <Modal title="Create Invoice" maxWidth="54rem" onClose={() => setManualOpen(false)}>
           <ManualInvoiceDraftForm
             onCancel={() => setManualOpen(false)}
             onCreated={() => {
-              setManualOpen(false);
               void load().catch((cause: unknown) =>
                 setError(cause instanceof Error ? cause.message : 'Unable to refresh invoices.'));
             }}
@@ -109,7 +108,7 @@ export function InvoicesManager() {
                       <small>{invoice.sourceSubscription.subscriptionCode}</small>
                     </>
                   ) : (
-                    <span className="muted">Independent / one-time invoice</span>
+                    <span className="muted">{invoice.customerId ? 'Independent / registered customer' : 'Independent / one-time invoice'}</span>
                   )}
                 </td>
                 <td>{invoice.internalReference}</td>

@@ -100,3 +100,6 @@ jobs:
       - name: Workspace production build (no deployment)
         run: npm run build
 
+
+      - name: Invoice creation selection policy (no database)
+        run: node --experimental-strip-types --test apps/web/lib/invoice-create-selection.test.mjs
