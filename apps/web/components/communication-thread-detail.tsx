@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus, mailDispatchStatus } from '../lib/workspace-status';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -146,7 +148,7 @@ export function CommunicationThreadDetail() {
           bodyText: replyBody.trim(),
         }),
       });
-      setNotice('Reply queued. Delivery status will update automatically.');
+      setNotice('Reply queued. Dispatch status will update as evidence is recorded.');
       setReplyBody('');
       setReplySubject('');
       idempotencyKeyRef.current = newIdempotencyKey(); // a fresh key for the NEXT reply only.
@@ -228,7 +230,7 @@ export function CommunicationThreadDetail() {
       </Link>
       <PageHeading
         title={thread.subject}
-        description={`${thread.customer ? customerDisplayName(thread.customer) || thread.customer.customerCode : 'Unattributed'} · ${thread.mailConfiguration.label} · ${thread.status}`}
+        description={`${thread.customer ? customerDisplayName(thread.customer) || thread.customer.customerCode : 'Unattributed'} · ${thread.mailConfiguration.label} · ${workspaceStatus(thread.status)}`}
         actions={
           canReview && thread.status !== 'RESOLVED' ? (
             <button className="button-secondary" disabled={resolving} onClick={() => void resolveThread()} type="button">
@@ -258,10 +260,10 @@ export function CommunicationThreadDetail() {
           </p>
           <p>
             <span className="muted">Renewal case:</span>{' '}
-            {thread.renewalCase ? `${thread.renewalCase.subscription.subscriptionCode} · ${thread.renewalCase.status}` : '—'}
+            {thread.renewalCase ? `${thread.renewalCase.subscription.subscriptionCode} · ${workspaceStatus(thread.renewalCase.status)}` : '—'}
           </p>
           <p>
-            <span className="muted">Thread status:</span> <span className="status-pill">{thread.status}</span>
+            <span className="muted">Thread status:</span> <span className="status-pill">{workspaceStatus(thread.status)}</span>
           </p>
         </div>
       </section>
@@ -367,10 +369,10 @@ function MessageBubble({
       <div className="mt-2 flex flex-wrap gap-2 text-xs">
         {message.classificationStatus && (
           <span className={`status-pill ${needsAttention ? 'danger' : ''}`}>
-            Classification: {message.classificationStatus}
+            Review: {workspaceStatus(message.classificationStatus)}
           </span>
         )}
-        {message.deliveryStatus && <span className="status-pill">Delivery: {message.deliveryStatus}</span>}
+        {message.deliveryStatus && <span className="status-pill">{mailDispatchStatus(message.deliveryStatus)}</span>}
       </div>
       {message.effectiveClassification && (
         <div className="mt-2 rounded-lg border border-[var(--line)] bg-white p-2 text-xs">

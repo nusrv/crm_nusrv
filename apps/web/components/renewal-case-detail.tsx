@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus, mailDispatchStatus } from '../lib/workspace-status';
+
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiRequest } from '../lib/api';
@@ -101,7 +103,7 @@ function milestoneLabel(
     .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
   const latest = matching[0];
   if (latest) {
-    if (latest.status === 'DELIVERED') return `Sent ${latest.queuedAt.slice(0, 10)}`;
+    if (latest.status === 'DELIVERED') return `Dispatch recorded (queued ${latest.queuedAt.slice(0, 10)})`;
     if (latest.status === 'FAILED') return 'Failed';
     if (latest.status === 'QUEUED' || latest.status === 'PROCESSING') return 'Queued';
     if (latest.status === 'CANCELLED') return 'Cancelled';
@@ -303,7 +305,7 @@ function RenewalCaseBody({
           </p>
           <p>
             <span className="muted">Status:</span>{' '}
-            <span className="status-pill">{detail.status}</span>
+            <span className="status-pill">{workspaceStatus(detail.status)}</span>
           </p>
           <p>
             <span className="muted">Hold:</span>{' '}
@@ -376,7 +378,7 @@ function RenewalCaseBody({
             {detail.subscription.currency}
           </p>
           <p>
-            <span className="muted">Subscription status:</span> {detail.subscription.status}
+            <span className="muted">Subscription status:</span> {workspaceStatus(detail.subscription.status)}
           </p>
         </div>
       </section>
@@ -430,7 +432,7 @@ function RenewalCaseBody({
                     <td>{entry.audience}</td>
                     <td>{entry.recipient}</td>
                     <td>{entry.subject}</td>
-                    <td>{entry.status}</td>
+                    <td>{mailDispatchStatus(entry.status)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -451,7 +453,7 @@ function RenewalCaseBody({
                   <Link className="underline" href={`/dashboard/invoices/${invoice.id}`}>
                     {invoice.fawtaraInvoiceNumber ?? invoice.internalReference}
                   </Link>
-                  <span className="muted ml-2">{invoice.status}</span>
+                  <span className="muted ml-2">{workspaceStatus(invoice.status)}</span>
                 </li>
               ))}
             </ul>

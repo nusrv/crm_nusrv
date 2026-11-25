@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus, mailDispatchStatus } from '../lib/workspace-status';
+
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiRequest, type PageResult } from '../lib/api';
@@ -343,7 +345,7 @@ export function RenewalCasesManager() {
         >
           <option value="">All statuses</option>
           {STATUS_OPTIONS.map((value) => (
-            <option key={value}>{value}</option>
+            <option key={value} value={value}>{workspaceStatus(value)}</option>
           ))}
         </select>
         <select
@@ -521,7 +523,7 @@ export function RenewalCasesManager() {
                   </td>
                   <td>{customer.billingEntity.name}</td>
                   <td>
-                    <span className="status-pill">{renewalCase.status}</span>
+                    <span className="status-pill">{workspaceStatus(renewalCase.status)}</span>
                   </td>
                   <td>
                     {reminderStatusLabel(
@@ -601,7 +603,7 @@ export function RenewalCasesManager() {
               >
                 <option value="">All statuses</option>
                 {['QUEUED', 'PROCESSING', 'DELIVERED', 'FAILED', 'CANCELLED'].map((value) => (
-                  <option key={value}>{value}</option>
+                  <option key={value} value={value}>{mailDispatchStatus(value)}</option>
                 ))}
               </select>
             </div>
@@ -631,7 +633,7 @@ export function RenewalCasesManager() {
                       </td>
                       <td>{message.recipient}</td>
                       <td>{message.daysBeforeDue === 0 ? 'D0' : `D-${message.daysBeforeDue}`}</td>
-                      <td>{message.status}</td>
+                      <td>{mailDispatchStatus(message.status)}</td>
                     </tr>
                   ))}
                 </tbody>

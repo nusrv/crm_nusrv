@@ -62,7 +62,7 @@ export function reminderStatusLabel(
   if (!totalEverQueued || !latest) return 'Not sent';
   switch (latest.status) {
     case 'DELIVERED':
-      return `Last reminder: ${latest.queuedAt.slice(0, 10)}`;
+      return `Dispatch recorded (queued ${latest.queuedAt.slice(0, 10)})`;
     case 'FAILED':
       return 'Failed';
     case 'CANCELLED':

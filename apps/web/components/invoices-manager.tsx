@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus } from '../lib/workspace-status';
+
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
@@ -68,11 +70,11 @@ export function InvoicesManager() {
         />
         <select onChange={(event) => setStatus(event.target.value)} value={status}>
           <option value="">All statuses</option>
-          <option value="DRAFT">DRAFT</option>
-          <option value="READY_FOR_FAWTARA">READY FOR JOFOTARA</option>
-          <option value="FAWTARA_ACCEPTED">JOFOTARA ACCEPTED</option>
-          <option value="FAWTARA_REJECTED">JOFOTARA REJECTED</option>
-          <option value="CANCELLED">CANCELLED</option>
+          <option value="DRAFT">Draft</option>
+          <option value="READY_FOR_FAWTARA">Ready to Record Official Invoice</option>
+          <option value="FAWTARA_ACCEPTED">Official Invoice Recorded</option>
+          <option value="FAWTARA_REJECTED">Official Invoice Rejected</option>
+          <option value="CANCELLED">Cancelled</option>
         </select>
       </div>
       <div className="table-wrap mt-5">
@@ -93,7 +95,7 @@ export function InvoicesManager() {
             {result?.data.map((invoice) => (
               <tr key={invoice.id}>
                 <td>
-                  <span className="status-badge">{invoice.status}</span>
+                  <span className="status-badge">{workspaceStatus(invoice.status)}</span>
                 </td>
                 <td>
                   {invoice.customerCodeSnapshot}
