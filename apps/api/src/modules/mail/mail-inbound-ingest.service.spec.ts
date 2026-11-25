@@ -134,7 +134,8 @@ describe('MailInboundIngestService', () => {
     const report = { uid: 9n, internalDate: new Date('2026-01-01T00:00:00Z'),
       subject: 'Delivery report', fromAddress: 'postmaster@example.test', toAddresses: [],
       messageIdHeader: '<report@example.test>', inReplyToHeader: '<customer@example.test>',
-      text: 'Not delivered', parseFailed: false,
+      referencesHeader: undefined, renewalCaseIdHeader: undefined,
+      text: 'Not delivered', html: undefined, parseFailed: false,
       dsnReview: { reason: 'REPORT_SHAPED' as const, sourceSha256: 'a'.repeat(64) } };
     const { reader } = fakeReader({ fetchMessagesSince: jest.fn(() => Promise.resolve({
       outcome: 'ok' as const, messages: [report],

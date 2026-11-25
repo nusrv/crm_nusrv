@@ -4,7 +4,7 @@ import { classifyFolderCursor, mailEvidenceFolderIdentityKey } from './mail-evid
 import { MAX_IMAP_UID, MAX_SENT_OBSERVATIONS, type FetchedMailboxMessage, type SentMailboxReader } from './mailbox-reader';
 
 /**
- * P2.C source-only, read-only Sent observation preview.
+ * P2.C read-only Sent observation preview used by the gated observation service.
  *
  * This module is NOT registered as a worker, route or scheduler. It never
  * persists a message, advances a cursor, sends email, or infers SMTP
@@ -44,9 +44,9 @@ export const SENT_PREVIEW_MAX_MESSAGES = MAX_SENT_OBSERVATIONS;
 
 /**
  * Explicitly authorized caller-supplied preview only. The disabled-by-default
- * checkpoint table is intentionally not queried here; a future, separately
- * approved service must verify current flags AND authoritative mailbox identity
- * before passing the checkpoint and reader to this function.
+ * checkpoint table is intentionally not queried here; the caller verifies its
+ * local connection fence and current flags. The preview is not authoritative
+ * provider identity or delivery evidence.
  */
 export async function previewSentFolderObservations(
   checkpoint: SentFolderPreviewCheckpoint,

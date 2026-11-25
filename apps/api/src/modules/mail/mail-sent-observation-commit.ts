@@ -11,10 +11,9 @@ export type SentObservationCommitResult =
   | { outcome: 'COMMITTED'; inserted: number; lastUid: bigint };
 
 /**
- * P2.C future persistence primitive. This function is intentionally NOT
- * registered in a Nest module, scheduled by a worker, exposed as a controller
- * or invoked by the existing INBOX ingestion path. Its presence in source
- * does not authorize or activate Sent synchronization.
+ * P2.C persistence primitive called by the gated Sent observation service.
+ * It is not an inbound customer correlation path or proof of provider delivery.
+ * Only a separately authorized, current local baseline may reach this commit.
  *
  * The exact source and request were verified during a bounded read-only
  * preview, but this method treats that preview as untrusted and locks/reloads

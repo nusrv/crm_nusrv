@@ -40,7 +40,7 @@ export class MailSentObservationService {
     const now = Date.now();
     if (!user?.active || !roles.some(r => r.code === 'ADMIN') || !session ||
         session.userId !== actor.actorId || session.revokedAt !== null ||
-        now < session.createdAt.getTime() || now >= Math.min(actor.accessExpiresAt, session.expiresAt.getTime(), session.createdAt.getTime() + 86_400_000)) {
+        !Number.isFinite(actor.accessExpiresAt) || now < session.createdAt.getTime() || now >= Math.min(actor.accessExpiresAt, session.expiresAt.getTime(), session.createdAt.getTime() + 86_400_000)) {
       throw new ForbiddenException('Current ADMIN session required.');
     }
   }
@@ -56,7 +56,7 @@ export class MailSentObservationService {
       where: { mailConfigurationId: id, connectionGeneration: epoch.generation, sourceKind: 'SENT', syncEnabled: true },
       select: { folderName: true, lastProbeAt: true, lastObservedAt: true, lastError: true },
     });
-    return checkpoint ? { enabled: true, state: 'OBSERVING', ...checkpoint } : { enabled: true, state: 'BASELINE_REQUIRED' };
+    return checkpoint ? { enabled: true, state: checkpoint.lastError ? 'REVIEW_REQUIRED' : 'OBSERVING', ...checkpoint } : { enabled: true, state: 'BASELINE_REQUIRED' };
   }
 
   /** Explicit future-only baseline; never silently rewinds or imports a historical folder. */
@@ -177,7 +177,11 @@ export class MailSentObservationService {
         const reader = this.readers.createReader(snapshot);
         try {
           const discovery = await reader.discoverSentFolder();
-          if (discovery.outcome !== 'AVAILABLE' || discovery.folder.folderName !== checkpoint.folderName) {
+          if (discovery.outcome !== 'AVAILABLE') {
+            await stamp(discovery.outcome);
+            continue;
+          }
+          if (discovery.folder.folderName !== checkpoint.folderName) {
             await this.retire(checkpoint, 'SENT_FOLDER_CHANGED'); continue;
           }
           const preview = await previewSentFolderObservations(checkpoint, reader);

@@ -419,7 +419,11 @@ export class MailInboundIngestService {
           return { status: 'duplicate' as const, humanReview: true };
         }
         if (await tx.emailMessage.findUnique({ where: { imapIdentityKey: identityKey }, select: { id: true } })) {
-          return { status: 'duplicate' as const, humanReview: true };
+          // Do not silently bless an old ordinary-message classification as a verified report.
+          // Preserve the old row and add the separate review record for explicit human investigation.
+          await this.audit.record({ actorType: ActorType.SYSTEM, eventKey: 'mail.dsn.legacy_message_review_required',
+            subjectType: 'MailConfiguration', subjectId: mailConfiguration.id,
+            metadata: { uid: message.uid.toString(), uidValidity: uidValidity.toString() } }, tx);
         }
         const row = await tx.mailDsnReview.create({ data: {
           identityKey, mailConfigurationId: mailConfiguration.id, folder: canonicalFolder, uidValidity,
