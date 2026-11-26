@@ -1,4 +1,5 @@
 import { summarizeSmtpEvidence } from '../mail/smtp-evidence-summary';
+import { outboundMailboxEvidence } from '../mail/outbound-mailbox-evidence';
 import { randomUUID, createHash } from 'node:crypto';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
@@ -163,7 +164,8 @@ export class ManualRenewalService {
       select: { id: true, eventKey: true, actorId: true, actorType: true, metadata: true, createdAt: true },
       take: 101,
     });
-    return { ...row, events: events.slice(0, 100), smtpEvidence: summarizeSmtpEvidence('CommunicationOutbox', events, events.length > 100) };
+    const mailboxEvidence = await outboundMailboxEvidence(this.prisma, 'CommunicationOutbox', outboxId, events, events.length > 100);
+    return { ...row, events: events.slice(0, 100), smtpEvidence: summarizeSmtpEvidence('CommunicationOutbox', events, events.length > 100), mailboxEvidence };
   }
 
   async replies(id: string) {

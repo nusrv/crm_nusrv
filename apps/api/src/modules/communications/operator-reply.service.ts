@@ -1,4 +1,5 @@
 import { summarizeSmtpEvidence } from '../mail/smtp-evidence-summary';
+import { outboundMailboxEvidence } from '../mail/outbound-mailbox-evidence';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../database/prisma.service';
@@ -62,7 +63,8 @@ export class OperatorReplyService {
       select: { id: true, eventKey: true, actorId: true, actorType: true, metadata: true, createdAt: true },
       take: 101,
     });
-    return { ...row, events: events.slice(0, 100), smtpEvidence: summarizeSmtpEvidence('OperatorReplyOutbox', events, events.length > 100) };
+    const mailboxEvidence = await outboundMailboxEvidence(this.prisma, 'OperatorReplyOutbox', outboxId, events, events.length > 100);
+    return { ...row, events: events.slice(0, 100), smtpEvidence: summarizeSmtpEvidence('OperatorReplyOutbox', events, events.length > 100), mailboxEvidence };
   }
 
   async resend(threadId: string, outboxId: string, value: unknown, actorId: string) {
