@@ -494,6 +494,7 @@ export function SubscriptionModal({
                   </label>
                   <label className="field">
                     <span>Renewal Interval</span>
+                    <small className="muted">How long the subscription is extended in each cycle.</small>
                     <select
                       onChange={(event) => setIntervalPreset(event.target.value as IntervalPreset)}
                       value={intervalPreset}
@@ -691,8 +692,7 @@ export function SubscriptionModal({
             <div className={canManage ? 'mt-6 border-t border-[var(--line)] pt-5' : undefined}>
               <h3 className="text-lg font-semibold">Technical mappings for {editing.name}</h3>
               <p className="mt-1 text-sm text-[var(--muted)]">
-                Mappings are service-specific. Disabling one mapping does not affect unrelated
-                subscriptions.
+                Links a CRM subscription to an external service identifier. A mapping does not execute an external action.
               </p>
               <div className="mt-4 space-y-3">
                 {editing.connections.length ? (

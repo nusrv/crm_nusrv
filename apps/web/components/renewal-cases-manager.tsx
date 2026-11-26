@@ -123,6 +123,9 @@ export function RenewalCasesManager() {
   const canHold = can('ADMIN');
 
   const [cases, setCases] = useState<RenewalCase[]>([]);
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<PageResult<RenewalCase>['meta'] | null>(null);
+  const [customerFilter, setCustomerFilter] = useState('');
   const [asOf, setAsOf] = useState('');
   const [summary, setSummary] = useState<RenewalSummary | null>(null);
   const [outbox, setOutbox] = useState<OutboxMessage[]>([]);
@@ -151,7 +154,7 @@ export function RenewalCasesManager() {
   const [error, setError] = useState('');
 
   const hasFilters = Boolean(
-    search ||
+    customerFilter || search ||
     status ||
     holdStatus ||
     serviceTypeId ||
@@ -163,7 +166,8 @@ export function RenewalCasesManager() {
   );
 
   const load = useCallback(async () => {
-    const params = new URLSearchParams({ pageSize: '50' });
+    const params = new URLSearchParams({ pageSize: '50', page: String(page) });
+    if (customerFilter) params.set('customerId', customerFilter);
     if (search) params.set('search', search);
     if (status) params.set('status', status);
     if (holdStatus) params.set('holdStatus', holdStatus);
@@ -188,13 +192,14 @@ export function RenewalCasesManager() {
     // should degrade to an empty list here, never crash the page on a stray .map() over
     // undefined.
     setCases(caseResult.data ?? []);
+    setMeta(caseResult.meta);
     setAsOf(caseResult.asOf ?? new Date().toISOString());
     setOutbox(outboxResult.data ?? []);
     setServiceTypes(serviceTypeResult ?? []);
     setPackages(packageResult ?? []);
     setBillingEntities(billingEntityResult ?? []);
   }, [
-    search,
+    page, customerFilter, search,
     status,
     holdStatus,
     serviceTypeId,
@@ -221,7 +226,19 @@ export function RenewalCasesManager() {
     });
   }, [loadSummary]);
 
+  useEffect(() => {
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      const query = new URLSearchParams(window.location.search);
+      if (query.get('case')) setDetailCaseId(query.get('case'));
+      if (query.get('customer')) setCustomerFilter(query.get('customer') ?? '');
+    });
+    return () => { active = false; };
+  }, []);
+
   function selectUrgency(value: string) {
+    setPage(1);
     setUrgency(value);
     const today = new Date();
     if (value === 'overdue') {
@@ -243,6 +260,7 @@ export function RenewalCasesManager() {
   }
 
   function clearFilters() {
+    setPage(1); setCustomerFilter('');
     setSearch('');
     setStatus('');
     setHoldStatus('');
@@ -307,6 +325,7 @@ export function RenewalCasesManager() {
         title="Renewal operations"
         description="Operational management of subscriptions that have entered the renewal workflow — driven by renewal cases, not a raw subscription list. Prepare and review reminders here; email is sent only on explicit human approval."
       />
+      {customerFilter && <p className="muted">Showing renewal cases for the selected customer. <button className="button-small" type="button" onClick={() => { setCustomerFilter(''); setPage(1); }}>Show all customers</button></p>}
       {!holdTarget && !detailCaseId && (
         <>
           <Notice message={error} />
@@ -337,14 +356,14 @@ export function RenewalCasesManager() {
         <input
           aria-label="Search renewals"
           className="input"
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={(event) => { setPage(1); setSearch(event.target.value); }}
           placeholder="Customer code/name, subscription code/name"
           value={search}
         />
         <select
           aria-label="Renewal status"
           className="input"
-          onChange={(event) => setStatus(event.target.value)}
+          onChange={(event) => { setPage(1); setStatus(event.target.value); }}
           value={status}
         >
           <option value="">All statuses</option>
@@ -355,7 +374,7 @@ export function RenewalCasesManager() {
         <select
           aria-label="Hold state"
           className="input"
-          onChange={(event) => setHoldStatus(event.target.value)}
+          onChange={(event) => { setPage(1); setHoldStatus(event.target.value); }}
           value={holdStatus}
         >
           <option value="">Any hold state</option>
@@ -394,7 +413,7 @@ export function RenewalCasesManager() {
         <select
           aria-label="Package filter"
           className="input"
-          onChange={(event) => setServicePackageId(event.target.value)}
+          onChange={(event) => { setPage(1); setServicePackageId(event.target.value); }}
           value={servicePackageId}
         >
           <option value="">All packages</option>
@@ -409,7 +428,7 @@ export function RenewalCasesManager() {
         <select
           aria-label="Billing Entity filter"
           className="input"
-          onChange={(event) => setBillingEntityId(event.target.value)}
+          onChange={(event) => { setPage(1); setBillingEntityId(event.target.value); }}
           value={billingEntityId}
         >
           <option value="">All Billing Entities</option>
@@ -574,6 +593,7 @@ export function RenewalCasesManager() {
             })}
           </tbody>
         </table>
+        {meta && <div className="pagination"><span>Page {meta.page} of {Math.max(meta.pageCount, 1)} · {meta.total} renewal cases</span><button type="button" disabled={page <= 1} onClick={() => setPage(current => current - 1)}>Previous</button><button type="button" disabled={page >= meta.pageCount} onClick={() => setPage(current => current + 1)}>Next</button></div>}
         {!cases.length && (
           <p className="py-8 text-center text-sm text-[var(--muted)]">
             {hasFilters
@@ -665,7 +685,7 @@ export function RenewalCasesManager() {
           caseId={detailCaseId}
           prepareOnOpen={prepareOnOpen}
           onChanged={() => void handleDetailChanged()}
-          onClose={() => setDetailCaseId(null)}
+          onClose={() => { setDetailCaseId(null); const url = new URL(window.location.href); url.searchParams.delete('case'); window.history.replaceState(null, '', url); }}
         />
       )}
     </>

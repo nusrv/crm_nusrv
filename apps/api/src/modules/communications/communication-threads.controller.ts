@@ -58,6 +58,14 @@ export class CommunicationThreadsController {
   }
 
   @Roles('ADMIN')
+  @Post(':threadId/messages/:messageId/read')
+  read(@Param('threadId') threadId: string, @Param('messageId') messageId: string, @Req() request: AuthenticatedRequest) { return this.threads.markRead(threadId, messageId, request.user.id, true); }
+
+  @Roles('ADMIN')
+  @Post(':threadId/messages/:messageId/unread')
+  unread(@Param('threadId') threadId: string, @Param('messageId') messageId: string, @Req() request: AuthenticatedRequest) { return this.threads.markRead(threadId, messageId, request.user.id, false); }
+
+  @Roles('ADMIN')
   @Get(':threadId/outbox/:outboxId/evidence')
   evidence(@Param('threadId') threadId: string, @Param('outboxId') outboxId: string) {
     return this.replies.evidence(threadId, outboxId);

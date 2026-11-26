@@ -53,6 +53,10 @@ export interface ThreadDetailMessage {
   classificationStatus: ClassificationStatus | null;
   deliveryStatus: string | null;
   deliveryError: string | null;
+  reviewedAt: Date | null;
+  deliveryUncertain: boolean;
+  renewalOutboxId: string | null;
+  operatorOutboxId: string | null;
   effectiveClassification: EffectiveClassificationSummary | null;
 }
 
@@ -81,7 +85,7 @@ export class CommunicationThreadsService {
           { status: ThreadStatus.HUMAN_REVIEW },
           {
             messages: {
-              some: { direction: MessageDirection.INBOUND, classificationStatus: ClassificationStatus.HUMAN_REVIEW },
+              some: { direction: MessageDirection.INBOUND, reviewedAt: null },
             },
           },
         ],
@@ -115,7 +119,7 @@ export class CommunicationThreadsService {
           _count: {
             select: {
               messages: {
-                where: { direction: MessageDirection.INBOUND, classificationStatus: ClassificationStatus.HUMAN_REVIEW },
+                where: { direction: MessageDirection.INBOUND, reviewedAt: null },
               },
             },
           },
@@ -182,8 +186,9 @@ export class CommunicationThreadsService {
             bodyText: true,
             occurredAt: true,
             classificationStatus: true,
-            outboxEntry: { select: { status: true, lastError: true } },
-            operatorReplyOutboxEntry: { select: { status: true, lastError: true } },
+            reviewedAt: true,
+            outboxEntry: { select: { id: true, status: true, lastError: true, smtpUncertain: true } },
+            operatorReplyOutboxEntry: { select: { id: true, status: true, lastError: true, smtpUncertain: true } },
           },
         },
       },
@@ -213,6 +218,10 @@ export class CommunicationThreadsService {
           classificationStatus: message.classificationStatus,
           deliveryStatus: delivery?.status ?? null,
           deliveryError: delivery?.lastError ?? null,
+          reviewedAt: message.reviewedAt,
+          deliveryUncertain: delivery?.smtpUncertain ?? false,
+          renewalOutboxId: message.outboxEntry?.id ?? null,
+          operatorOutboxId: message.operatorReplyOutboxEntry?.id ?? null,
           effectiveClassification,
         };
       }),
@@ -233,6 +242,15 @@ export class CommunicationThreadsService {
   /** §17/§20 — ADMIN + SALES_DEVELOPMENT only (enforced by the controller's @Roles), changes only
    * CommunicationThread.status, never RenewalCase. Idempotent: resolving an already-RESOLVED
    * thread is a safe no-op, not an error. */
+  async markRead(threadId: string, messageId: string, actorId: string, read: boolean) {
+    return this.prisma.$transaction(async tx => {
+      const result = await tx.emailMessage.updateMany({ where: { id: messageId, threadId, direction: MessageDirection.INBOUND, reviewedAt: read ? null : { not: null } }, data: { reviewedAt: read ? new Date() : null, reviewedBy: read ? actorId : null } });
+      if (!result.count && !(await tx.emailMessage.findFirst({ where: { id: messageId, threadId, direction: MessageDirection.INBOUND }, select: { id: true } }))) throw new NotFoundException('Inbound message not found.');
+      if (result.count) await this.audit.record({ actorType: ActorType.USER, actorId, eventKey: read ? 'communication.message.reviewed' : 'communication.message.marked_unread', subjectType: 'EmailMessage', subjectId: messageId, metadata: { threadId } }, tx);
+      return { reviewed: read };
+    });
+  }
+
   async resolve(threadId: string, actorId: string): Promise<{ id: string; status: ThreadStatus }> {
     const thread = await this.prisma.communicationThread.findUnique({ where: { id: threadId }, select: { status: true } });
     if (!thread) throw new NotFoundException('Communication thread not found.');

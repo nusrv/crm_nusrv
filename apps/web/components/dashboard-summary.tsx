@@ -47,7 +47,7 @@ export function DashboardSummary() {
     <>
       <PageHeading
         title="Operational dashboard"
-        description="Renewal windows use the configured business timezone. Queue counts represent durable outbox records; Phase 2 does not send email."
+        description="Renewal windows use the configured business timezone. Queue counts represent recorded communication work; customer reminders require explicit human approval."
       />
       <Notice message={error} />
       {!data ? (

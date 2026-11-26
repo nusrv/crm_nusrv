@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useControlPanel } from '../../../components/app-shell';
 import { PageHeading } from '../../../components/page-heading';
 import { Notice } from '../../../components/notice';
+import { OutboundEvidenceControls } from '../../../components/outbound-evidence-controls';
 import { apiRequest } from '../../../lib/api';
 
 type Lane = 'REVIEW_ONLY' | 'FOLLOW_UP' | 'UNCERTAIN_COMMUNICATION' | 'UNCERTAIN_REPLY';
@@ -108,7 +109,9 @@ export default function ActionQueuePage() {
             <td>{lane === 'FOLLOW_UP' && item.status === 'OPEN' ?
               <button type="button" disabled={busy || selection !== null} className="button-secondary" onClick={() => { setSelection(item); setReason(''); }}>Review / resolve</button> :
               item.threadId ? <Link href={'/dashboard/communications/' + item.threadId} className="table-link">Open thread</Link> :
-              item.renewalCaseId ? <Link href="/dashboard/renewals" className="table-link">Renewals ({item.renewalCaseId})</Link> : '—'}</td>
+              item.renewalCaseId ? <Link href={'/dashboard/renewals?case=' + item.renewalCaseId} className="table-link">Open renewal</Link> : '—'}
+               {lane === 'UNCERTAIN_COMMUNICATION' && item.renewalCaseId && <OutboundEvidenceControls path={`/renewal-cases/${item.renewalCaseId}/outbox/${item.id}`} onChanged={() => void load()} />}
+               {lane === 'UNCERTAIN_REPLY' && item.threadId && <OutboundEvidenceControls path={`/communication-threads/${item.threadId}/outbox/${item.id}`} onChanged={() => void load()} />}</td>
           </tr>)}</tbody>
         </table></div>
         {!result ? <p className="muted mt-4">{error ? 'Unable to load results.' : 'Loading…'}</p> : result.items.length === 0 && <p className="muted mt-4">No recorded items in this lane.</p>}

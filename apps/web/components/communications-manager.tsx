@@ -74,7 +74,7 @@ export function CommunicationsManager() {
             <option value="">All statuses</option>
             {STATUS_OPTIONS.map((option) => (
               <option key={option} value={option}>
-                {option}
+                {workspaceStatus(option)}
               </option>
             ))}
           </select>
@@ -129,7 +129,7 @@ export function CommunicationsManager() {
                   <td>
                     {thread.requiresAttention ? (
                       <span className="status-pill danger">
-                        Needs review{thread.pendingHumanReviewCount > 0 ? ` (${thread.pendingHumanReviewCount})` : ''}
+                        {thread.pendingHumanReviewCount > 0 ? `${thread.pendingHumanReviewCount} unread` : 'Needs review'}
                       </span>
                     ) : (
                       '—'

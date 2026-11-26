@@ -9,6 +9,7 @@ import { useControlPanel } from './app-shell';
 import { CustomerChannelsManager } from './customer-channels-manager';
 import { Modal } from './modal';
 import { useModalSave } from '../lib/use-modal-save';
+import { workspaceStatus } from '../lib/workspace-status';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 import { SubscriptionModal } from './subscription-modal';
@@ -300,6 +301,7 @@ export function CustomerDetail() {
       </section>
       <section className="panel mt-6">
         <h4 className="font-medium">Subscriptions</h4>
+        <Link className="button-small" href={`/dashboard/renewals?customer=${customerId}`}>View customer renewals / reminders</Link>
         {canManage && (
           <button className="button-small mt-3" onClick={openCreateSubscription} type="button">
             Add another subscription to this customer
@@ -315,7 +317,7 @@ export function CustomerDetail() {
                 type="button"
               >
                 <strong>{subscription.subscriptionCode}</strong> · {subscription.name} ·{' '}
-                {subscription.serviceType.name} · {subscription.status} · renews{' '}
+                {subscription.serviceType.name} · {workspaceStatus(subscription.status)} · renews{' '}
                 {subscription.renewalDate.slice(0, 10)}
               </button>
             ))

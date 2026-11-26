@@ -106,9 +106,9 @@ export function BillingEntitiesManager() {
       {(can('ADMIN') || can('ACCOUNTANT')) &&
         items.map((entity) => (
           <details key={entity.id} className="panel mb-3">
-            <summary>Issuer branding and JoFotara - {entity.name}</summary>
+            <summary>Issuer branding — {entity.name}</summary>
             <InvoiceBrandingEditor entityId={entity.id} onSaved={load} />
-            <JoFotaraConnections entityId={entity.id} />
+            <details className="mt-4"><summary>Advanced — JoFotara settings (API deferred)</summary><JoFotaraConnections entityId={entity.id} /></details>
           </details>
         ))}
       {formOpen && (
@@ -191,8 +191,6 @@ export function BillingEntitiesManager() {
         <table>
           <thead>
             <tr>
-              <th>Code</th>
-              <th>Prefix</th>
               <th>Name</th>
               <th>Scope</th>
               <th>Customers</th>
@@ -203,16 +201,14 @@ export function BillingEntitiesManager() {
           <tbody>
             {items.map((item) => (
               <tr key={item.id}>
-                <td>{item.code}</td>
-                <td>{item.customerCodePrefix}</td>
                 <td>
                   {item.name}
                   <br />
-                  <span className="muted">{item.legalName}</span>
+                  <span className="muted">{item.legalName}</span><details><summary className="text-xs">Advanced identifiers</summary><p>System code: {item.code} · Customer prefix: {item.customerCodePrefix}</p></details>
                 </td>
                 <td>{item.paymentScope}</td>
                 <td>{item._count.customers}</td>
-                <td>{item.active ? 'ACTIVE' : 'INACTIVE'}</td>
+                <td>{item.active ? 'Active' : 'Inactive'}</td>
                 <td>
                   {can('ADMIN') && (
                     <button
