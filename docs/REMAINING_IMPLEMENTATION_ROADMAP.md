@@ -20,6 +20,8 @@ The owner requires completing all available programming work before any Plesk bu
 - 5ee549d: manual (not automatic milestone) history, truthful uncertain label and bounded batched reminder counts, verified official-invoice eligibility in renewal UI, ADMIN operational affordances and page filter reset.
 - Current follow-up: SMTP mock vs real acceptance regression cases, stale worker revision, explicit ADMIN communications routes, exact SMTP corroboration of historical DSN follow-up display.
 
+- 0a375ee / e86063a: fail closed on duplicate durable system mail-attempt IDs even when one start is malformed; add regression coverage for both event orders and an unrelated malformed start. Tests added, not executed.
+
 ## Remaining external programming dependencies and verification
 
 - **OD-12 real provider evidence adapter:** source contract, binding, storage and bounded UI projection exist, but the production mail provider and its authenticated report/tracking capability were not specified or approved. SMTP acceptance and a Sent copy are not recipient delivery. Raw DSNs remain review-only; do not invent or enable a provider adapter, infer delivery, or accept arbitrary MIME as authenticated proof. Obtain provider identity and supported documented evidence API/permission model, then implement the provider-specific adapter and tests.
