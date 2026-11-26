@@ -127,12 +127,34 @@ assert(draftHtml.includes('DRAFT / NOT OFFICIAL'));
 assert(!draftHtml.includes('Seller Address'));
 assert(!draftHtml.includes('12345678'));
 assert(!draftHtml.includes('Official JoFotara QR'));
-assert(draftHtml.includes('personal-invoice-preview'));
-assert(draftHtml.includes('Layout proposal'));
+assert(draftHtml.includes('personal-invoice-document'));
+assert(!draftHtml.includes('Layout proposal'));
 assert(draftHtml.includes('Not issued'));
 assert(!draftHtml.includes('OFFICIAL-1'));
 assert(!draftHtml.includes('OFFICIALFIXTURE'));
-assert(!personalHtml.includes('personal-invoice-preview'));
+assert(!personalHtml.includes('personal-invoice-document'));
+const officialPersonal = view({
+  issuerPresentationSnapshot: {
+    ...p,
+    issuerType: 'INDIVIDUAL',
+    templateVersion: 'personal-v1',
+    visibility: { ...p.visibility, nameEn: false, address: false, taxNumber: false },
+  },
+});
+const officialPersonalHtml = render(officialPersonal);
+assert(officialPersonalHtml.includes('personal-invoice-document'));
+assert(officialPersonalHtml.includes('Official JoFotara QR'));
+assert(officialPersonalHtml.includes('OFFICIAL-1'));
+assert(officialPersonalHtml.includes('OFFICIAL-UUID'));
+assert(officialPersonalHtml.includes('Seller Legal Name'));
+assert(officialPersonalHtml.includes('Seller Address'));
+assert(officialPersonalHtml.includes('Sales Tax No.: 12345678'));
+assert(!officialPersonalHtml.includes('87654321'));
+assert(!officialPersonalHtml.includes('DRAFT / NOT OFFICIAL'));
+assert(!officialPersonalHtml.includes('nusrv-header'));
+assert(!render({ ...officialPersonal, finalPrintEnabled: false }).includes('OFFICIAL-1'));
+assert(!render({ ...officialPersonal, finalPrintEnabled: false }).includes('Official JoFotara QR'));
+
 const personalVisibleDraft = render(view({
   status: 'DRAFT',
   issuerPresentationSnapshot: { ...p, issuerType: 'INDIVIDUAL' },
@@ -143,8 +165,8 @@ assert(personalVisibleDraft.includes('Bill to'));
 assert(personalVisibleDraft.includes('Sales Tax No.: 12345678'));
 assert(!personalVisibleDraft.includes('87654321'));
 assert(!personalVisibleDraft.includes('class="nusrv-logo"'));
-assert(!render(view({ status: 'DRAFT' })).includes('personal-invoice-preview'));
-assert(!render({ ...personal, finalPrintEnabled: false }).includes('personal-invoice-preview'));
+assert(!render(view({ status: 'DRAFT' })).includes('personal-invoice-document'));
+assert(!render({ ...personal, finalPrintEnabled: false }).includes('personal-invoice-document'));
 
 const hidden = render(
   view({
@@ -275,6 +297,7 @@ async function writeVisualChecks() {
       issuerPresentationSnapshot: { ...p, logoAssetId: 'future-logo', details: future.details },
     }),
     personal: personal,
+    personalOfficial: officialPersonal,
     generic: view({
       issuerLegalNameSnapshot: 'Generic Individual',
       issuerPresentationSnapshot: {
@@ -286,7 +309,7 @@ async function writeVisualChecks() {
     }),
     historical: historical,
     draft: { ...personal, status: 'DRAFT' },
-    personalProposal: view({ status: 'DRAFT', issuerPresentationSnapshot: { ...p, issuerType: 'INDIVIDUAL' } }),
+    personalDraft: view({ status: 'DRAFT', issuerPresentationSnapshot: { ...p, issuerType: 'INDIVIDUAL' } }),
   };
   for (const [name, invoice] of Object.entries(cases)) {
     invoice.fawtaraQrImageDataUrl = qr;
