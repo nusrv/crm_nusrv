@@ -569,8 +569,14 @@ describe('InvoicesService manual JoFotara officialization', () => {
     ).rejects.toThrow('Only a READY_FOR_FAWTARA invoice can be officialized');
   });
 
-  it('persists official number, UUID, QR and values, locks the invoice, and audits discrepancies', async () => {
-    const ready = invoice({ status: InvoiceStatus.READY_FOR_FAWTARA });
+  it.each(['COMPANY', 'INDIVIDUAL'] as const)('persists official number, QR and versioned %s layout, locks the invoice, and audits discrepancies', async (issuerType) => {
+    const ready = invoice({
+      status: InvoiceStatus.READY_FOR_FAWTARA,
+      issuerPresentationSnapshot: {
+        version: 1, profileRevision: 1, issuerType, logoAssetId: null,
+        countryCode: 'JO', details: {}, visibility: defaultInvoiceVisibility(),
+      },
+    });
     let updateData: Record<string, unknown> = {};
     const tx = {
       invoice: {
@@ -623,6 +629,10 @@ describe('InvoicesService manual JoFotara officialization', () => {
       expect.objectContaining<Record<string, unknown>>({
         status: InvoiceStatus.FAWTARA_ACCEPTED,
         activeDraftKey: null,
+        issuerPresentationSnapshot: expect.objectContaining({
+          issuerType,
+          templateVersion: issuerType === 'INDIVIDUAL' ? 'personal-v1' : 'nusrv-company-v1',
+        }),
         fawtaraInvoiceNumber: 'EINV-1',
         fawtaraInvoiceUuid: 'official-uuid',
         fawtaraQrPayload: 'official-qr-payload',
