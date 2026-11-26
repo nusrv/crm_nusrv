@@ -127,6 +127,25 @@ assert(draftHtml.includes('DRAFT / NOT OFFICIAL'));
 assert(!draftHtml.includes('Seller Address'));
 assert(!draftHtml.includes('12345678'));
 assert(!draftHtml.includes('Official JoFotara QR'));
+assert(draftHtml.includes('personal-invoice-preview'));
+assert(draftHtml.includes('Layout proposal'));
+assert(draftHtml.includes('Not issued'));
+assert(!draftHtml.includes('OFFICIAL-1'));
+assert(!draftHtml.includes('OFFICIALFIXTURE'));
+assert(!personalHtml.includes('personal-invoice-preview'));
+const personalVisibleDraft = render(view({
+  status: 'DRAFT',
+  issuerPresentationSnapshot: { ...p, issuerType: 'INDIVIDUAL' },
+}));
+assert(personalVisibleDraft.includes('personal-invoice-header'));
+assert(personalVisibleDraft.includes('Issued by'));
+assert(personalVisibleDraft.includes('Bill to'));
+assert(personalVisibleDraft.includes('Sales Tax No.: 12345678'));
+assert(!personalVisibleDraft.includes('87654321'));
+assert(!personalVisibleDraft.includes('class="nusrv-logo"'));
+assert(!render(view({ status: 'DRAFT' })).includes('personal-invoice-preview'));
+assert(!render({ ...personal, finalPrintEnabled: false }).includes('personal-invoice-preview'));
+
 const hidden = render(
   view({
     issuerPresentationSnapshot: {
@@ -267,6 +286,7 @@ async function writeVisualChecks() {
     }),
     historical: historical,
     draft: { ...personal, status: 'DRAFT' },
+    personalProposal: view({ status: 'DRAFT', issuerPresentationSnapshot: { ...p, issuerType: 'INDIVIDUAL' } }),
   };
   for (const [name, invoice] of Object.entries(cases)) {
     invoice.fawtaraQrImageDataUrl = qr;
