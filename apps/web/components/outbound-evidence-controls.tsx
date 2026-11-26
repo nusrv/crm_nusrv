@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { mailDispatchStatus } from '../lib/workspace-status';
 import { apiRequest } from '../lib/api';
 
@@ -28,7 +29,7 @@ export function OutboundEvidenceControls({ path, onChanged }: { path: string; on
     setMessage('');
     try {
       setEvidence(await apiRequest<Evidence>(`${path}/evidence`));
-      setRequestKey(crypto.randomUUID());
+      setRequestKey(current => current ?? crypto.randomUUID());
       setAcknowledged(false);
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : 'Unable to load delivery evidence.');
@@ -71,7 +72,7 @@ export function OutboundEvidenceControls({ path, onChanged }: { path: string; on
           {evidence.mailboxEvidence && <div className="space-y-1">
             <p>Matching Sent-folder headers: {evidence.mailboxEvidence.sent.length}. These are observations only, not delivery evidence.</p>
             {evidence.mailboxEvidence.sent.slice(0, 5).map((item, i) => <p key={`${item.folder}:${item.observedAt}:${i}`}>{item.folder} · observed {new Date(item.observedAt).toLocaleString()}</p>)}
-            {evidence.mailboxEvidence.followUps.map(item => <p key={item.id}>Recorded hard-failure follow-up · {item.enhancedStatuses.join(', ')} · {item.recipient} · {item.status === 'RESOLVED' ? 'Reviewed / resolved' : 'Needs review'}. <a href="/dashboard/action-queue">Action Queue</a></p>)}
+            {evidence.mailboxEvidence.followUps.map(item => <p key={item.id}>Recorded hard-failure follow-up · {item.enhancedStatuses.join(', ')} · {item.recipient} · {item.status === 'RESOLVED' ? 'Reviewed / resolved' : 'Needs review'}. <Link href="/dashboard/action-queue">Action Queue</Link></p>)}
             {evidence.mailboxEvidence.limited && <p>Evidence history is bounded; additional observations may exist.</p>}
             <p>Recipient delivery: not independently verified.</p>
           </div>}

@@ -388,7 +388,7 @@ describe('MailInboundIngestService', () => {
       await service.syncAll();
       if (classificationStatus === 'PENDING') {
         expect(renewalCaseUpdateMany).toHaveBeenCalledWith({
-          where: { id: 'case-1', status: { in: ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER'] }, customerDecision: 'UNDECIDED', clarificationPending: false },
+          where: { id: 'case-1', status: { in: ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER', 'HUMAN_REVIEW'] }, customerDecision: 'UNDECIDED' },
           data: { status: 'HUMAN_REVIEW', communicationRevision: { increment: 1 } },
         });
       } else {

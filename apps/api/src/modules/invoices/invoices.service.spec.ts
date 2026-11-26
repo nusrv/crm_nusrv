@@ -713,6 +713,10 @@ describe('Invoice hardening', () => {
     );
     expect((await h.service.findOne('invoice-1')).finalPrintEnabled).toBe(false);
   });
+  it('blocks a final invoice document if historical official evidence is incomplete', async () => {
+    const h = harness(invoice({ status: 'FAWTARA_ACCEPTED', fawtaraQrImageDataUrl: 'data:image/png;base64,aA==' }));
+    expect((await h.service.findOne('invoice-1')).finalPrintEnabled).toBe(false);
+  });
   it('requires a cancellation reason', async () => {
     await expect(harness().service.cancelDraft('invoice-1', '  ', context)).rejects.toThrow(
       'reason',
@@ -749,7 +753,12 @@ describe('Invoice hardening', () => {
         status: 'FAWTARA_ACCEPTED',
         reconciliationRequired: true,
         officialGrandTotal: amount('117.000'),
-        fawtaraQrImageDataUrl: 'data:image/png;base64,aA==',
+        officializationProvenance: 'MANUAL',
+        fawtaraStatus: 'SUBMITTED',
+        fawtaraInvoiceNumber: 'OFFICIAL-117',
+        fawtaraAcceptedAt: new Date('2026-11-17'),
+        officialCurrencyCode: 'JOD',
+        fawtaraQrImageDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=',
       }),
     );
     const result = await h.service.reconcile(

@@ -1114,9 +1114,8 @@ export class InvoicesService {
       officialValueDiscrepancies: discrepancies,
       submissionPending: Boolean(invoice.submissionLock),
       finalPrintEnabled:
-        invoice.status === InvoiceStatus.FAWTARA_ACCEPTED &&
+        isVerifiedOfficialInvoice(invoice) &&
         !invoice.reconciliationRequired &&
-        Boolean(invoice.fawtaraQrImageDataUrl) &&
         Boolean(
           invoice.issuerLegalNameSnapshot?.trim() &&
           invoice.issuerAddressSnapshot?.trim() &&

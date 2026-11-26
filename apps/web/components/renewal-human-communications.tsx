@@ -8,6 +8,7 @@ import { Notice } from './notice';
 type Recipient = { contactId: string | null; email: string; name: string | null; role: string };
 type Preview = {
   purpose: 'REMINDER' | 'CLARIFICATION';
+  communicationRevision: number;
   options: Recipient[];
   recipient: string | null;
   recipientContactId: string | null;
@@ -20,7 +21,7 @@ type Preview = {
   amount: string;
   currency: string;
 };
-type Reply = { id: string; direction: string; subject: string; bodyText: string; occurredAt: string; reviewedAt: string | null };
+type Reply = { id: string; direction: string; subject: string; bodyText: string; fromAddress: string; occurredAt: string; reviewedAt: string | null };
 
 const reminderStatuses = ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER'];
 
@@ -100,8 +101,7 @@ export function RenewalHumanCommunications({
 
   function review(path: 'needs-clarification' | 'keep-in-review' | 'mark-accepted' | 'mark-do-not-renew', messageId: string) {
     void act(async () => {
-      const isDecision = path === 'mark-accepted' || path === 'mark-do-not-renew';
-      await apiRequest(`${root}/${path}`, { method: 'POST', body: JSON.stringify(isDecision ? { messageId, expectedRevision: communicationRevision } : { messageId }) });
+      await apiRequest(`${root}/${path}`, { method: 'POST', body: JSON.stringify({ messageId, expectedRevision: communicationRevision }) });
       setReplies(await apiRequest<Reply[]>(`${root}/replies`));
       setPreview(null);
       setMessage(path === 'needs-clarification' ? 'Clarification requested. Compose and send it when ready.' : path === 'mark-accepted' ? 'Renewal accepted. Review the proposed period before invoicing.' : path === 'mark-do-not-renew' ? 'Customer decision recorded: do not renew.' : 'Case kept in review.');
@@ -118,7 +118,7 @@ export function RenewalHumanCommunications({
       await apiRequest(`${root}/send-reminder`, {
         method: 'POST',
         body: JSON.stringify({ recipient: recipient.email, recipientContactId: recipient.contactId,
-          purpose: preview.purpose, subject, body, idempotencyKey: requestKey }),
+          purpose: preview.purpose, subject, body, idempotencyKey: requestKey, expectedRevision: preview.communicationRevision }),
       });
       setMessage(preview.purpose === 'CLARIFICATION'
         ? 'Clarification queued. The case moves to Waiting for Customer after SMTP accepts this message.'
@@ -154,6 +154,7 @@ export function RenewalHumanCommunications({
       {preview && (
         <form className="form-grid" onSubmit={send}>
           <div className="field-wide"><p>{preview.service} · Due {preview.dueDate.slice(0, 10)} · {preview.termMonths ?? 'Unconfigured'} months · {preview.amount} {preview.currency}</p>
+            {preview.options.length > 0 && !preview.recipient && <p className="muted">No preferred renewal address. Select another registered contact explicitly, or add a preferred billing or primary contact.</p>}
             {preview.options.length === 0 && <p className="danger">No valid registered email. <Link className="table-link" href={`/dashboard/customers/${preview.customerId}`}>Open customer contacts</Link> and register an address before sending.</p>}
             <p className="muted">Only a registered customer address may be selected. No email is sent until you press Send Email.</p>
           </div>
@@ -177,7 +178,8 @@ export function RenewalHumanCommunications({
             <textarea required rows={6} onChange={(event) => setBody(event.target.value)} value={body} />
           </label>
           <div className="field-wide flex gap-2">
-            <button className="button-primary" disabled={busy || recipientIndex < 0 || !body.trim()} type="submit">Send Email</button>
+            {preview.communicationRevision !== communicationRevision && <p className="danger">This draft is stale. Prepare a new message before sending.</p>}
+             <button className="button-primary" disabled={busy || recipientIndex < 0 || !body.trim() || preview.communicationRevision !== communicationRevision} type="submit">Send Email</button>
             <button className="button-secondary" onClick={() => setPreview(null)} type="button">Cancel</button>
           </div>
         </form>
@@ -185,7 +187,7 @@ export function RenewalHumanCommunications({
       {replies.filter((reply) => reply.direction === 'INBOUND').map((reply) => (
         <article className="rounded border border-[var(--line)] p-3" key={reply.id}>
           <p className="font-medium">{reply.subject}</p>
-          <p className="muted text-sm">{new Date(reply.occurredAt).toLocaleString()} · {reply.reviewedAt ? 'Read' : 'Unread'}</p>
+          <p className="muted text-sm">{reply.fromAddress} · {new Date(reply.occurredAt).toLocaleString()} · {reply.reviewedAt ? 'Read' : 'Unread'}</p>
           <p className="mt-2 whitespace-pre-wrap text-sm">{reply.bodyText}</p>
           {canManage && reviewable && <div className="mt-2 flex gap-2 flex-wrap">
             <button className="button-small" disabled={busy} onClick={() => review('mark-accepted', reply.id)} type="button">Accept Renewal</button>

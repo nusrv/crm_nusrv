@@ -507,9 +507,8 @@ export class MailInboundIngestService {
           const changed = await tx.renewalCase.updateMany({
             where: {
               id: correlation.renewalCaseId,
-              status: { in: ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER'] },
+              status: { in: ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER', 'HUMAN_REVIEW'] },
               customerDecision: 'UNDECIDED',
-              clarificationPending: false,
             },
             data: { status: 'HUMAN_REVIEW', communicationRevision: { increment: 1 } },
           });

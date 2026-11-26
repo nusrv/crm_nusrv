@@ -22,6 +22,7 @@ const sendSchema = z.object({
   subject: z.string().trim().min(1).max(500).regex(/^[^\r\n]+$/),
   body: z.string().trim().min(1).max(60000),
   idempotencyKey: z.uuid(),
+  expectedRevision: z.number().int().nonnegative(),
 }).strict();
 
 export function readableRenewalReference(id: string, dueDate: Date) {
@@ -60,7 +61,7 @@ export class ManualRenewalService {
       ? ''
       : `Dear ${recipientName},\n\nPlease confirm renewal of ${sub.name}${identifiers ? ' (' + identifiers + ')' : ''}.\nRenewal due: ${row.dueDate.toISOString().slice(0, 10)}\nRenewal term: ${sub.renewalIntervalMonths ?? 'Not configured'} months\nAmount: ${sub.sellingPrice.toString()} ${sub.currency}\n\nPlease reply to confirm renewal or let us know if you need clarification.\n\nReference: ${reference}`;
     return {
-      purpose, options, recipient: defaultRecipient?.email ?? null, recipientContactId: defaultRecipient?.contactId ?? null,
+      communicationRevision: row.communicationRevision, purpose, options, recipient: defaultRecipient?.email ?? null, recipientContactId: defaultRecipient?.contactId ?? null,
       recipientName, reference, subject, body, customerId: sub.customerId,
       customer: sub.customer.nameEn || sub.customer.nameAr, service: sub.name, dueDate: row.dueDate,
       termMonths: sub.renewalIntervalMonths, amount: sub.sellingPrice.toString(), currency: sub.currency,
@@ -86,6 +87,8 @@ export class ManualRenewalService {
       const row = await tx.renewalCase.findUnique({ where: { id }, include: caseInclude });
       if (!row) throw new NotFoundException('Renewal case not found.');
       requireSendEligibility(row, input.purpose);
+      if (row.communicationRevision !== input.expectedRevision) throw new ConflictException('Renewal changed since the draft was prepared. Refresh and prepare a new message.');
+      if (row.subscription.status !== 'ACTIVE' || row.subscription.customer.status !== 'ACTIVE') throw new ConflictException('The subscription and customer must be active to send a renewal message.');
       const reference = readableRenewalReference(id, row.dueDate);
       if (!input.subject.includes(`[${reference}]`)) throw new BadRequestException('Keep the renewal reference in the subject.');
       const recipient = await this.validateRecipient(tx, row.subscription.customerId, input.recipientContactId, input.recipient);
@@ -96,13 +99,14 @@ export class ManualRenewalService {
   }
 
   async review(id: string, pending: boolean, actorId: string, input?: unknown) {
-    const parsed = z.object({ messageId: z.uuid() }).strict().safeParse(input);
+    const parsed = z.object({ messageId: z.uuid(), expectedRevision: z.number().int().nonnegative() }).strict().safeParse(input);
     if (!parsed.success) throw new BadRequestException('Select the inbound reply being reviewed.');
     const { messageId } = parsed.data;
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM renewal_cases WHERE id = ${id} FOR UPDATE`;
       const row = await tx.renewalCase.findUnique({ where: { id } });
       if (!row || !reviewable.some(status => status === row.status)) throw new ConflictException('The current renewal state cannot enter review.');
+      if (row.communicationRevision !== parsed.data.expectedRevision) throw new ConflictException('Renewal changed since review. Refresh before recording the decision.');
       const reply = await tx.emailMessage.findFirst({ where: { id: messageId, renewalCaseId: id, direction: 'INBOUND' }, select: { id: true } });
       if (!reply) throw new NotFoundException('Inbound message not found.');
       if (pending) {
@@ -141,8 +145,8 @@ export class ManualRenewalService {
       if (!row) throw new NotFoundException('Renewal case not found.');
       const purpose = original.purpose === 'CLARIFICATION' ? 'CLARIFICATION' : 'REMINDER';
       requireSendEligibility(row, purpose);
-      if (purpose === 'CLARIFICATION' && row.communicationRevision !== original.caseRevision)
-        throw new ConflictException('This clarification has been superseded.');
+      if ((purpose === 'CLARIFICATION' || original.caseRevision !== null) && row.communicationRevision !== original.caseRevision)
+        throw new ConflictException('This message has been superseded. Prepare a new message after review.');
       const recipient = await this.validateRecipient(tx, original.customerId, original.recipientContactId, original.recipient);
       const revision = await this.reserveCase(tx, row, purpose);
       return this.queue(tx, {
@@ -169,7 +173,7 @@ export class ManualRenewalService {
   }
 
   async replies(id: string) {
-    return this.prisma.emailMessage.findMany({ where: { renewalCaseId: id }, orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }], take: 100 });
+    return this.prisma.emailMessage.findMany({ where: { renewalCaseId: id, direction: 'INBOUND' }, orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }], take: 100, select: { id: true, direction: true, subject: true, bodyText: true, fromAddress: true, occurredAt: true, reviewedAt: true } });
   }
 
   async markRead(id: string, messageId: string, actorId: string, read = true) {

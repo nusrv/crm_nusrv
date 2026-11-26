@@ -36,7 +36,7 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
   if (official && !invoice.finalPrintEnabled)
     return (
       <p className="no-print">
-        Final customer document blocked: resolve reconciliation and supply an official graphical QR.
+        Final customer document blocked: verify the official invoice record, graphical QR, issuer details and reconciliation.
       </p>
     );
   const discrepancy = invoice.officialValueDiscrepancies.length > 0;

@@ -4,7 +4,7 @@ import { ManualRenewalService } from './manual-renewal.service';
 const messageId = '00000000-0000-4000-8000-000000000001';
 
 function harness(found = true) {
-  const row = { id: 'case-1', status: 'HUMAN_REVIEW', clarificationPending: false };
+  const row = { id: 'case-1', status: 'HUMAN_REVIEW', clarificationPending: false, communicationRevision: 4 };
   const update = jest.fn(() => Promise.resolve(row));
   const updateMany = jest.fn(() => Promise.resolve({ count: 1 }));
   const findFirst = jest.fn(() => Promise.resolve(found ? { id: messageId } : null));
@@ -21,7 +21,7 @@ function harness(found = true) {
 describe('Human renewal reply review', () => {
   it('keeps the commercial case unchanged and marks only the selected inbound reply read', async () => {
     const { service, update, updateMany, record } = harness();
-    await service.review('case-1', false, 'admin-1', { messageId });
+    await service.review('case-1', false, 'admin-1', { messageId, expectedRevision: 4 });
     expect(update).not.toHaveBeenCalled();
     expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: messageId, renewalCaseId: 'case-1', direction: 'INBOUND', reviewedAt: null },
@@ -32,15 +32,22 @@ describe('Human renewal reply review', () => {
 
   it('requires the selected reply to belong to the case before changing any state', async () => {
     const { service, update, updateMany, record } = harness(false);
-    await expect(service.review('case-1', true, 'admin-1', { messageId })).rejects.toThrow('Inbound message not found');
+    await expect(service.review('case-1', true, 'admin-1', { messageId, expectedRevision: 4 })).rejects.toThrow('Inbound message not found');
     expect(update).not.toHaveBeenCalled();
     expect(updateMany).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
   });
 
+  it('rejects a stale review before altering state or read status', async () => {
+    const { service, update, updateMany } = harness();
+    await expect(service.review('case-1', true, 'admin-1', { messageId, expectedRevision: 3 })).rejects.toThrow('Refresh');
+    expect(update).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
   it('requests clarification without advancing to waiting or sending mail', async () => {
     const { service, update, updateMany } = harness();
-    await service.review('case-1', true, 'admin-1', { messageId });
+    await service.review('case-1', true, 'admin-1', { messageId, expectedRevision: 4 });
     expect(update).toHaveBeenCalledWith({
       where: { id: 'case-1' },
       data: { status: 'HUMAN_REVIEW', customerDecision: 'UNDECIDED', clarificationPending: true, communicationRevision: { increment: 1 } },
