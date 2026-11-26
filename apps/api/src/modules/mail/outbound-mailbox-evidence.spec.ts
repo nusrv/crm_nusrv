@@ -20,7 +20,9 @@ describe('outbound mailbox evidence read model', () => {
   it('shows only corroborated stored hard-failure follow-ups, not inferred bounces', async () => {
     const task = { id: 'task', subjectType: 'OperatorReplyOutbox', subjectId: 'outbox', mailConfigurationId: 'mail', attemptId: 'a', recipient: 'buyer@example.test', originalMessageId: '<A@example.test>', status: 'OPEN', createdAt: now, observations: [{ enhancedStatus: '5.1.1', createdAt: now }] };
     const db = { mailSentObservation: { findMany: jest.fn(() => Promise.resolve([])) }, mailDsnFollowUp: { findMany: jest.fn(() => Promise.resolve([task, { ...task, id: 'wrong', recipient: 'other@example.test' }, { ...task, id: 'soft', observations: [{ enhancedStatus: '4.1.1', createdAt: now }] }])) } };
-    const result = await outboundMailboxEvidence(db as never, 'OperatorReplyOutbox', 'outbox', [attempt], false);
+    const success = { actorType: 'SYSTEM', eventKey: 'communication.reply.delivered', metadata: { attemptId: 'a', acceptance: { source: 'smtp', responseCode: 250 } } };
+    expect((await outboundMailboxEvidence(db as never, 'OperatorReplyOutbox', 'outbox', [attempt], false)).followUps).toEqual([]);
+    const result = await outboundMailboxEvidence(db as never, 'OperatorReplyOutbox', 'outbox', [attempt, success], false);
     expect(result.followUps.map(item => item.id)).toEqual(['task']);
     expect(result.recipientDelivery).toBe('UNVERIFIED');
   });

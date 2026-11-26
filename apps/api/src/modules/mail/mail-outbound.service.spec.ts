@@ -33,6 +33,9 @@ function baseRow(overrides: Record<string, unknown> = {}) {
     reminderRuleId: 'rule-1',
     notificationRuleId: null as string | null,
     audience: 'CUSTOMER',
+    purpose: null as string | null,
+    caseRevision: null as number | null,
+    recipientContactId: null as string | null,
     recipient: 'current@example.test',
     subject: 'Renewal reminder',
     body: 'Body text',
@@ -51,7 +54,7 @@ function baseRow(overrides: Record<string, unknown> = {}) {
     messageIdHeader: null as string | null,
     customer: { id: 'customer-1', status: 'ACTIVE', billingEntityId: 'be-1' },
     subscription: { id: 'sub-1', status: 'ACTIVE' },
-    renewalCase: { id: 'case-1', status: 'REMINDER_CYCLE', holds: [] as unknown[] },
+    renewalCase: { id: 'case-1', status: 'REMINDER_CYCLE', holds: [] as unknown[], clarificationPending: false, communicationRevision: 0 },
     notificationRule: null as { id: string; suppressOnWorkflowHold: boolean } | null,
     ...overrides,
   };
@@ -69,6 +72,13 @@ function matches(row: Row, where: Record<string, unknown>): boolean {
     }
     const current = item[key];
     if (value instanceof Date) return current instanceof Date && +current === +value;
+    if (key === 'renewalCase' && value && typeof value === 'object' && current && typeof current === 'object') {
+      return Object.entries(value).every(([field, condition]) => {
+        const actual = (current as Record<string, unknown>)[field];
+        if (condition && typeof condition === 'object' && 'in' in condition && Array.isArray(condition.in)) return condition.in.includes(actual);
+        return actual === condition;
+      });
+    }
     if (value && typeof value === 'object') {
       if ('gt' in value) return typeof current === 'number' && current > Number(value.gt);
       if ('lt' in value) return current instanceof Date && +current < Number(value.lt);
@@ -211,7 +221,14 @@ function buildHarness(options: HarnessOptions = {}) {
     return Promise.resolve(options.existingThread ? mailConfigurationA : null);
   });
 
+  const renewalCaseUpdateMany = jest.fn((args: { where: Record<string, unknown>; data: { status: string; clarificationPending?: boolean; communicationRevision?: { increment: number } } }) => {
+    const { id, ...where } = args.where;
+    if (id !== persisted.renewalCase.id || !matches(persisted, { renewalCase: where })) return Promise.resolve({ count: 0 });
+    persisted = { ...persisted, renewalCase: { ...persisted.renewalCase, status: args.data.status, clarificationPending: args.data.clarificationPending ?? persisted.renewalCase.clarificationPending, communicationRevision: persisted.renewalCase.communicationRevision + (args.data.communicationRevision?.increment ?? 0) } };
+    return Promise.resolve({ count: 1 });
+  });
   const txLike = {
+    renewalCase: { updateMany: renewalCaseUpdateMany },
     $queryRaw: jest.fn(() => Promise.resolve([{ id: persisted.id }])),
     communicationOutbox: { updateMany: communicationOutboxUpdateMany },
     emailMessage: { create: emailMessageCreate, update: emailMessageUpdate },
@@ -334,6 +351,7 @@ function buildHarness(options: HarnessOptions = {}) {
     // of whether it actually took effect. Use this, not a mock-call inspection, to assert what a
     // stale/ownership-losing worker's rejected write did NOT actually change.
     getPersistedRow: () => persisted,
+    renewalCaseUpdateMany,
   };
 }
 
@@ -414,6 +432,28 @@ describe('MailOutboundService.processOne — business eligibility', () => {
     const outcome = await service.processOne('outbox-1');
 
     expect(outcome).toBe('cancelled');
+    expect(transport.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('R5.1 manual case-linked SMTP acceptance', () => {
+  it.each(['REMINDER', 'CLARIFICATION'])('only real SMTP acceptance moves %s to Waiting for Customer', async (purpose) => {
+    const clarification = purpose === 'CLARIFICATION';
+    const row = baseRow({ purpose, caseRevision: 3, recipientContactId: 'contact-1', renewalCase: { id: 'case-1', status: clarification ? 'HUMAN_REVIEW' : 'UPCOMING', holds: [], clarificationPending: clarification, communicationRevision: 3 } });
+    const mocked = buildHarness({ row });
+    expect(await mocked.service.processOne('outbox-1')).toBe('sent');
+    expect(mocked.renewalCaseUpdateMany).not.toHaveBeenCalled();
+    expect(mocked.getPersistedRow().renewalCase.status).toBe(clarification ? 'HUMAN_REVIEW' : 'UPCOMING');
+    const real = buildHarness({ row });
+    real.transport.send.mockResolvedValue({ source: 'smtp', responseCode: 250 });
+    expect(await real.service.processOne('outbox-1')).toBe('sent');
+    expect(real.getPersistedRow().renewalCase).toMatchObject({ status: 'AWAITING_CUSTOMER', clarificationPending: false });
+  });
+
+  it('never sends a reminder superseded by a newer review revision', async () => {
+    const row = baseRow({ purpose: 'REMINDER', caseRevision: 3, recipientContactId: 'contact-1', renewalCase: { id: 'case-1', status: 'AWAITING_CUSTOMER', holds: [], clarificationPending: false, communicationRevision: 4 } });
+    const { service, transport } = buildHarness({ row });
+    expect(await service.processOne('outbox-1')).toBe('cancelled');
     expect(transport.send).not.toHaveBeenCalled();
   });
 });

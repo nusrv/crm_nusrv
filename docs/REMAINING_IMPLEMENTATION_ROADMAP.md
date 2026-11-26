@@ -11,9 +11,21 @@ Baseline deployed revision: 2f542829882a62926c8a342e92cba19e412c78f4.
 - R4/R5 (7eac84e): remove operational AI controls; advanced identifiers, settings and readable states; direct links from customers and communications; shared read state; outbound evidence and warned explicit resend controls.
 - Follow-up in this revision: unambiguous inbound replies open human review; stale manual reminders are guarded at eligibility and durable attempt boundary; targeted review/ingest tests; explicit refresh.
 
-## Remaining verification and limitations
+## R5.1 — source closure before Plesk
 
-These source changes are not deployed or runtime-validated. No new dependency or migration is introduced. Existing schema must already be migrated. Provider-independent authenticated delivery/bounce evidence is not yet connected to a real provider adapter; unverified evidence must remain unverified. Do not activate Sent observation or DSN features on real mail before separate controlled acceptance. Individual-issuer final template still requires the approved reference. Historical invoice association remains separately approved work.
+The owner requires completing all available programming work before any Plesk build/deployment. This is not a new product scope. Source corrections since 5cea3fb:
+- 9b02e4d: manual Waiting for Customer endpoint now rejects bypass; selected-reply acceptance/rejection and shared read marking are atomic; renewal revision CAS and explicit ADMIN route metadata.
+- ddf4553: per-message bounded, exact mailbox Sent-header observations and stored failure follow-ups; no recipient delivery inference.
+- 2793902: revision-bound draft/review submission, stale resend rejection, new inbound-reply revision fence, limited reply read projection, strict verified-official print eligibility and regression coverage.
+- 5ee549d: manual (not automatic milestone) history, truthful uncertain label and bounded batched reminder counts, verified official-invoice eligibility in renewal UI, ADMIN operational affordances and page filter reset.
+- Current follow-up: SMTP mock vs real acceptance regression cases, stale worker revision, explicit ADMIN communications routes, exact SMTP corroboration of historical DSN follow-up display.
+
+## Remaining external programming dependencies and verification
+
+- **OD-12 real provider evidence adapter:** source contract, binding, storage and bounded UI projection exist, but the production mail provider and its authenticated report/tracking capability were not specified or approved. SMTP acceptance and a Sent copy are not recipient delivery. Raw DSNs remain review-only; do not invent or enable a provider adapter, infer delivery, or accept arbitrary MIME as authenticated proof. Obtain provider identity and supported documented evidence API/permission model, then implement the provider-specific adapter and tests.
+- **OD-11 individual template:** approved separate personal invoice visual reference is missing. Company issuer template remains in place. Individual officialization remains blocked pending approved template; do not silently reuse the company layout as the individual official template.
+- **Historical association:** remains separately approved work; not an authorized implementation item.
+- Full TypeScript/lint/Jest/build and runtime acceptance have not been executed for this revision. New tests are source changes, not recorded passes. No new dependency or migration is introduced by R5.1. No main merge, database write, mail send, workflow dispatch or Plesk action performed. Do not enter R6 while known in-scope source gaps remain, including the external programming dependencies unless the owner explicitly defers them.
 
 ## R6 — Plesk acceptance
 

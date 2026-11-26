@@ -62,11 +62,18 @@ export async function outboundMailboxEvidence(
       observations: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 6, select: { enhancedStatus: true, createdAt: true } } },
   });
   if (tasks.length > 50) limited = true;
-  const followUps = tasks.slice(0, 50).filter(task => task.subjectType === subjectType && task.subjectId === subjectId &&
+  const successKey = subjectType === 'CommunicationOutbox' ? 'mail.send.succeeded' : 'communication.reply.delivered';
+  const hasExactAcceptance = (attemptId: string) => {
+    const matching = events.filter(event => event.eventKey === successKey && object(event.metadata)?.attemptId === attemptId);
+    const acceptance = object(object(matching[0]?.metadata)?.acceptance);
+    return matching.length === 1 && matching[0]?.actorType === 'SYSTEM' && acceptance?.source === 'smtp' && typeof acceptance.responseCode === 'number' && Number.isInteger(acceptance.responseCode) && acceptance.responseCode >= 200 && acceptance.responseCode < 300;
+  };
+  const followUps = tasks.slice(0, 50).filter(task => task.subjectType === subjectType && task.subjectId === subjectId && hasExactAcceptance(task.attemptId) &&
     attempts.some(a => a.attemptId === task.attemptId && a.mailConfigurationId === task.mailConfigurationId &&
       a.messageId === task.originalMessageId && a.recipient === task.recipient) &&
     task.observations.some(o => /^5\.[0-9]{1,3}\.[0-9]{1,3}$/.test(o.enhancedStatus)))
     .map(task => ({ id: task.id, status: task.status, recipient: task.recipient, createdAt: task.createdAt,
       enhancedStatuses: [...new Set(task.observations.map(o => o.enhancedStatus))] }));
+  if (tasks.some(task => task.observations.length > 5)) limited = true;
   return { sent, followUps, limited, recipientDelivery: 'UNVERIFIED' as const };
 }
