@@ -52,8 +52,8 @@ interface BillingEntityOption {
 
 export function SubscriptionsManager() {
   const { can } = useControlPanel();
-  const canManage = can('ADMIN', 'ACCOUNTANT');
-  const canMap = can('ADMIN', 'IT');
+  const canManage = can('ADMIN');
+  const canMap = can('ADMIN');
   const [result, setResult] = useState<PageResult<SubscriptionRow> | null>(null);
   const [lockedCustomer, setLockedCustomer] = useState<CustomerComboboxOption | undefined>(
     undefined,

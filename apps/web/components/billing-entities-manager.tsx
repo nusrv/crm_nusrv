@@ -103,7 +103,7 @@ export function BillingEntitiesManager() {
           </button>
         </div>
       )}
-      {(can('ADMIN') || can('ACCOUNTANT')) &&
+      {can('ADMIN') &&
         items.map((entity) => (
           <details key={entity.id} className="panel mb-3">
             <summary>Issuer branding — {entity.name}</summary>

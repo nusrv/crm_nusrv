@@ -72,7 +72,7 @@ const renewalCaseInclude = {
     where: { audience: 'CUSTOMER' as const },
     orderBy: { queuedAt: 'desc' as const },
     take: 1,
-    select: { status: true, queuedAt: true, audience: true },
+    select: { status: true, queuedAt: true, audience: true, smtpUncertain: true },
   },
   _count: { select: { communicationOutbox: { where: { audience: 'CUSTOMER' as const } }, emailMessages: { where: { direction: 'INBOUND' as const, reviewedAt: null } } } },
 } as const;
@@ -187,27 +187,56 @@ export class RenewalCasesService {
       include: {
         ...renewalCaseInclude,
         communicationOutbox: { orderBy: { queuedAt: 'desc' }, take: 100 },
-        evaluationDecisions: { orderBy: { createdAt: 'desc' }, take: 100 },
+        invoices: true,
       },
     });
     if (!record) throw new NotFoundException('Renewal Case not found.');
     const summaries = await this.reminderSummaries([id]);
-    return { ...record, unreadReplyCount: record._count.emailMessages, reminderSummary: summaries.get(id) ?? { acceptedCount: 0, lastAcceptedAt: null } };
+    return { ...record, invoices: record.invoices.map(invoice => ({ id: invoice.id, status: invoice.status, internalReference: invoice.internalReference, fawtaraInvoiceNumber: invoice.fawtaraInvoiceNumber, renewalOfficialKey: invoice.renewalOfficialKey, verifiedOfficial: isVerifiedOfficialInvoice(invoice) })), unreadReplyCount: record._count.emailMessages, reminderSummary: summaries.get(id) ?? { acceptedCount: 0, lastAcceptedAt: null } };
   }
 
   private async reminderSummaries(caseIds: string[]) {
-    const result = new Map<string, { acceptedCount: number; lastAcceptedAt: Date | null }>();
+    type Summary = { acceptedCount: number; lastAcceptedAt: Date | null; limited: boolean };
+    const result = new Map<string, Summary>(caseIds.map(id => [id, { acceptedCount: 0, lastAcceptedAt: null, limited: false }]));
     if (!caseIds.length) return result;
-    const rows = await this.prisma.communicationOutbox.findMany({ where: { renewalCaseId: { in: caseIds }, audience: 'CUSTOMER', purpose: 'REMINDER', manualApprovedBy: { not: null } }, select: { id: true, renewalCaseId: true } });
-    for (const row of rows) {
-      const events = await this.prisma.auditEvent.findMany({ where: { subjectType: 'CommunicationOutbox', subjectId: row.id, eventKey: { in: ['mail.send.attempt_started', 'mail.send.succeeded'] } }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { actorType: true, eventKey: true, metadata: true, createdAt: true }, take: 101 });
-      if (summarizeSmtpEvidence('CommunicationOutbox', events, events.length > 100).state !== 'SMTP_ACCEPTED') continue;
-      const accepted = events.find(event => event.eventKey === 'mail.send.succeeded');
-      if (!accepted) continue;
-      const summary = result.get(row.renewalCaseId) ?? { acceptedCount: 0, lastAcceptedAt: null };
-      summary.acceptedCount += 1;
-      if (!summary.lastAcceptedAt || accepted.createdAt > summary.lastAcceptedAt) summary.lastAcceptedAt = accepted.createdAt;
-      result.set(row.renewalCaseId, summary);
+    // Bounded batched reads: avoid a sequential audit lookup for every reminder.
+    const rows = await this.prisma.communicationOutbox.findMany({
+      where: { renewalCaseId: { in: caseIds }, audience: 'CUSTOMER', purpose: 'REMINDER', manualApprovedBy: { not: null } },
+      orderBy: [{ queuedAt: 'desc' }, { id: 'desc' }], take: 2001,
+      select: { id: true, renewalCaseId: true },
+    });
+    if (rows.length > 2000) for (const summary of result.values()) summary.limited = true;
+    for (let offset = 0; offset < Math.min(rows.length, 2000); offset += 50) {
+      const batch = rows.slice(offset, Math.min(offset + 50, 2000));
+      const events = await this.prisma.auditEvent.findMany({
+        where: { subjectType: 'CommunicationOutbox', subjectId: { in: batch.map(row => row.id) }, eventKey: { in: ['mail.send.attempt_started', 'mail.send.succeeded'] } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { subjectId: true, actorType: true, eventKey: true, metadata: true, createdAt: true },
+        take: 5001,
+      });
+      if (events.length > 5000) {
+        for (const row of batch) { const summary = result.get(row.renewalCaseId); if (summary) summary.limited = true; }
+        continue;
+      }
+      const grouped = new Map<string, typeof events>();
+      for (const event of events) {
+        if (!event.subjectId) continue;
+        const existing = grouped.get(event.subjectId) ?? [];
+        existing.push(event);
+        grouped.set(event.subjectId, existing);
+      }
+      for (const row of batch) {
+        const summary = result.get(row.renewalCaseId);
+        if (!summary) continue;
+        const history = grouped.get(row.id) ?? [];
+        const evidence = summarizeSmtpEvidence('CommunicationOutbox', history, history.length > 100);
+        if (evidence.state === 'REVIEW_REQUIRED') summary.limited = true;
+        if (evidence.state !== 'SMTP_ACCEPTED') continue;
+        const accepted = history.find(event => event.eventKey === 'mail.send.succeeded');
+        if (!accepted) continue;
+        summary.acceptedCount += 1;
+        if (!summary.lastAcceptedAt || accepted.createdAt > summary.lastAcceptedAt) summary.lastAcceptedAt = accepted.createdAt;
+      }
     }
     return result;
   }

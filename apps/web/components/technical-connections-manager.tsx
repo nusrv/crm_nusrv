@@ -26,7 +26,7 @@ interface TechnicalConnection {
 
 export function TechnicalConnectionsManager() {
   const { can } = useControlPanel();
-  const canManage = can('ADMIN', 'IT');
+  const canManage = can('ADMIN');
   const [items, setItems] = useState<TechnicalConnection[]>([]);
   const [editing, setEditing] = useState<TechnicalConnection | null>(null);
   const [formOpen, setFormOpen] = useState(false);

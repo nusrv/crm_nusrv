@@ -62,7 +62,7 @@ export function CustomerDetail() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { can } = useControlPanel();
-  const canManage = can('ADMIN', 'SALES_DEVELOPMENT');
+  const canManage = can('ADMIN');
   const [detail, setDetail] = useState<Customer | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');

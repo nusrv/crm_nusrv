@@ -32,7 +32,7 @@ interface RenewalCase {
   status: string;
   clarificationPending: boolean;
   unreadReplyCount: number;
-  reminderSummary: { acceptedCount: number; lastAcceptedAt: string | null };
+  reminderSummary: { acceptedCount: number; lastAcceptedAt: string | null; limited?: boolean };
   subscription: {
     id: string;
     subscriptionCode: string;
@@ -52,7 +52,7 @@ interface RenewalCase {
     servicePackage: { name: string } | null;
   };
   holds: RenewalHold[];
-  communicationOutbox: Array<{ status: string; queuedAt: string; audience: string }>;
+  communicationOutbox: Array<{ status: string; queuedAt: string; audience: string; smtpUncertain?: boolean }>;
   _count: { communicationOutbox: number };
 }
 
@@ -398,6 +398,7 @@ export function RenewalCasesManager() {
           aria-label="Service Type filter"
           className="input"
           onChange={(event) => {
+            setPage(1);
             setServiceTypeId(event.target.value);
             setServicePackageId('');
           }}
@@ -443,6 +444,7 @@ export function RenewalCasesManager() {
           <input
             aria-label="Due from"
             onChange={(event) => {
+              setPage(1);
               setDueFrom(event.target.value);
               setUrgency('');
             }}
@@ -455,6 +457,7 @@ export function RenewalCasesManager() {
           <input
             aria-label="Due to"
             onChange={(event) => {
+              setPage(1);
               setDueTo(event.target.value);
               setUrgency('');
             }}
@@ -553,7 +556,7 @@ export function RenewalCasesManager() {
                       renewalCase.communicationOutbox[0],
                       renewalCase._count.communicationOutbox,
                     )}
-                    <p className="text-xs muted">SMTP accepted: {renewalCase.reminderSummary.acceptedCount} · Last: {renewalCase.reminderSummary.lastAcceptedAt ? new Date(renewalCase.reminderSummary.lastAcceptedAt).toLocaleString() : '—'}</p>
+                    <p className="text-xs muted">SMTP accepted: {renewalCase.reminderSummary.limited ? 'at least ' : ''}{renewalCase.reminderSummary.acceptedCount} · Last: {renewalCase.reminderSummary.lastAcceptedAt ? new Date(renewalCase.reminderSummary.lastAcceptedAt).toLocaleString() : '—'}</p>
                   </td>
                   <td className="space-x-2 whitespace-nowrap">
                     <button

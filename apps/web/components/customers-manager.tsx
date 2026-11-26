@@ -69,7 +69,7 @@ function composePhone(rawPhone: string, callingCode: string): string | undefined
 
 export function CustomersManager() {
   const { can } = useControlPanel();
-  const canManage = can('ADMIN', 'SALES_DEVELOPMENT');
+  const canManage = can('ADMIN');
   const [customers, setCustomers] = useState<PageResult<Customer> | null>(null);
   const [entities, setEntities] = useState<BillingEntity[]>([]);
   const [search, setSearch] = useState('');
@@ -437,7 +437,7 @@ export function CustomersManager() {
               </button>
             </div>
           </form>
-          {editing && can('ADMIN', 'ACCOUNTANT') && <CustomerSubscriptionPanel key={editing.id} customer={editing}
+          {editing && can('ADMIN') && <CustomerSubscriptionPanel key={editing.id} customer={editing}
             onChanged={() => void load().catch(() => setError('Saved; refresh the customer list.'))} />}
         </Modal>
       )}

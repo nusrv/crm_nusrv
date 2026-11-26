@@ -13,31 +13,16 @@ import { RenewalHumanCommunications } from './renewal-human-communications';
 import { LegacyRenewalRecovery } from './p1-recovery-panels';
 import { OutboundEvidenceControls } from './outbound-evidence-controls';
 
-interface ReminderRuleOption {
-  id: string;
-  code: string;
-  name: string;
-  daysBeforeDue: number;
-  enabled: boolean;
-}
-
 interface OutboxEntry {
   id: string;
   audience: string;
   recipient: string;
   subject: string;
   daysBeforeDue: number;
+  purpose?: string | null;
   status: string;
   queuedAt: string;
   smtpUncertain: boolean;
-}
-
-interface EvaluationDecision {
-  id: string;
-  outcome: string;
-  daysBeforeDue: number | null;
-  reason: string | null;
-  createdAt: string;
 }
 
 interface HoldEntry {
@@ -56,7 +41,7 @@ interface RenewalCaseDetailData {
   clarificationPending: boolean;
   communicationRevision: number;
   unreadReplyCount: number;
-  reminderSummary: { acceptedCount: number; lastAcceptedAt: string | null };
+  reminderSummary: { acceptedCount: number; lastAcceptedAt: string | null; limited?: boolean };
   proposedPeriodStart: string | null;
   proposedPeriodEnd: string | null;
   proposedNextRenewalDate: string | null;
@@ -66,6 +51,7 @@ interface RenewalCaseDetailData {
     internalReference: string;
     fawtaraInvoiceNumber: string | null;
     renewalOfficialKey: string | null;
+    verifiedOfficial: boolean;
   }>;
   subscription: {
     id: string;
@@ -91,35 +77,6 @@ interface RenewalCaseDetailData {
   };
   holds: HoldEntry[];
   communicationOutbox: OutboxEntry[];
-  evaluationDecisions: EvaluationDecision[];
-}
-
-const DECISION_OUTCOME_LABEL: Record<string, string> = {
-  SKIPPED_HOLD: 'Skipped — on hold',
-  SKIPPED_INELIGIBLE: 'Skipped — ineligible',
-  DUPLICATE_PREVENTED: 'Duplicate prevented',
-};
-
-function milestoneLabel(
-  daysBeforeDue: number,
-  daysLeft: number,
-  outbox: OutboxEntry[],
-  decisions: EvaluationDecision[],
-): string {
-  const matching = outbox
-    .filter((entry) => entry.audience === 'CUSTOMER' && entry.daysBeforeDue === daysBeforeDue)
-    .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
-  const latest = matching[0];
-  if (latest) {
-    if (latest.status === 'DELIVERED') return `Dispatch recorded (queued ${latest.queuedAt.slice(0, 10)})`;
-    if (latest.status === 'FAILED') return 'Failed';
-    if (latest.status === 'QUEUED' || latest.status === 'PROCESSING') return 'Queued';
-    if (latest.status === 'CANCELLED') return 'Cancelled';
-  }
-  if (daysLeft > daysBeforeDue) return 'Not yet due';
-  const decision = decisions.find((entry) => entry.daysBeforeDue === daysBeforeDue);
-  if (decision) return DECISION_OUTCOME_LABEL[decision.outcome] ?? 'Skipped';
-  return 'Pending';
 }
 
 const MARK_ACTIONS = [
@@ -154,19 +111,14 @@ export function RenewalCaseDetail({
   const { can } = useControlPanel();
   const canManage = can('ADMIN');
   const [detail, setDetail] = useState<RenewalCaseDetailData | null>(null);
-  const [reminderRules, setReminderRules] = useState<ReminderRuleOption[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [holdReason, setHoldReason] = useState('');
   const [holdFormOpen, setHoldFormOpen] = useState(false);
 
   async function load() {
-    const [caseResult, configResult] = await Promise.all([
-      apiRequest<RenewalCaseDetailData>(`/renewal-cases/${caseId}`),
-      apiRequest<{ reminderRules: ReminderRuleOption[] }>('/renewal-configuration'),
-    ]);
+    const caseResult = await apiRequest<RenewalCaseDetailData>(`/renewal-cases/${caseId}`);
     setDetail(caseResult);
-    setReminderRules(configResult.reminderRules ?? []);
   }
 
   useEffect(() => {
@@ -258,7 +210,6 @@ export function RenewalCaseDetail({
           onRelease={release}
           onMarkAction={runAction}
           onCreateRenewalInvoice={createRenewalInvoice}
-          reminderRules={reminderRules}
         />
       )}
     </Modal>
@@ -279,7 +230,6 @@ function RenewalCaseBody({
   onRelease,
   onMarkAction,
   onCreateRenewalInvoice,
-  reminderRules,
 }: {
   canManage: boolean;
   prepareOnOpen: boolean;
@@ -294,23 +244,19 @@ function RenewalCaseBody({
   onRelease: (holdId: string) => void;
   onMarkAction: (path: string, successMessage: string) => void;
   onCreateRenewalInvoice: () => void;
-  reminderRules: ReminderRuleOption[];
 }) {
   const asOf = new Date().toISOString();
   const daysLeft = daysUntilDue(detail.dueDate, asOf);
   const activeHold = detail.holds.find(
     (hold) => hold.active && (!hold.expiresAt || new Date(hold.expiresAt) > new Date()),
   );
-  const milestones = [...reminderRules]
-    .filter((rule) => rule.enabled)
-    .sort((a, b) => b.daysBeforeDue - a.daysBeforeDue);
   const { customer } = detail.subscription;
   const isTerminal = TERMINAL_STATUSES.has(detail.status);
   const invoices = detail.invoices ?? [];
   const approvedRenewal = detail.status === 'ACCEPTED' && detail.customerDecision === 'ACCEPTED' &&
     Boolean(detail.proposedPeriodStart && detail.proposedPeriodEnd && detail.proposedNextRenewalDate);
   const hasOfficialRenewalInvoice = invoices.some((invoice) =>
-    invoice.renewalOfficialKey === detail.id && invoice.status === 'FAWTARA_ACCEPTED');
+    invoice.renewalOfficialKey === detail.id && invoice.verifiedOfficial);
 
   return (
     <div className="space-y-6">
@@ -412,29 +358,8 @@ function RenewalCaseBody({
       </section>}
       <section>
         <p>SMTP-accepted reminders: {detail.reminderSummary.acceptedCount} · Last accepted: {detail.reminderSummary.lastAcceptedAt ? new Date(detail.reminderSummary.lastAcceptedAt).toLocaleString() : '—'}</p>
-        <h4 className="font-medium">Renewal timeline</h4>
-        {milestones.length ? (
-          <ul className="mt-2 space-y-1 text-sm">
-            {milestones.map((rule) => (
-              <li
-                className="flex justify-between gap-3 border-b border-[var(--line)] py-1"
-                key={rule.id}
-              >
-                <span>D-{rule.daysBeforeDue}</span>
-                <span className="muted">
-                  {milestoneLabel(
-                    rule.daysBeforeDue,
-                    daysLeft,
-                    detail.communicationOutbox,
-                    detail.evaluationDecisions,
-                  )}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="muted mt-2 text-sm">No enabled reminder milestones are configured.</p>
-        )}
+        {detail.reminderSummary.limited && <p className="muted">Some historical evidence requires review; count is a confirmed minimum.</p>}
+        <p className="muted">Reminders are prepared and sent manually. Due dates do not trigger customer email.</p>
       </section>
 
       <section>
@@ -445,7 +370,7 @@ function RenewalCaseBody({
               <thead>
                 <tr>
                   <th>Queued</th>
-                  <th>Milestone</th>
+                  <th>Message type</th>
                   <th>Audience</th>
                   <th>Recipient</th>
                   <th>Subject</th>
@@ -456,8 +381,8 @@ function RenewalCaseBody({
                 {detail.communicationOutbox.map((entry) => (
                   <tr key={entry.id}>
                     <td>{new Date(entry.queuedAt).toLocaleString()}</td>
-                    <td>{entry.daysBeforeDue === 0 ? 'D0' : `D-${entry.daysBeforeDue}`}</td>
-                    <td>{entry.audience}</td>
+                    <td>{entry.purpose === 'REMINDER' ? 'Manual reminder' : entry.purpose === 'CLARIFICATION' ? 'Clarification' : entry.audience === 'INTERNAL' ? 'Internal notification' : 'Historical message'}</td>
+                    <td>{workspaceStatus(entry.audience)}</td>
                     <td>{entry.recipient}</td>
                     <td>{entry.subject}</td>
                     <td>{mailDispatchStatus(entry.status, entry.smtpUncertain)}{canManage && entry.audience === 'CUSTOMER' && <OutboundEvidenceControls path={`/renewal-cases/${detail.id}/outbox/${entry.id}`} onChanged={() => void onChanged().catch(() => undefined)} />}</td>

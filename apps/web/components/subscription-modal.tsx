@@ -122,8 +122,8 @@ export function SubscriptionModal({
 }) {
   const router = useRouter();
   const { can } = useControlPanel();
-  const canManage = can('ADMIN', 'ACCOUNTANT');
-  const canMap = can('ADMIN', 'IT');
+  const canManage = can('ADMIN');
+  const canMap = can('ADMIN');
   const [editing, setEditing] = useState<Subscription | null>(null);
   const saveState = useModalSave();
   const [loading, setLoading] = useState(Boolean(subscriptionId));
