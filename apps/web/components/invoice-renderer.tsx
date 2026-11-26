@@ -40,12 +40,14 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
       </p>
     );
   const discrepancy = invoice.officialValueDiscrepancies.length > 0;
-  // OD-11: independent layout proposal for drafts only. Do not change historical official rendering.
-  const personalPreview = !official && presentation?.issuerType === 'INDIVIDUAL';
+  // OD-11: new official invoices use the immutable template version. Historical
+  // official records without a personal-v1 marker retain their original layout.
+  const personalLayout = presentation?.issuerType === 'INDIVIDUAL' &&
+    (!official || presentation.templateVersion === 'personal-v1');
   return (
-    <article className={`invoice-document nusrv-paper${personalPreview ? ' personal-invoice-preview' : ''}`}>
+    <article className={`invoice-document nusrv-paper${personalLayout ? ' personal-invoice-document' : ''}`}>
       {!official && <div className="invoice-draft-banner">DRAFT / NOT OFFICIAL</div>}
-      {personalPreview ? (
+      {personalLayout ? (
         <header className="personal-invoice-header">
           <div className="personal-invoice-title">
             <div>
@@ -54,7 +56,7 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
               <p>{invoice.internalReference}</p>
             </div>
             <dl className="personal-invoice-meta">
-              <dt>Electronic Invoice Number</dt><dd>Not issued</dd>
+              <dt>Electronic Invoice Number</dt><dd>{official ? invoice.fawtaraInvoiceNumber : 'Not issued'}</dd>
               <dt>Invoice Date</dt><dd>{date(invoice.invoiceDate)}</dd>
               <dt>Invoice Type</dt><dd>{invoice.invoiceTypeName ? invoice.invoiceTypeName.startsWith('1') ? 'Export Invoice' : 'Local Invoice' : 'Service Invoice'}</dd>
               <dt>Currency</dt><dd>{invoice.effectiveCurrencyCode}</dd>
@@ -81,7 +83,12 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
               <p>{invoice.customerAddressSnapshot} {invoice.customerCountrySnapshot}</p>
             </section>
           </div>
-          <p className="personal-invoice-proposal">Layout proposal — not approved for official issuance.</p>
+          {official && invoice.fawtaraQrImageDataUrl && (
+            <div className="personal-invoice-qr">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={invoice.fawtaraQrImageDataUrl} alt="Official JoFotara QR" />
+            </div>
+          )}
         </header>
       ) : (
       <header className="nusrv-header">
