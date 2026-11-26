@@ -10,6 +10,13 @@ describe('outbound mailbox evidence read model', () => {
     expect(recordedMailboxAttempts([{ ...attempt, actorType: 'USER' }], false)).toEqual([]);
     expect(recordedMailboxAttempts([{ ...attempt, metadata: { ...attempt.metadata, messageId: 'not an ID' } }], false)).toEqual([]);
   });
+  it('rejects a duplicate system attempt identity even when one start is malformed', () => {
+    const malformed = { ...attempt, metadata: { ...attempt.metadata, messageId: 'not an ID' } };
+    expect(recordedMailboxAttempts([attempt, malformed], false)).toEqual([]);
+    expect(recordedMailboxAttempts([malformed, attempt], false)).toEqual([]);
+    const unrelated = { ...malformed, metadata: { ...malformed.metadata, attemptId: 'b' } };
+    expect(recordedMailboxAttempts([attempt, unrelated], false)).toEqual([attempt.metadata]);
+  });
   it('observes an exact scoped Sent header without promoting it to delivery', async () => {
     const row = { messageIdHeader: '<A@example.test>', createdAt: now, internalDate: now, folderCheckpoint: { mailConfigurationId: 'mail', folderName: 'Sent' } };
     const db = { mailSentObservation: { findMany: jest.fn(() => Promise.resolve([row, { ...row, messageIdHeader: '<a@example.test>' }, { ...row, folderCheckpoint: { mailConfigurationId: 'other', folderName: 'Sent' } }])) }, mailDsnFollowUp: { findMany: jest.fn(() => Promise.resolve([])) } };
