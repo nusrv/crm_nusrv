@@ -774,3 +774,8 @@ tbody tr:last-child td {
     padding: 10mm 12mm !important; background: #fff !important; box-shadow: none !important;
   }
 }
+
+@media print {
+  body:not(:has(.payment-receipt-print)) .payment-collection-panel { display: none !important; }
+  body:has(.payment-receipt-print) .invoice-print-view { display: none !important; }
+}

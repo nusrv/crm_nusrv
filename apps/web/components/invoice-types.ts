@@ -19,6 +19,7 @@ export interface InvoiceLineView {
 
 export interface InvoiceView {
   id: string;
+  revision?: number;
   customerId: string | null;
   billingEntityId: string;
   sourceSubscriptionId: string | null;

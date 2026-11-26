@@ -71,7 +71,7 @@ export function InvoiceQrRecovery({ invoiceId, revision, onChanged }: {
 
   return <>
     <button type="button" className="button-secondary no-print" onClick={() => void loadHistory()}>QR correction and history</button>
-    {open && <Modal title="Official invoice QR history" onClose={() => { if (!busy) setOpen(false); }}>
+    {open && <Modal title="Official invoice QR history" closeDisabled={busy} onClose={() => { if (!busy) setOpen(false); }}>
       <Notice message={error} />
       <Notice message={message} tone="success" />
       <form className="form-grid" onSubmit={(event) => void submit(event)}>
@@ -127,7 +127,7 @@ export function LegacyRenewalRecovery({ caseId, status, dueDate, periodStart, pe
 
   return <>
     <button type="button" className="button-secondary" onClick={() => { setMessage(''); setOpen(true); }}>Repair missing proposed dates</button>
-    {open && <Modal title="Repair proposed dates" onClose={() => { if (!busy) setOpen(false); }}>
+    {open && <Modal title="Repair proposed dates" closeDisabled={busy} onClose={() => { if (!busy) setOpen(false); }}>
       <Notice message={error} />
       <Notice message={message} tone="success" />
       <form className="form-grid" onSubmit={(event) => void submit(event)}>

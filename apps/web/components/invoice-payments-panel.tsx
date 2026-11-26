@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { apiRequest } from '../lib/api';
+import { workspaceStatus } from '../lib/workspace-status';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
 import { Notice } from './notice';
@@ -24,9 +25,10 @@ const methods = [
   ['CARD_GATEWAY', 'Card gateway'], ['OTHER', 'Other'],
 ];
 
-export function InvoicePaymentsPanel({ invoiceId }: { invoiceId: string }) {
+export function InvoicePaymentsPanel({ invoiceId, eligible }: { invoiceId: string; eligible: boolean }) {
   const { can } = useControlPanel();
-  return can('ADMIN') ? <CollectionPanel invoiceId={invoiceId} /> : null;
+  if (!can('ADMIN')) return null;
+  return eligible ? <CollectionPanel invoiceId={invoiceId} /> : <section className="panel no-print"><h2>Payments and receipts</h2><button type="button" className="button-secondary" disabled>Payment Receipt</button><p className="muted">Record a verified official invoice first. Payment never controls renewal fulfillment.</p></section>;
 }
 
 function CollectionPanel({ invoiceId }: { invoiceId: string }) {
@@ -37,6 +39,8 @@ function CollectionPanel({ invoiceId }: { invoiceId: string }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [success, setSuccess] = useState('');
   const pending = useRef<{ payload: string; key: string } | null>(null);
 
   const reload = useCallback(() => apiRequest<Collection>(path).then(setSummary), [path]);
@@ -46,7 +50,7 @@ function CollectionPanel({ invoiceId }: { invoiceId: string }) {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy || !summary) return;
+    if (busy || saved || !summary) return;
     const form = new FormData(event.currentTarget);
     const read = (field: string) => String(form.get(field) ?? '').trim();
     const values = editing?.voiding ? {} : {
@@ -69,9 +73,9 @@ function CollectionPanel({ invoiceId }: { invoiceId: string }) {
         body: JSON.stringify({ ...payload, idempotencyKey: pending.current.key }),
       });
       pending.current = null;
-      setEditing(null);
-      setAdding(false);
-      await reload();
+      setSaved(true);
+      setSuccess('Payment / receipt saved and audited. Close this window to continue.');
+      await reload().catch(() => setError('Saved successfully; refresh to update the balance.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to save receipt.');
     } finally {
@@ -96,15 +100,15 @@ function CollectionPanel({ invoiceId }: { invoiceId: string }) {
 
   const version = editing?.payment.receipt?.revisions[0];
   return (
-    <section className="panel">
-      <h2>Payments and receipts</h2>
-      <Notice message={error} />
+    <section className="panel payment-collection-panel">
+      <div className="no-print"><h2>Payments and receipts</h2>
+      <Notice message={error} /><Notice message={success} tone="success" /></div>
       {summary && <>
-        <p>Official invoice {summary.invoiceNumber} · {summary.currency}</p>
-        <p>Invoiced {summary.total} · Collected {summary.paid} · Outstanding {summary.balance}</p>
+        <div className="no-print"><p>Official invoice {summary.invoiceNumber} · {summary.currency}</p>
+        <p>Invoiced {summary.total} · Collected {summary.paid} · Outstanding {summary.balance}</p><p>{workspaceStatus(summary.status)}</p>
         {summary.status === 'OVERPAID' && <p>Review excess funds before taking any further action.</p>}
         {summary.unresolved > 0 && <p>{summary.unresolved} payment records require receipt or legacy review.</p>}
-        <button type="button" className="button-primary" disabled={busy} onClick={() => setAdding(true)}>Record payment</button>
+        <button type="button" className="button-primary" disabled={busy} onClick={() => { setSaved(false); setSuccess(''); setError(''); pending.current = null; setAdding(true); }}>Record payment</button>
         <ul className="space-y-2">
           {summary.payments.map((payment) => {
             const current = payment.receipt?.revisions[0];
@@ -115,17 +119,17 @@ function CollectionPanel({ invoiceId }: { invoiceId: string }) {
                   {payment.receipt ? 'Receipt history' : 'Issue receipt'}
                 </button>{' '}
                 {current && !current.voided && <>
-                  <button type="button" className="button-secondary" disabled={busy} onClick={() => setEditing({ payment, voiding: false })}>Correct receipt</button>{' '}
-                  <button type="button" className="button-secondary" disabled={busy} onClick={() => setEditing({ payment, voiding: true })}>Void receipt</button>
+                  <button type="button" className="button-secondary" disabled={busy} onClick={() => { setSaved(false); setSuccess(''); setError(''); pending.current = null; setEditing({ payment, voiding: false }); }}>Correct receipt</button>{' '}
+                  <button type="button" className="button-secondary" disabled={busy} onClick={() => { setSaved(false); setSuccess(''); setError(''); pending.current = null; setEditing({ payment, voiding: true }); }}>Void receipt</button>
                 </>}
               </li>
             );
           })}
-        </ul>
+        </ul></div>
         {(adding || editing) && <Modal title={editing ? editing.voiding ? 'Void receipt' : 'Correct receipt' : 'Record payment'}
-          onClose={() => { if (!busy) { setEditing(null); setAdding(false); } }}>
-          <Notice message={error} />
-          <form className="form-grid" onSubmit={(event) => void submit(event)}>
+          closeDisabled={busy} onClose={() => { if (!busy) { setEditing(null); setAdding(false); setSaved(false); } }}>
+          <Notice message={error} /><Notice message={success} tone="success" />
+          {!saved && <form className="form-grid" onSubmit={(event) => void submit(event)}>
             {!editing?.voiding && <>
               <label className="field">Amount<input name="amount" inputMode="decimal" required defaultValue={version?.amount} /></label>
               <label className="field">Payment date<input name="paymentDate" type="date" required defaultValue={version?.paymentDate.slice(0, 10)} /></label>
@@ -135,7 +139,7 @@ function CollectionPanel({ invoiceId }: { invoiceId: string }) {
             </>}
             {editing && <label className="field">Reason<textarea name="reason" maxLength={500} required /></label>}
             <button className="button-primary" disabled={busy} type="submit">{editing?.voiding ? 'Confirm void' : 'Save'}</button>
-          </form>
+          </form>}
         </Modal>}
         {document && <Modal title={`Receipt for official invoice ${document.snapshot.invoiceNumber ?? summary.invoiceNumber}`} onClose={() => setDocument(null)} maxWidth="54rem">
           <PaymentReceiptDocument receipt={document} />
