@@ -12,15 +12,20 @@ export function recordedMailboxAttempts(events: readonly Event[], truncated: boo
   if (truncated) return [];
   const byId = new Map<string, Attempt>();
   const duplicates = new Set<string>();
+  const seen = new Set<string>();
   for (const event of events) {
     if (event.actorType !== 'SYSTEM' || event.eventKey !== 'mail.send.attempt_started') continue;
     const meta = object(event.metadata);
-    if (!meta || typeof meta.attemptId !== 'string' || typeof meta.mailConfigurationId !== 'string' ||
+    if (!meta || typeof meta.attemptId !== 'string' || !meta.attemptId) continue;
+    // Count every system start bearing this attempt ID, even if its other fields
+    // are malformed. A conflicting durable start must not establish identity.
+    if (seen.has(meta.attemptId)) duplicates.add(meta.attemptId);
+    seen.add(meta.attemptId);
+    if (typeof meta.mailConfigurationId !== 'string' ||
         typeof meta.messageId !== 'string' || typeof meta.recipient !== 'string' ||
-        !meta.attemptId || !meta.mailConfigurationId || !meta.recipient) continue;
+        !meta.mailConfigurationId || !meta.recipient) continue;
     const tokens = parseMessageIdTokens(meta.messageId);
     if (tokens.length !== 1 || tokens[0] !== meta.messageId) continue;
-    if (byId.has(meta.attemptId)) duplicates.add(meta.attemptId);
     byId.set(meta.attemptId, { attemptId: meta.attemptId, mailConfigurationId: meta.mailConfigurationId, messageId: meta.messageId, recipient: meta.recipient });
   }
   return [...byId.values()].filter(row => !duplicates.has(row.attemptId));
