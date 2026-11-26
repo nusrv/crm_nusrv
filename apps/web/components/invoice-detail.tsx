@@ -560,8 +560,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
           </div>
         ))}
       </details>
-      {admin && invoice.status === 'READY_FOR_FAWTARA' && !invoice.submissionPending && readIssuerPresentation(invoice.issuerPresentationSnapshot)?.issuerType === 'INDIVIDUAL' && <Notice message="Individual issuer officialization is deferred until its approved template is available." />}
-      {admin && invoice.status === 'READY_FOR_FAWTARA' && !invoice.submissionPending && readIssuerPresentation(invoice.issuerPresentationSnapshot)?.issuerType !== 'INDIVIDUAL' && (
+      {admin && invoice.status === 'READY_FOR_FAWTARA' && !invoice.submissionPending && (
         <section className="panel no-print mb-6">
           <h3 className="text-xl font-semibold">تثبيت الفاتورة الرسمية / Officialize Invoice</h3>
           <p className="muted mt-1 text-sm">
