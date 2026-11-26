@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { apiRequest } from '../lib/api';
 import { Notice } from './notice';
 
@@ -12,6 +13,12 @@ type Preview = {
   recipientContactId: string | null;
   subject: string;
   body: string;
+  customerId: string;
+  service: string;
+  dueDate: string;
+  termMonths: number | null;
+  amount: string;
+  currency: string;
 };
 type Reply = { id: string; direction: string; subject: string; bodyText: string; occurredAt: string; reviewedAt: string | null };
 
@@ -23,12 +30,14 @@ export function RenewalHumanCommunications({
   clarificationPending,
   canManage,
   onChanged,
+  prepareOnOpen = false,
 }: {
   caseId: string;
   status: string;
   clarificationPending: boolean;
   canManage: boolean;
-  onChanged: () => void;
+  onChanged: () => Promise<void>;
+  prepareOnOpen?: boolean;
 }) {
   const root = `/renewal-cases/${caseId}`;
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -48,6 +57,18 @@ export function RenewalHumanCommunications({
       .catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : 'Unable to load replies.'); });
     return () => { mounted = false; };
   }, [root]);
+
+  useEffect(() => {
+    if (!prepareOnOpen || !canManage) return;
+    let mounted = true;
+    void apiRequest<Preview>(`${root}/reminder-preview`).then((draft) => {
+      if (!mounted) return;
+      setPreview(draft); setSubject(draft.subject); setBody(draft.body);
+      setRequestKey(crypto.randomUUID());
+      setRecipientIndex(draft.options.findIndex((item) => item.contactId === draft.recipientContactId && item.email === draft.recipient));
+    }).catch((cause: unknown) => { if (mounted) setError(cause instanceof Error ? cause.message : 'Unable to prepare reminder.'); });
+    return () => { mounted = false; };
+  }, [root, prepareOnOpen, canManage]);
 
   async function act(action: () => Promise<void>) {
     if (busy) return;
@@ -75,12 +96,13 @@ export function RenewalHumanCommunications({
     });
   }
 
-  function review(path: 'needs-clarification' | 'keep-in-review') {
+  function review(path: 'needs-clarification' | 'keep-in-review', messageId: string) {
     void act(async () => {
-      await apiRequest(`${root}/${path}`, { method: 'POST' });
+      await apiRequest(`${root}/${path}`, { method: 'POST', body: JSON.stringify({ messageId }) });
+      setReplies(await apiRequest<Reply[]>(`${root}/replies`));
       setPreview(null);
       setMessage(path === 'needs-clarification' ? 'Clarification requested. Compose and send it when ready.' : 'Case kept in review.');
-      onChanged();
+      await onChanged();
     });
   }
 
@@ -97,9 +119,9 @@ export function RenewalHumanCommunications({
       });
       setMessage(preview.purpose === 'CLARIFICATION'
         ? 'Clarification queued. The case moves to Waiting for Customer after SMTP accepts this message.'
-        : 'Reminder queued.');
+        : 'Reminder queued. Waiting for Customer begins after SMTP acceptance.');
       setPreview(null);
-      onChanged();
+      await onChanged();
     });
   }
 
@@ -111,17 +133,19 @@ export function RenewalHumanCommunications({
       <Notice message={message} tone="success" />
       {canManage && reviewable && (
         <div className="flex flex-wrap gap-2">
-          {!clarificationPending && <button className="button-small" disabled={busy} onClick={() => review('needs-clarification')} type="button">Needs Clarification</button>}
-          <button className="button-small" disabled={busy} onClick={() => review('keep-in-review')} type="button">Keep in Review</button>
           {(reminderStatuses.includes(status) || clarificationPending) && (
             <button className="button-small" disabled={busy} onClick={compose} type="button">
-              {clarificationPending ? 'Compose clarification' : 'Compose reminder'}
+              {clarificationPending ? 'Prepare Clarification' : 'Prepare Reminder'}
             </button>
           )}
         </div>
       )}
       {preview && (
         <form className="form-grid" onSubmit={send}>
+          <div className="field-wide"><p>{preview.service} · Due {preview.dueDate.slice(0, 10)} · {preview.termMonths ?? 'Unconfigured'} months · {preview.amount} {preview.currency}</p>
+            {preview.options.length === 0 && <p className="danger">No valid registered email. <Link className="table-link" href={`/dashboard/customers/${preview.customerId}`}>Open customer contacts</Link> and register an address before sending.</p>}
+            <p className="muted">Only a registered customer address may be selected. No email is sent until you press Send Email.</p>
+          </div>
           <label className="field field-wide">
             <span>Registered recipient</span>
             <select onChange={(event) => setRecipientIndex(Number(event.target.value))} required value={recipientIndex}>
@@ -142,7 +166,7 @@ export function RenewalHumanCommunications({
             <textarea required rows={6} onChange={(event) => setBody(event.target.value)} value={body} />
           </label>
           <div className="field-wide flex gap-2">
-            <button className="button-primary" disabled={busy || recipientIndex < 0 || !body.trim()} type="submit">Send</button>
+            <button className="button-primary" disabled={busy || recipientIndex < 0 || !body.trim()} type="submit">Send Email</button>
             <button className="button-secondary" onClick={() => setPreview(null)} type="button">Cancel</button>
           </div>
         </form>
@@ -152,12 +176,16 @@ export function RenewalHumanCommunications({
           <p className="font-medium">{reply.subject}</p>
           <p className="muted text-sm">{new Date(reply.occurredAt).toLocaleString()} · {reply.reviewedAt ? 'Read' : 'Unread'}</p>
           <p className="mt-2 whitespace-pre-wrap text-sm">{reply.bodyText}</p>
+          {canManage && reviewable && <div className="mt-2 flex gap-2 flex-wrap">
+            {!clarificationPending && <button className="button-small" disabled={busy} onClick={() => review('needs-clarification', reply.id)} type="button">Needs Clarification</button>}
+            <button className="button-small" disabled={busy} onClick={() => review('keep-in-review', reply.id)} type="button">Keep in Review</button>
+          </div>}
           {canManage && (
             <button className="button-small mt-2" disabled={busy} onClick={() => {
               void act(async () => {
                 await apiRequest(`${root}/replies/${reply.id}/${reply.reviewedAt ? 'unread' : 'read'}`, { method: 'POST' });
                 setReplies(await apiRequest<Reply[]>(`${root}/replies`));
-                onChanged();
+                await onChanged();
               });
             }} type="button">{reply.reviewedAt ? 'Mark unread' : 'Mark read'}</button>
           )}

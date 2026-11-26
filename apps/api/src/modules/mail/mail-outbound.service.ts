@@ -605,6 +605,13 @@ export class MailOutboundService {
           }, tx);
         }
       }
+      if (result.count === 1 && acceptance.source === 'smtp' && row.purpose === 'REMINDER' && row.caseRevision !== null) {
+        const transitioned = await tx.renewalCase.updateMany({
+          where: { id: row.renewalCaseId, status: { in: ['UPCOMING', 'REMINDER_CYCLE'] }, clarificationPending: false, communicationRevision: row.caseRevision },
+          data: { status: 'AWAITING_CUSTOMER' },
+        });
+        if (transitioned.count === 1) await this.audit.record({ actorType: ActorType.SYSTEM, eventKey: 'renewal.reminder.accepted_by_smtp', subjectType: 'RenewalCase', subjectId: row.renewalCaseId, metadata: { outboxId, attemptId, caseRevision: row.caseRevision } }, tx);
+      }
       return result.count === 1;
     });
     if (guarded) {

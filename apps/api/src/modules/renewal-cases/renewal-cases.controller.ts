@@ -107,14 +107,14 @@ export class RenewalCasesController {
 
   @Roles('ADMIN')
   @Post(':id/needs-clarification')
-  clarify(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
-    return this.manual.review(id, true, req.user.id);
+  clarify(@Param('id') id: string, @Body() input: unknown, @Req() req: AuthenticatedRequest) {
+    return this.manual.review(id, true, req.user.id, input);
   }
 
   @Roles('ADMIN')
   @Post(':id/keep-in-review')
-  keepInReview(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
-    return this.manual.review(id, false, req.user.id);
+  keepInReview(@Param('id') id: string, @Body() input: unknown, @Req() req: AuthenticatedRequest) {
+    return this.manual.review(id, false, req.user.id, input);
   }
 
   @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')

@@ -9,6 +9,9 @@ import { daysLeftLabel, daysUntilDue } from '../lib/renewal-timing';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
 import { Notice } from './notice';
+import { RenewalHumanCommunications } from './renewal-human-communications';
+import { LegacyRenewalRecovery } from './p1-recovery-panels';
+import { OutboundEvidenceControls } from './outbound-evidence-controls';
 
 interface ReminderRuleOption {
   id: string;
@@ -26,6 +29,7 @@ interface OutboxEntry {
   daysBeforeDue: number;
   status: string;
   queuedAt: string;
+  smtpUncertain: boolean;
 }
 
 interface EvaluationDecision {
@@ -49,6 +53,8 @@ interface RenewalCaseDetailData {
   dueDate: string;
   status: string;
   customerDecision: string;
+  clarificationPending: boolean;
+  reminderSummary: { acceptedCount: number; lastAcceptedAt: string | null };
   proposedPeriodStart: string | null;
   proposedPeriodEnd: string | null;
   proposedNextRenewalDate: string | null;
@@ -115,9 +121,8 @@ function milestoneLabel(
 }
 
 const MARK_ACTIONS = [
-  { key: 'mark-awaiting-customer', label: 'Mark awaiting customer' },
-  { key: 'mark-accepted', label: 'Mark accepted' },
-  { key: 'mark-do-not-renew', label: 'Mark do not renew' },
+  { key: 'mark-accepted', label: 'Accept Renewal' },
+  { key: 'mark-do-not-renew', label: 'Do Not Renew' },
   { key: 'mark-fulfilled', label: 'Mark Renewal Fulfilled' },
 ] as const;
 
@@ -126,7 +131,6 @@ const MARK_ACTIONS = [
 // source of authorization truth: the backend's own compare-and-swap check is authoritative
 // regardless of what this map says.
 const MARK_ACTION_LEGAL_FROM: Record<(typeof MARK_ACTIONS)[number]['key'], string[]> = {
-  'mark-awaiting-customer': ['UPCOMING', 'REMINDER_CYCLE', 'HUMAN_REVIEW'],
   'mark-accepted': ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER', 'HUMAN_REVIEW'],
   'mark-do-not-renew': ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER', 'HUMAN_REVIEW'],
   'mark-fulfilled': ['ACCEPTED'],
@@ -136,15 +140,17 @@ const TERMINAL_STATUSES = new Set(['CLOSED', 'FULFILLED', 'REJECTED', 'DO_NOT_RE
 
 export function RenewalCaseDetail({
   caseId,
+  prepareOnOpen = false,
   onClose,
   onChanged,
 }: {
   caseId: string;
+  prepareOnOpen?: boolean;
   onClose: () => void;
   onChanged: () => void;
 }) {
   const { can } = useControlPanel();
-  const canManage = can('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT');
+  const canManage = can('ADMIN');
   const [detail, setDetail] = useState<RenewalCaseDetailData | null>(null);
   const [reminderRules, setReminderRules] = useState<ReminderRuleOption[]>([]);
   const [error, setError] = useState('');
@@ -171,6 +177,11 @@ export function RenewalCaseDetail({
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [caseId]);
+
+  async function refreshCase() {
+    await load();
+    onChanged();
+  }
 
   async function runAction(path: string, successMessage: string) {
     try {
@@ -232,6 +243,8 @@ export function RenewalCaseDetail({
       ) : (
         <RenewalCaseBody
           canManage={canManage}
+          prepareOnOpen={prepareOnOpen}
+          onChanged={refreshCase}
           detail={detail}
           holdFormOpen={holdFormOpen}
           holdReason={holdReason}
@@ -251,6 +264,8 @@ export function RenewalCaseDetail({
 
 function RenewalCaseBody({
   canManage,
+  prepareOnOpen,
+  onChanged,
   detail,
   holdFormOpen,
   holdReason,
@@ -264,6 +279,8 @@ function RenewalCaseBody({
   reminderRules,
 }: {
   canManage: boolean;
+  prepareOnOpen: boolean;
+  onChanged: () => Promise<void>;
   detail: RenewalCaseDetailData;
   holdFormOpen: boolean;
   holdReason: string;
@@ -318,6 +335,7 @@ function RenewalCaseBody({
         </div>
       </section>
 
+      {canManage && <RenewalHumanCommunications caseId={detail.id} status={detail.status} clarificationPending={detail.clarificationPending} canManage={canManage} onChanged={onChanged} prepareOnOpen={prepareOnOpen} />}
       <section className="rounded-lg border border-[var(--line)] p-4">
         <div className="flex items-center justify-between gap-3">
           <h4 className="font-medium">Customer</h4>
@@ -383,7 +401,14 @@ function RenewalCaseBody({
         </div>
       </section>
 
+      {detail.status === 'ACCEPTED' && <section className="space-y-2">
+        <h4 className="font-medium">Proposed renewal period</h4>
+        <p>{detail.proposedPeriodStart?.slice(0, 10) ?? 'Missing'} – {detail.proposedPeriodEnd?.slice(0, 10) ?? 'Missing'}</p>
+        <p>Next renewal: {detail.proposedNextRenewalDate?.slice(0, 10) ?? 'Missing'}. The subscription date changes only after fulfillment.</p>
+        <LegacyRenewalRecovery caseId={detail.id} status={detail.status} dueDate={detail.dueDate} periodStart={detail.proposedPeriodStart} periodEnd={detail.proposedPeriodEnd} nextRenewalDate={detail.proposedNextRenewalDate} onChanged={onChanged} />
+      </section>}
       <section>
+        <p>SMTP-accepted reminders: {detail.reminderSummary.acceptedCount} · Last accepted: {detail.reminderSummary.lastAcceptedAt ? new Date(detail.reminderSummary.lastAcceptedAt).toLocaleString() : '—'}</p>
         <h4 className="font-medium">Renewal timeline</h4>
         {milestones.length ? (
           <ul className="mt-2 space-y-1 text-sm">
@@ -432,7 +457,7 @@ function RenewalCaseBody({
                     <td>{entry.audience}</td>
                     <td>{entry.recipient}</td>
                     <td>{entry.subject}</td>
-                    <td>{mailDispatchStatus(entry.status)}</td>
+                    <td>{mailDispatchStatus(entry.status, entry.smtpUncertain)}{canManage && entry.audience === 'CUSTOMER' && <OutboundEvidenceControls path={`/renewal-cases/${detail.id}/outbox/${entry.id}`} onChanged={() => void onChanged().catch(() => undefined)} />}</td>
                   </tr>
                 ))}
               </tbody>

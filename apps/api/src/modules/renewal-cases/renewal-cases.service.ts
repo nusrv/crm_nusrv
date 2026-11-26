@@ -1,3 +1,4 @@
+import { summarizeSmtpEvidence } from '../mail/smtp-evidence-summary';
 import { proposedRenewalPeriod } from './renewal-period';
 import { lockAcceptedRenewal } from './accepted-renewal-invoice';
 import { isVerifiedOfficialInvoice } from '../invoices/official-invoice-eligibility';
@@ -68,11 +69,12 @@ const renewalCaseInclude = {
   // the single most recent outbox message tells us "not sent / queued / delivered / failed"
   // without pulling the full history, which the detail view fetches separately.
   communicationOutbox: {
+    where: { audience: 'CUSTOMER' as const },
     orderBy: { queuedAt: 'desc' as const },
     take: 1,
     select: { status: true, queuedAt: true, audience: true },
   },
-  _count: { select: { communicationOutbox: true } },
+  _count: { select: { communicationOutbox: { where: { audience: 'CUSTOMER' as const } }, emailMessages: { where: { direction: 'INBOUND' as const, reviewedAt: null } } } },
 } as const;
 
 @Injectable()
@@ -140,7 +142,8 @@ export class RenewalCasesService {
       }),
       this.prisma.renewalCase.count({ where }),
     ]);
-    return { data, meta: pageMetadata(total, query.page, query.pageSize), asOf: now.toISOString() };
+    const summaries = await this.reminderSummaries(data.map(row => row.id));
+    return { data: data.map(row => ({ ...row, unreadReplyCount: row._count.emailMessages, reminderSummary: summaries.get(row.id) ?? { acceptedCount: 0, lastAcceptedAt: null } })), meta: pageMetadata(total, query.page, query.pageSize), asOf: now.toISOString() };
   }
 
   /**
@@ -188,7 +191,25 @@ export class RenewalCasesService {
       },
     });
     if (!record) throw new NotFoundException('Renewal Case not found.');
-    return record;
+    const summaries = await this.reminderSummaries([id]);
+    return { ...record, unreadReplyCount: record._count.emailMessages, reminderSummary: summaries.get(id) ?? { acceptedCount: 0, lastAcceptedAt: null } };
+  }
+
+  private async reminderSummaries(caseIds: string[]) {
+    const result = new Map<string, { acceptedCount: number; lastAcceptedAt: Date | null }>();
+    if (!caseIds.length) return result;
+    const rows = await this.prisma.communicationOutbox.findMany({ where: { renewalCaseId: { in: caseIds }, audience: 'CUSTOMER', purpose: 'REMINDER', manualApprovedBy: { not: null } }, select: { id: true, renewalCaseId: true } });
+    for (const row of rows) {
+      const events = await this.prisma.auditEvent.findMany({ where: { subjectType: 'CommunicationOutbox', subjectId: row.id, eventKey: { in: ['mail.send.attempt_started', 'mail.send.succeeded'] } }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { actorType: true, eventKey: true, metadata: true, createdAt: true }, take: 101 });
+      if (summarizeSmtpEvidence('CommunicationOutbox', events, events.length > 100).state !== 'SMTP_ACCEPTED') continue;
+      const accepted = events.find(event => event.eventKey === 'mail.send.succeeded');
+      if (!accepted) continue;
+      const summary = result.get(row.renewalCaseId) ?? { acceptedCount: 0, lastAcceptedAt: null };
+      summary.acceptedCount += 1;
+      if (!summary.lastAcceptedAt || accepted.createdAt > summary.lastAcceptedAt) summary.lastAcceptedAt = accepted.createdAt;
+      result.set(row.renewalCaseId, summary);
+    }
+    return result;
   }
 
   async createHold(id: string, input: CreateRenewalHoldDto, context: MutationContext) {

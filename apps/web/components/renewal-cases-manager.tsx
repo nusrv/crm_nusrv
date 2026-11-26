@@ -30,6 +30,9 @@ interface RenewalCase {
   id: string;
   dueDate: string;
   status: string;
+  clarificationPending: boolean;
+  unreadReplyCount: number;
+  reminderSummary: { acceptedCount: number; lastAcceptedAt: string | null };
   subscription: {
     id: string;
     subscriptionCode: string;
@@ -117,7 +120,7 @@ function addDays(base: Date, days: number): Date {
 
 export function RenewalCasesManager() {
   const { can } = useControlPanel();
-  const canHold = can('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT');
+  const canHold = can('ADMIN');
 
   const [cases, setCases] = useState<RenewalCase[]>([]);
   const [asOf, setAsOf] = useState('');
@@ -140,6 +143,7 @@ export function RenewalCasesManager() {
   const [holdTarget, setHoldTarget] = useState<string | null>(null);
   const [holdReason, setHoldReason] = useState('');
   const [detailCaseId, setDetailCaseId] = useState<string | null>(null);
+  const [prepareOnOpen, setPrepareOnOpen] = useState(false);
   const [outboxOpen, setOutboxOpen] = useState(false);
   const [outboxSearch, setOutboxSearch] = useState('');
   const [outboxStatus, setOutboxStatus] = useState('');
@@ -301,7 +305,7 @@ export function RenewalCasesManager() {
     <>
       <PageHeading
         title="Renewal operations"
-        description="Operational management of subscriptions that have entered the renewal workflow — driven by renewal cases, not a raw subscription list. No email is sent from this screen."
+        description="Operational management of subscriptions that have entered the renewal workflow — driven by renewal cases, not a raw subscription list. Prepare and review reminders here; email is sent only on explicit human approval."
       />
       {!holdTarget && !detailCaseId && (
         <>
@@ -530,15 +534,22 @@ export function RenewalCasesManager() {
                       renewalCase.communicationOutbox[0],
                       renewalCase._count.communicationOutbox,
                     )}
+                    <p className="text-xs muted">SMTP accepted: {renewalCase.reminderSummary.acceptedCount} · Last: {renewalCase.reminderSummary.lastAcceptedAt ? new Date(renewalCase.reminderSummary.lastAcceptedAt).toLocaleString() : '—'}</p>
                   </td>
                   <td className="space-x-2 whitespace-nowrap">
                     <button
                       className="link-button"
-                      onClick={() => setDetailCaseId(renewalCase.id)}
+                      onClick={() => { setPrepareOnOpen(false); setDetailCaseId(renewalCase.id); }}
                       type="button"
                     >
                       View
                     </button>
+                    {canHold && ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER'].includes(renewalCase.status) && !renewalCase.clarificationPending && (
+                      <button className="button-small" type="button" onClick={() => { setPrepareOnOpen(true); setDetailCaseId(renewalCase.id); }}>Prepare Reminder</button>
+                    )}
+                    {canHold && renewalCase.unreadReplyCount > 0 && (
+                      <button className="button-small" type="button" onClick={() => { setPrepareOnOpen(false); setDetailCaseId(renewalCase.id); }}>{renewalCase.unreadReplyCount} unread {renewalCase.unreadReplyCount === 1 ? 'reply' : 'replies'}</button>
+                    )}
                     {canHold && !activeHold && (
                       <button
                         className="link-button"
@@ -650,7 +661,9 @@ export function RenewalCasesManager() {
 
       {detailCaseId && (
         <RenewalCaseDetail
+          key={detailCaseId}
           caseId={detailCaseId}
+          prepareOnOpen={prepareOnOpen}
           onChanged={() => void handleDetailChanged()}
           onClose={() => setDetailCaseId(null)}
         />

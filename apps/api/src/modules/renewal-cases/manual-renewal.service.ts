@@ -94,17 +94,25 @@ export class ManualRenewalService {
     });
   }
 
-  async review(id: string, pending: boolean, actorId: string) {
+  async review(id: string, pending: boolean, actorId: string, input?: unknown) {
+    const parsed = z.object({ messageId: z.uuid() }).strict().safeParse(input);
+    if (!parsed.success) throw new BadRequestException('Select the inbound reply being reviewed.');
+    const { messageId } = parsed.data;
     return this.prisma.$transaction(async (tx) => {
-      const changed = await tx.renewalCase.updateMany({
-        where: { id, status: { in: [...reviewable] } },
-        data: { status: 'HUMAN_REVIEW', customerDecision: 'UNDECIDED', clarificationPending: pending, communicationRevision: { increment: 1 } },
-      });
-      if (changed.count !== 1) throw new ConflictException('The current renewal state cannot enter review.');
+      await tx.$queryRaw`SELECT id FROM renewal_cases WHERE id = ${id} FOR UPDATE`;
+      const row = await tx.renewalCase.findUnique({ where: { id } });
+      if (!row || !reviewable.some(status => status === row.status)) throw new ConflictException('The current renewal state cannot enter review.');
+      const reply = await tx.emailMessage.findFirst({ where: { id: messageId, renewalCaseId: id, direction: 'INBOUND' }, select: { id: true } });
+      if (!reply) throw new NotFoundException('Inbound message not found.');
+      if (pending) {
+        await tx.renewalCase.update({ where: { id }, data: { status: 'HUMAN_REVIEW', customerDecision: 'UNDECIDED', clarificationPending: true, communicationRevision: { increment: 1 } } });
+      }
+      const read = await tx.emailMessage.updateMany({ where: { id: messageId, renewalCaseId: id, direction: 'INBOUND', reviewedAt: null }, data: { reviewedAt: new Date(), reviewedBy: actorId } });
+      if (read.count) await this.audit.record({ actorType: ActorType.USER, actorId, eventKey: 'renewal.reply.reviewed', subjectType: 'EmailMessage', subjectId: messageId, metadata: { renewalCaseId: id } }, tx);
       await this.audit.record({
         actorType: ActorType.USER, actorId, subjectType: 'RenewalCase', subjectId: id,
         eventKey: pending ? 'renewal.case.needs_clarification' : 'renewal.case.kept_in_review',
-        metadata: { clarificationPending: pending },
+        metadata: { messageId, clarificationPending: pending ? true : row.clarificationPending },
       }, tx);
       return tx.renewalCase.findUniqueOrThrow({ where: { id } });
     });
@@ -197,7 +205,7 @@ export class ManualRenewalService {
       },
     });
     if (changed.count !== 1) throw new ConflictException('Renewal decision changed; message was not queued.');
-    return purpose === 'CLARIFICATION' ? row.communicationRevision + 1 : null;
+    return purpose === 'CLARIFICATION' ? row.communicationRevision + 1 : row.communicationRevision;
   }
 
   private async queue(tx: Prisma.TransactionClient, input: {
