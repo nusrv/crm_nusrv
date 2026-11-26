@@ -703,9 +703,6 @@ export class InvoicesService {
     }
     const presentation = readIssuerPresentation(oldState.issuerPresentationSnapshot) ??
       snapshotPresentation({ issuerType: oldState.billingEntity.issuerType });
-    if (presentation.issuerType === 'INDIVIDUAL') {
-      throw new BadRequestException('Officialization for individual issuers awaits the approved template.');
-    }
     const discrepancies = this.officialDiscrepancies(oldState, officialValues);
 
     try {
@@ -735,7 +732,7 @@ export class InvoicesService {
             ...(oldState.sourceRenewalCaseId ? { renewalOfficialKey: oldState.sourceRenewalCaseId } : {}),
             issuerPresentationSnapshot: {
               ...presentation,
-              templateVersion: 'nusrv-company-v1',
+              templateVersion: presentation.issuerType === 'INDIVIDUAL' ? 'personal-v1' : 'nusrv-company-v1',
               logoAssetId: oldState.issuerLogoAssetId,
             },
             fawtaraStatus: input.fawtaraStatus,
