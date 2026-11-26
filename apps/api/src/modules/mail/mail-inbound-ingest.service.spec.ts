@@ -58,10 +58,11 @@ function fakePrisma(configs: FakeConfigRow[]) {
     return Promise.resolve({ ...row });
   });
   const emailMessageCreate = jest.fn(() => Promise.resolve({ id: 'email-message-1' }));
-  const tx = { emailMessage: { create: emailMessageCreate } };
+  const renewalCaseUpdateMany = jest.fn(() => Promise.resolve({ count: 1 }));
+  const tx = { emailMessage: { create: emailMessageCreate }, renewalCase: { updateMany: renewalCaseUpdateMany } };
   const $transaction = jest.fn((cb: (tx: unknown) => unknown) => cb(tx));
   const prisma = { mailConfiguration: { findMany, updateMany, findUniqueOrThrow }, $transaction };
-  return { prisma, rows, findMany, updateMany, findUniqueOrThrow, emailMessageCreate };
+  return { prisma, rows, findMany, updateMany, findUniqueOrThrow, emailMessageCreate, renewalCaseUpdateMany };
 }
 
 function harness(options: {
@@ -70,7 +71,7 @@ function harness(options: {
   configValues: Record<string, string>;
   correlate?: jest.Mock<() => Promise<{ threadId: string; customerId: string | null; renewalCaseId: string | null; classificationStatus: string }>>;
 }) {
-  const { prisma, updateMany, findUniqueOrThrow, findMany } = fakePrisma(options.configs);
+  const { prisma, updateMany, findUniqueOrThrow, findMany, renewalCaseUpdateMany } = fakePrisma(options.configs);
   const healthRecord = jest.fn((id: string, status: HealthStatus, message: string) => {
     void id;
     void status;
@@ -116,7 +117,7 @@ function harness(options: {
     aiEnqueue as never,
   );
 
-  return { service, findMany, healthRecord, auditRecord, updateMany, findUniqueOrThrow, enqueueIfEnabled, correlate };
+  return { service, findMany, healthRecord, auditRecord, updateMany, findUniqueOrThrow, enqueueIfEnabled, correlate, renewalCaseUpdateMany };
 }
 
 const uninitialized: FakeConfigRow = {
@@ -369,6 +370,30 @@ describe('MailInboundIngestService', () => {
       expect(auditRecord).toHaveBeenCalledWith(
         expect.objectContaining({ eventKey: IMAP_AUDIT_EVENT.UIDVALIDITY_CHANGED }),
       );
+    });
+
+    it.each(['PENDING', 'HUMAN_REVIEW'])('opens renewal review only for an unambiguous correlated reply (%s)', async (classificationStatus) => {
+      const { reader } = fakeReader({
+        fetchMessagesSince: jest.fn(() => Promise.resolve({
+          outcome: 'ok' as const,
+          messages: [{ uid: 1n, internalDate: new Date(), subject: 'Reply', fromAddress: 'a@example.test', toAddresses: [], messageIdHeader: undefined, inReplyToHeader: undefined, referencesHeader: undefined, renewalCaseIdHeader: undefined, text: 'Reply text', html: undefined, parseFailed: false }],
+        })),
+      });
+      const { service, renewalCaseUpdateMany } = harness({
+        configs: [established],
+        readers: { 'config-1': reader },
+        configValues: { IMAP_SYNC_ENABLED: 'true', NODE_ENV: 'test' },
+        correlate: jest.fn(() => Promise.resolve({ threadId: 'thread-1', customerId: 'customer-1', renewalCaseId: 'case-1', classificationStatus })),
+      });
+      await service.syncAll();
+      if (classificationStatus === 'PENDING') {
+        expect(renewalCaseUpdateMany).toHaveBeenCalledWith({
+          where: { id: 'case-1', status: { in: ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER'] }, customerDecision: 'UNDECIDED', clarificationPending: false },
+          data: { status: 'HUMAN_REVIEW', communicationRevision: { increment: 1 } },
+        });
+      } else {
+        expect(renewalCaseUpdateMany).not.toHaveBeenCalled();
+      }
     });
 
     it('advances the cursor to each successfully-handled UID via CAS, in order, and reports the total ingested', async () => {

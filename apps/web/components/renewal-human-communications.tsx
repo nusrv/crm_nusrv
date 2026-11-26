@@ -128,7 +128,15 @@ export function RenewalHumanCommunications({
   const reviewable = reminderStatuses.includes(status) || status === 'HUMAN_REVIEW';
   return (
     <section className="space-y-3">
-      <h4 className="font-medium">Customer communication</h4>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="font-medium">Customer communication</h4>
+        <button className="button-secondary" disabled={busy} type="button" onClick={() => {
+          void act(async () => {
+            setReplies(await apiRequest<Reply[]>(`${root}/replies`));
+            await onChanged();
+          });
+        }}>Refresh</button>
+      </div>
       <Notice message={error} />
       <Notice message={message} tone="success" />
       {canManage && reviewable && (

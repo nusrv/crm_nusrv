@@ -311,7 +311,9 @@ export class MailOutboundService {
     const eligible = row.purpose === 'CLARIFICATION'
       ? row.renewalCase.status === 'HUMAN_REVIEW' && row.renewalCase.clarificationPending &&
         row.caseRevision !== null && row.renewalCase.communicationRevision === row.caseRevision
-      : isReminderEligible(row.renewalCase.status) && !row.renewalCase.clarificationPending;
+      : isReminderEligible(row.renewalCase.status) && !row.renewalCase.clarificationPending &&
+        (row.purpose !== 'REMINDER' || row.caseRevision === null ||
+          row.renewalCase.communicationRevision === row.caseRevision);
     if (!eligible) {
       return { kind: 'cancel', reason: `case_not_reminder_eligible:${row.renewalCase.status}` };
     }
@@ -544,6 +546,12 @@ export class MailOutboundService {
           id: outboxId, status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: lease,
           ...(row.purpose === 'CLARIFICATION' ? {
             renewalCase: { status: 'HUMAN_REVIEW', clarificationPending: true, communicationRevision: row.caseRevision ?? -1 },
+          } : row.purpose === 'REMINDER' && row.caseRevision !== null ? {
+            renewalCase: {
+              status: { in: ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER'] },
+              clarificationPending: false,
+              communicationRevision: row.caseRevision,
+            },
           } : {}),
         },
         data: { attempts: { increment: 1 }, smtpRetrySafe: false },

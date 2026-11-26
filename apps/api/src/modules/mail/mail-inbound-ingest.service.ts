@@ -501,6 +501,29 @@ export class MailInboundIngestService {
           tx,
         );
 
+        // An unambiguous inbound reply opens human review, never a commercial decision.
+        // Invalidate earlier reminder drafts/attempts that have not crossed the send boundary.
+        if (correlation.renewalCaseId && classificationStatus === ClassificationStatus.PENDING) {
+          const changed = await tx.renewalCase.updateMany({
+            where: {
+              id: correlation.renewalCaseId,
+              status: { in: ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER'] },
+              customerDecision: 'UNDECIDED',
+              clarificationPending: false,
+            },
+            data: { status: 'HUMAN_REVIEW', communicationRevision: { increment: 1 } },
+          });
+          if (changed.count === 1) {
+            await this.audit.record({
+              actorType: ActorType.SYSTEM,
+              eventKey: 'renewal.reply.detected_for_review',
+              subjectType: 'RenewalCase',
+              subjectId: correlation.renewalCaseId,
+              metadata: { emailMessageId: emailMessage.id, threadId: correlation.threadId },
+            }, tx);
+          }
+        }
+
         return {
           emailMessageId: emailMessage.id,
           humanReview: classificationStatus === ClassificationStatus.HUMAN_REVIEW,
