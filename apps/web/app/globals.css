@@ -779,3 +779,27 @@ tbody tr:last-child td {
   body:not(:has(.payment-receipt-print)) .payment-collection-panel { display: none !important; }
   body:has(.payment-receipt-print) .invoice-print-view { display: none !important; }
 }
+
+/* OD-11 proposed individual layout; class is emitted for non-official previews only. */
+.personal-invoice-preview { font-family: Arial, Tahoma, sans-serif; }
+.personal-invoice-header { font-size: 10pt; line-height: 1.5; overflow-wrap: anywhere; }
+.personal-invoice-title { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8mm; border-bottom: 2px solid #263c43; padding: 7mm 0 5mm; }
+.personal-invoice-title h1 { font-size: 25pt; font-weight: 700; color: #263c43; margin: 2mm 0; }
+.personal-invoice-title h1 span { font-size: 17pt; font-weight: 400; }
+.personal-invoice-eyebrow { font-size: 9pt; text-transform: uppercase; letter-spacing: .08em; }
+.personal-invoice-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5mm 3mm; margin: 0; }
+.personal-invoice-meta dt { font-weight: 600; }
+.personal-invoice-meta dd { text-align: right; }
+.personal-invoice-parties { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8mm; margin: 7mm 0; }
+.personal-invoice-parties section { border-top: 1px solid #263c43; padding-top: 3mm; min-width: 0; }
+.personal-invoice-parties h2 { font-size: 10pt; font-weight: 600; color: #263c43; margin-bottom: 2mm; }
+.personal-invoice-parties h2 span { float: right; }
+.personal-invoice-name { font-weight: 700; font-size: 12pt; }
+.personal-invoice-logo { max-width: 32mm; max-height: 16mm; object-fit: contain; }
+.personal-invoice-preview .personal-invoice-proposal { font-size: 9pt; border: 1px solid #263c43; padding: 2mm 3mm; }
+.personal-invoice-preview .nusrv-items { margin-top: 6mm; }
+.personal-invoice-preview .nusrv-items th { border-top: 1px solid #263c43; border-bottom: 1px solid #263c43; }
+.personal-invoice-preview .nusrv-items td { border-bottom: 1px solid #ddd; }
+.personal-invoice-preview:has(.invoice-draft-banner) .nusrv-totals { margin-top: 10mm; margin-bottom: 12mm; }
+.personal-invoice-preview .nusrv-totals div:last-child { border-top: 2px solid #263c43; }
+.personal-invoice-preview .nusrv-footer { text-align: left; }
