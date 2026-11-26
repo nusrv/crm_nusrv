@@ -71,6 +71,64 @@ export class InvoiceLineInputDto {
   periodEnd?: string;
 }
 
+export class CreateManualInvoiceDto {
+  @IsUUID()
+  billingEntityId!: string;
+
+  @IsOptional()
+  @IsUUID()
+  customerId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  customerNameEn?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  customerNameAr?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  customerAddress?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  customerCountry?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  customerPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(191)
+  customerTaxNumber?: string;
+
+  @Matches(/^[A-Z]{3}$/)
+  currencyCode!: string;
+
+  @IsDateString()
+  invoiceDate!: string;
+
+  @IsDateString()
+  periodStart!: string;
+
+  @IsDateString()
+  periodEnd!: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => InvoiceLineInputDto)
+  lines!: InvoiceLineInputDto[];
+}
+
 export class UpdateInvoiceDraftDto {
   @IsOptional() @IsObject() presentationVisibility?: Record<string, boolean>;
   @IsOptional()
@@ -185,6 +243,26 @@ export class RecordFawtaraResultDto {
   @IsString()
   @MaxLength(4000)
   note?: string;
+}
+
+export class OfficializeInvoiceDto extends RecordFawtaraResultDto {
+  @Matches(IMAGE_DATA_URL, { message: 'A PNG, JPEG, or WebP image is required.' })
+  declare qrImageDataUrl: string;
+
+  @Matches(/^[A-Z]{3}$/)
+  declare officialCurrencyCode: string;
+
+  @Matches(MONEY)
+  declare officialSubtotal: string;
+
+  @Matches(MONEY)
+  declare officialDiscountTotal: string;
+
+  @Matches(MONEY)
+  declare officialTaxTotal: string;
+
+  @Matches(MONEY)
+  declare officialGrandTotal: string;
 }
 
 export class RecordFawtaraRejectionDto {

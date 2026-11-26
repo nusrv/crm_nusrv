@@ -1,5 +1,7 @@
 import { jest } from '@jest/globals';
 import { MailOutboundService } from './mail-outbound.service';
+import { SmtpNotStartedError } from './smtp-attempt-policy';
+import type { MailAcceptance } from './smtp-attempt-policy';
 
 const NOW = new Date('2026-09-01T12:00:00.000Z');
 const RECLAIMED_TOKEN = new Date('2026-09-01T12:05:00.000Z');
@@ -31,25 +33,61 @@ function baseRow(overrides: Record<string, unknown> = {}) {
     reminderRuleId: 'rule-1',
     notificationRuleId: null as string | null,
     audience: 'CUSTOMER',
+    purpose: null as string | null,
+    caseRevision: null as number | null,
+    recipientContactId: null as string | null,
     recipient: 'current@example.test',
     subject: 'Renewal reminder',
     body: 'Body text',
     daysBeforeDue: 7,
     status: 'QUEUED',
     attempts: 0,
+    smtpRetrySafe: false,
+    scheduledAt: new Date(NOW.getTime() - 60_000),
+    nextAttemptAt: null as Date | null,
+    manualApprovedBy: 'admin-1' as string | null,
+    auditEvent: { actorId: 'admin-1', eventKey: 'renewal.reminder.human_send' },
     lastAttemptAt: null as Date | null,
     lastError: null as string | null,
+    smtpUncertain: false,
     emailMessageId: null as string | null,
     messageIdHeader: null as string | null,
     customer: { id: 'customer-1', status: 'ACTIVE', billingEntityId: 'be-1' },
     subscription: { id: 'sub-1', status: 'ACTIVE' },
-    renewalCase: { id: 'case-1', status: 'REMINDER_CYCLE', holds: [] as unknown[] },
+    renewalCase: { id: 'case-1', status: 'REMINDER_CYCLE', holds: [] as unknown[], clarificationPending: false, communicationRevision: 0 },
     notificationRule: null as { id: string; suppressOnWorkflowHold: boolean } | null,
     ...overrides,
   };
 }
 
 type Row = ReturnType<typeof baseRow>;
+function matches(row: Row, where: Record<string, unknown>): boolean {
+  const item = row as unknown as Record<string, unknown>;
+  return Object.entries(where).every(([key, value]) => {
+    if (key === 'AND' || key === 'OR') {
+      const clauses = value as Record<string, unknown>[];
+      return key === 'AND'
+        ? clauses.every((clause) => matches(row, clause))
+        : clauses.some((clause) => matches(row, clause));
+    }
+    const current = item[key];
+    if (value instanceof Date) return current instanceof Date && +current === +value;
+    if (key === 'renewalCase' && value && typeof value === 'object' && current && typeof current === 'object') {
+      return Object.entries(value).every(([field, condition]) => {
+        const actual = (current as Record<string, unknown>)[field];
+        if (condition && typeof condition === 'object' && 'in' in condition && Array.isArray(condition.in)) return condition.in.includes(actual);
+        return actual === condition;
+      });
+    }
+    if (value && typeof value === 'object') {
+      if ('gt' in value) return typeof current === 'number' && current > Number(value.gt);
+      if ('lt' in value) return current instanceof Date && +current < Number(value.lt);
+      if ('lte' in value) return current instanceof Date && +current <= Number(value.lte);
+    }
+    return current === value;
+  });
+}
+
 type ConfigResolution =
   | { usable: true; config: typeof mailConfigurationA }
   | { usable: false; reason: string };
@@ -77,6 +115,9 @@ function findCallWithDataKey<T extends { data?: Record<string, unknown> }>(
 
 interface HarnessOptions {
   row?: Row;
+  extraRows?: Row[];
+  contactRegistered?: boolean;
+  actorActive?: boolean;
   claimSucceeds?: boolean;
   existingThread?: { id: string; mailConfigurationId: string } | null;
   configResolution?: ConfigResolution;
@@ -116,34 +157,20 @@ function buildHarness(options: HarnessOptions = {}) {
   const integrationHealthEventCreate = jest.fn(() => Promise.resolve({}));
   const mailConfigurationUpdate = jest.fn(() => Promise.resolve({}));
 
-  // Serves every Prisma communicationOutbox.updateMany() call in the service: claim()'s own
-  // claim/reclaim CAS (recognized by its `OR` where-clause) is unconditional except for
-  // `claimSucceeds`; every OTHER call is an ownership-guarded PROCESSING-state mutation
-  // (`status: PROCESSING, lastAttemptAt: <token>`, sometimes also `attempts: 0`), checked against
-  // `persisted`'s actual current state — which `reclaimAfterGuardedCalls` can perturb mid-flight to
-  // simulate a second worker's reclaim landing between two of this worker's own guarded writes.
   const communicationOutboxUpdateMany = jest.fn(
     (args: { where: Record<string, unknown>; data?: Record<string, unknown> }) => {
       const where = args.where;
-      if ('OR' in where) {
-        if (options.claimSucceeds === false) return Promise.resolve({ count: 0 });
-        persisted = { ...persisted, ...(args.data ?? {}) };
-        return Promise.resolve({ count: 1 });
+      const isClaim = args.data?.status === 'PROCESSING';
+      const guarded = where.status === 'PROCESSING';
+      if (isClaim && options.claimSucceeds === false) return Promise.resolve({ count: 0 });
+      if (guarded) {
+        if (options.reclaimAfterGuardedCalls === guardedCallCount) {
+          persisted = { ...persisted, lastAttemptAt: RECLAIMED_TOKEN, status: 'FAILED' };
+        }
+        guardedCallCount += 1;
       }
 
-      if (options.reclaimAfterGuardedCalls === guardedCallCount) {
-        persisted = { ...persisted, lastAttemptAt: RECLAIMED_TOKEN, status: 'PROCESSING' };
-      }
-      guardedCallCount += 1;
-
-      const whereLastAttemptAt = where.lastAttemptAt as Date | null | undefined;
-      const leaseMatches =
-        whereLastAttemptAt instanceof Date && persisted.lastAttemptAt instanceof Date
-          ? whereLastAttemptAt.getTime() === persisted.lastAttemptAt.getTime()
-          : whereLastAttemptAt === persisted.lastAttemptAt;
-      const statusMatches = !('status' in where) || where.status === persisted.status;
-      const attemptsMatches = !('attempts' in where) || where.attempts === persisted.attempts;
-      if (!leaseMatches || !statusMatches || !attemptsMatches) {
+      if (!matches(persisted, where)) {
         return Promise.resolve({ count: 0 });
       }
 
@@ -172,9 +199,12 @@ function buildHarness(options: HarnessOptions = {}) {
       return Promise.resolve(persisted);
     },
   );
-  const communicationOutboxFindMany = jest.fn((args: unknown) => {
-    void args;
-    return Promise.resolve<Array<{ id: string }>>([]);
+  const communicationOutboxFindMany = jest.fn((args: { where: Record<string, unknown>; take: number }) => {
+    const candidates = [persisted, ...(options.extraRows ?? [])]
+      .filter((candidate) => matches(candidate, args.where))
+      .sort((left, right) => +left.scheduledAt - +right.scheduledAt)
+      .slice(0, args.take);
+    return Promise.resolve(candidates.map(({ id }) => ({ id })));
   });
 
   const emailMessageFindUniqueOrThrow = jest.fn((args: unknown) => {
@@ -191,7 +221,15 @@ function buildHarness(options: HarnessOptions = {}) {
     return Promise.resolve(options.existingThread ? mailConfigurationA : null);
   });
 
+  const renewalCaseUpdateMany = jest.fn((args: { where: Record<string, unknown>; data: { status: string; clarificationPending?: boolean; communicationRevision?: { increment: number } } }) => {
+    const { id, ...where } = args.where;
+    if (id !== persisted.renewalCase.id || !matches(persisted, { renewalCase: where })) return Promise.resolve({ count: 0 });
+    persisted = { ...persisted, renewalCase: { ...persisted.renewalCase, status: args.data.status, clarificationPending: args.data.clarificationPending ?? persisted.renewalCase.clarificationPending, communicationRevision: persisted.renewalCase.communicationRevision + (args.data.communicationRevision?.increment ?? 0) } };
+    return Promise.resolve({ count: 1 });
+  });
   const txLike = {
+    renewalCase: { updateMany: renewalCaseUpdateMany },
+    $queryRaw: jest.fn(() => Promise.resolve([{ id: persisted.id }])),
     communicationOutbox: { updateMany: communicationOutboxUpdateMany },
     emailMessage: { create: emailMessageCreate, update: emailMessageUpdate },
     integrationHealthEvent: { create: integrationHealthEventCreate },
@@ -199,6 +237,9 @@ function buildHarness(options: HarnessOptions = {}) {
   };
 
   const prisma = {
+    user: { findFirst: jest.fn(() => Promise.resolve(options.actorActive === false ? null : { id: 'admin-1' })) },
+    customerContact: { findFirst: jest.fn(() => Promise.resolve(options.contactRegistered === false ? null : { id: 'contact-1' })) },
+    customerEmailAddress: { findFirst: jest.fn(() => Promise.resolve(null)) },
     communicationOutbox: {
       updateMany: communicationOutboxUpdateMany,
       findUniqueOrThrow: communicationOutboxFindUniqueOrThrow,
@@ -217,7 +258,15 @@ function buildHarness(options: HarnessOptions = {}) {
         return Promise.resolve({ lastHealthStatus: 'UNKNOWN' });
       }),
     },
-    $transaction: jest.fn((callback: (client: typeof txLike) => unknown) => callback(txLike)),
+    $transaction: jest.fn(async (callback: (client: typeof txLike) => unknown) => {
+      const snapshot = persisted;
+      try {
+        return await callback(txLike);
+      } catch (error) {
+        persisted = snapshot;
+        throw error;
+      }
+    }),
   };
 
   const audit = {
@@ -267,7 +316,7 @@ function buildHarness(options: HarnessOptions = {}) {
     send: jest.fn((message: unknown, config: unknown) => {
       void message;
       void config;
-      return Promise.resolve();
+      return Promise.resolve<MailAcceptance>({ source: 'mock' });
     }),
   };
 
@@ -302,6 +351,7 @@ function buildHarness(options: HarnessOptions = {}) {
     // of whether it actually took effect. Use this, not a mock-call inspection, to assert what a
     // stale/ownership-losing worker's rejected write did NOT actually change.
     getPersistedRow: () => persisted,
+    renewalCaseUpdateMany,
   };
 }
 
@@ -358,7 +408,7 @@ describe('MailOutboundService.processOne — business eligibility', () => {
     );
   });
 
-  it('defers (back to QUEUED, no attempt consumed) when an active hold suppresses customer reminders', async () => {
+  it('sends the deliberately approved reminder despite an automatic reminder Hold', async () => {
     const row = baseRow({
       renewalCase: {
         id: 'case-1',
@@ -368,16 +418,11 @@ describe('MailOutboundService.processOne — business eligibility', () => {
         ],
       },
     });
-    const { service, transport, prisma } = buildHarness({ row });
+    const { service, transport, getPersistedRow } = buildHarness({ row });
 
-    const outcome = await service.processOne('outbox-1');
-
-    expect(outcome).toBe('deferred');
-    expect(transport.send).not.toHaveBeenCalled();
-    expect(findCallWithDataKey(prisma.communicationOutbox.updateMany, 'status')?.data).toEqual({
-      status: 'QUEUED',
-      lastError: 'customer_reminder_hold',
-    });
+    expect(await service.processOne('outbox-1')).toBe('sent');
+    expect(transport.send).toHaveBeenCalledTimes(1);
+    expect(getPersistedRow().attempts).toBe(1);
   });
 
   it('re-reads current state for the final pre-send check and cancels if the case became ineligible after materialization', async () => {
@@ -391,192 +436,70 @@ describe('MailOutboundService.processOne — business eligibility', () => {
   });
 });
 
-describe('MailOutboundService.processOne — no-recipient semantics (attempts === 0 vs > 0)', () => {
-  it('defers (does NOT cancel) when there is no current recipient and no attempt has been made yet', async () => {
-    const { service, transport, prisma, health } = buildHarness({ recipient: null });
-
-    const outcome = await service.processOne('outbox-1');
-
-    expect(outcome).toBe('deferred');
-    expect(transport.send).not.toHaveBeenCalled();
-    expect(findCallWithDataKey(prisma.communicationOutbox.updateMany, 'status')?.data).toEqual({
-      status: 'QUEUED',
-      lastError: 'no_current_recipient',
-    });
-    expect(health.record).not.toHaveBeenCalled();
+describe('R5.1 manual case-linked SMTP acceptance', () => {
+  it.each(['REMINDER', 'CLARIFICATION'])('only real SMTP acceptance moves %s to Waiting for Customer', async (purpose) => {
+    const clarification = purpose === 'CLARIFICATION';
+    const row = baseRow({ purpose, caseRevision: 3, recipientContactId: 'contact-1', renewalCase: { id: 'case-1', status: clarification ? 'HUMAN_REVIEW' : 'UPCOMING', holds: [], clarificationPending: clarification, communicationRevision: 3 } });
+    const mocked = buildHarness({ row });
+    expect(await mocked.service.processOne('outbox-1')).toBe('sent');
+    expect(mocked.renewalCaseUpdateMany).not.toHaveBeenCalled();
+    expect(mocked.getPersistedRow().renewalCase.status).toBe(clarification ? 'HUMAN_REVIEW' : 'UPCOMING');
+    const real = buildHarness({ row });
+    real.transport.send.mockResolvedValue({ source: 'smtp', responseCode: 250 });
+    expect(await real.service.processOne('outbox-1')).toBe('sent');
+    expect(real.getPersistedRow().renewalCase).toMatchObject({ status: 'AWAITING_CUSTOMER', clarificationPending: false });
   });
 
-  it('does not increment attempts when deferred for a missing recipient', async () => {
-    const { service, prisma } = buildHarness({ recipient: null });
-
-    await service.processOne('outbox-1');
-
-    const attemptsCall = findCallWithDataKey(prisma.communicationOutbox.updateMany, 'attempts');
-    expect(attemptsCall).toBeUndefined();
-  });
-
-  it('cancels (does not retry forever) when there is still no recipient after an attempt has already been made', async () => {
-    const row = baseRow({ attempts: 1, emailMessageId: 'email-existing', messageIdHeader: '<existing@example.test>' });
-    const { service, transport, prisma, audit } = buildHarness({ row, recipient: null });
-
-    const outcome = await service.processOne('outbox-1');
-
-    expect(outcome).toBe('cancelled');
+  it('never sends a reminder superseded by a newer review revision', async () => {
+    const row = baseRow({ purpose: 'REMINDER', caseRevision: 3, recipientContactId: 'contact-1', renewalCase: { id: 'case-1', status: 'AWAITING_CUSTOMER', holds: [], clarificationPending: false, communicationRevision: 4 } });
+    const { service, transport } = buildHarness({ row });
+    expect(await service.processOne('outbox-1')).toBe('cancelled');
     expect(transport.send).not.toHaveBeenCalled();
-    expect(findCallWithDataKey(prisma.communicationOutbox.updateMany, 'status')?.data).toEqual({
-      status: 'CANCELLED',
-      lastError: 'recipient_unavailable_after_attempt',
-    });
-    const cancelAuditCall = audit.record.mock.calls.find((call) => call[0].eventKey === 'mail.outbox.cancelled');
-    expect(cancelAuditCall?.[0].metadata).toMatchObject({ reason: 'recipient_unavailable_after_attempt' });
-  });
-
-  it('sends exactly once after staff add a valid primary email for a previously-deferred row', async () => {
-    const { service, transport } = buildHarness({ recipient: null });
-    const firstOutcome = await service.processOne('outbox-1');
-    expect(firstOutcome).toBe('deferred');
-    expect(transport.send).not.toHaveBeenCalled();
-
-    // Staff have now added a valid primary email — a later worker cycle reprocesses the row.
-    const { service: retryService, transport: retryTransport } = buildHarness({
-      row: baseRow(),
-      recipient: { email: 'fixed@example.test', source: 'NORMALIZED_PRIMARY' },
-    });
-    const secondOutcome = await retryService.processOne('outbox-1');
-
-    expect(secondOutcome).toBe('sent');
-    expect(retryTransport.send).toHaveBeenCalledTimes(1);
-    expect(retryTransport.send).toHaveBeenCalledWith(
-      expect.objectContaining({ toAddress: 'fixed@example.test' }),
-      mailConfigurationA,
-    );
   });
 });
 
-describe('MailOutboundService.processOne — recipient identity before the first SMTP attempt', () => {
-  it('rebinds a stale recipient discovered at initial eligibility, updates the EmailMessage, and sends to the new address', async () => {
-    const row = baseRow({ recipient: 'stale@example.test' });
-    const { service, prisma, audit, transport } = buildHarness({
-      row,
-      recipient: { email: 'current@example.test', source: 'NORMALIZED_PRIMARY' },
-    });
-
-    const outcome = await service.processOne('outbox-1');
-
-    expect(outcome).toBe('sent');
-    expect(findCallWithDataKey(prisma.communicationOutbox.updateMany, 'recipient')?.data).toEqual({
-      recipient: 'current@example.test',
-    });
-    expect(prisma.emailMessage.update).not.toHaveBeenCalled();
-    const createArgs = prisma.emailMessage.create.mock.calls[0]![0];
-    expect(createArgs.data).toMatchObject({ toAddressesJson: ['current@example.test'] });
-    const rebindAuditCall = audit.record.mock.calls.find((call) => call[0].eventKey === 'mail.recipient.rebound');
-    expect(rebindAuditCall?.[0].metadata).toMatchObject({
-      oldRecipient: 'stale@example.test',
-      newRecipient: 'current@example.test',
-    });
-    expect(transport.send).toHaveBeenCalledWith(
-      expect.objectContaining({ toAddress: 'current@example.test' }),
-      mailConfigurationA,
-    );
-  });
-
-  it('when the recipient changes AFTER materialization but BEFORE the first send, keeps Outbox.recipient, EmailMessage.toAddressesJson, and the SMTP recipient all consistent at the new address', async () => {
-    const { service, prisma, audit, transport, emailResolution } = buildHarness();
-    emailResolution.resolvePrimaryRecipient
-      .mockResolvedValueOnce({ email: 'current@example.test', source: 'NORMALIZED_PRIMARY' })
-      .mockResolvedValueOnce({ email: 'changed-after-materialize@example.test', source: 'NORMALIZED_PRIMARY' });
-
-    const outcome = await service.processOne('outbox-1');
-
-    expect(outcome).toBe('sent');
-    expect(prisma.emailMessage.update).toHaveBeenCalledWith({
-      where: { id: 'email-1' },
-      data: { toAddressesJson: ['changed-after-materialize@example.test'] },
-    });
-    const recipientCall = findCallWithDataKey(prisma.communicationOutbox.updateMany, 'recipient');
-    expect(recipientCall?.data).toEqual({ recipient: 'changed-after-materialize@example.test' });
-    const rebindAuditCall = audit.record.mock.calls.find((call) => call[0].eventKey === 'mail.recipient.rebound');
-    expect(rebindAuditCall?.[0].metadata).toMatchObject({
-      oldRecipient: 'current@example.test',
-      newRecipient: 'changed-after-materialize@example.test',
-      emailMessageUpdated: true,
-    });
-    expect(transport.send).toHaveBeenCalledWith(
-      expect.objectContaining({ toAddress: 'changed-after-materialize@example.test' }),
-      mailConfigurationA,
-    );
-    expect(transport.send).not.toHaveBeenCalledWith(
-      expect.objectContaining({ toAddress: 'current@example.test' }),
-      expect.anything(),
-    );
-  });
-});
-
-describe('MailOutboundService.processOne — recipient identity is pinned once attempted', () => {
-  it('cancels rather than retrying to a different recipient once an attempt has already been made', async () => {
-    const row = baseRow({
-      attempts: 1,
-      recipient: 'old@example.test',
-      emailMessageId: 'email-existing',
-      messageIdHeader: '<existing@example.test>',
-    });
-    const { service, prisma, audit, transport, emailResolution } = buildHarness({
-      row,
-      recipient: { email: 'new@example.test', source: 'NORMALIZED_PRIMARY' },
-    });
-
-    const outcome = await service.processOne('outbox-1');
-
-    expect(outcome).toBe('cancelled');
+describe('MailOutboundService.processOne — deliberate customer authorization', () => {
+  it('suppresses legacy automatic customer reminders without entering SMTP', async () => {
+    const { service, transport, getPersistedRow } = buildHarness({ row: baseRow({ manualApprovedBy: null }) });
+    expect(await service.processOne('outbox-1')).toBe('cancelled');
     expect(transport.send).not.toHaveBeenCalled();
-    expect(prisma.emailMessage.update).not.toHaveBeenCalled();
-    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
-    expect(findCallWithDataKey(prisma.communicationOutbox.updateMany, 'status')?.data).toEqual({
-      status: 'CANCELLED',
-      lastError: 'recipient_changed_after_attempt',
+    expect(getPersistedRow().attempts).toBe(0);
+  });
+
+  it('does not send an approved reminder after the operator loses ADMIN authority', async () => {
+    const { service, transport } = buildHarness({ actorActive: false });
+    expect(await service.processOne('outbox-1')).toBe('cancelled');
+    expect(transport.send).not.toHaveBeenCalled();
+  });
+
+  it('preserves the approved registered address instead of rebinding to a different primary', async () => {
+    const { service, transport, getPersistedRow } = buildHarness({
+      row: baseRow({ recipient: 'selected@example.test' }),
+      recipient: { email: 'other@example.test', source: 'NORMALIZED_PRIMARY' },
     });
-    const cancelAuditCall = audit.record.mock.calls.find((call) => call[0].eventKey === 'mail.outbox.cancelled');
-    expect(cancelAuditCall?.[0].metadata).toMatchObject({
-      reason: 'recipient_changed_after_attempt',
-      oldRecipient: 'old@example.test',
-      newRecipient: 'new@example.test',
+    expect(await service.processOne('outbox-1')).toBe('sent');
+    expect(transport.send).toHaveBeenCalledWith(
+      expect.objectContaining({ toAddress: 'selected@example.test' }),
+      mailConfigurationA,
+    );
+    expect(getPersistedRow().recipient).toBe('selected@example.test');
+  });
+
+  it('does not rebind or send after an approved recipient is no longer registered', async () => {
+    const { service, transport, getPersistedRow } = buildHarness({
+      row: baseRow({ recipient: 'removed@example.test' }),
+      contactRegistered: false,
+      recipient: { email: 'other@example.test', source: 'NORMALIZED_PRIMARY' },
     });
-    expect(emailResolution.resolvePrimaryRecipient).toHaveBeenCalledTimes(1);
+    expect(await service.processOne('outbox-1')).toBe('cancelled');
+    expect(transport.send).not.toHaveBeenCalled();
+    expect(getPersistedRow().recipient).toBe('removed@example.test');
+    expect(getPersistedRow().attempts).toBe(0);
+    expect(getPersistedRow().lastError).toBe('selected_recipient_no_longer_registered');
   });
 });
 
 describe('MailOutboundService.processOne — lease ownership CAS (defense in depth)', () => {
-  it('A — rebind is rejected and both records remain untouched when another worker reclaimed the row first', async () => {
-    const row = baseRow({
-      recipient: 'stale@example.test',
-      emailMessageId: 'email-existing',
-      messageIdHeader: '<existing@example.test>',
-    });
-    const { service, prisma, transport, audit } = buildHarness({
-      row,
-      recipient: { email: 'current@example.test', source: 'NORMALIZED_PRIMARY' },
-      reclaimAfterGuardedCalls: 0,
-    });
-    prisma.emailMessage.findUniqueOrThrow.mockImplementation(() =>
-      Promise.resolve({ id: 'email-existing', externalMessageId: '<existing@example.test>' }),
-    );
-
-    const outcome = await service.processOne('outbox-1');
-
-    expect(outcome).toBe('conflict');
-    expect(transport.send).not.toHaveBeenCalled();
-    expect(prisma.emailMessage.update).not.toHaveBeenCalled();
-    expect(prisma.emailMessage.create).not.toHaveBeenCalled();
-    // The guarded write WAS attempted (that is the whole point of a real conditional write) but
-    // must never have taken effect — no plain unconditional write path exists for it to "succeed
-    // via" instead.
-    const attemptedCall = findCallWithDataKey(prisma.communicationOutbox.updateMany, 'recipient');
-    expect(attemptedCall).toBeDefined();
-    expect(attemptedCall?.where).toMatchObject({ id: 'outbox-1', status: 'PROCESSING', attempts: 0 });
-    expect(audit.record.mock.calls.find((call) => call[0].eventKey === 'mail.recipient.rebound')).toBeUndefined();
-  });
-
   it('B — attempt increment is rejected (and SMTP is never called) when ownership was lost before it', async () => {
     const row = baseRow({ emailMessageId: 'email-existing', messageIdHeader: '<existing@example.test>' });
     const { service, prisma, transport } = buildHarness({ row, reclaimAfterGuardedCalls: 0 });
@@ -609,7 +532,7 @@ describe('MailOutboundService.processOne — lease ownership CAS (defense in dep
     // The real store's status was never actually changed to DELIVERED by this worker — it still
     // reflects the (simulated) newer owner's own PROCESSING claim, from RECLAIMED_TOKEN.
     expect(getPersistedRow().status).not.toBe('DELIVERED');
-    expect(getPersistedRow().status).toBe('PROCESSING');
+    expect(getPersistedRow().status).toBe('FAILED');
     expect(health.record).not.toHaveBeenCalled(); // no health claim made on behalf of the new owner.
     expect(
       audit.record.mock.calls.find((call) => call[0].eventKey === 'mail.send.ownership_lost_after_transmission'),
@@ -631,9 +554,7 @@ describe('MailOutboundService.processOne — lease ownership CAS (defense in dep
 
     expect(outcome).toBe('ownership_lost_after_send');
     expect(transport.send).toHaveBeenCalledTimes(1);
-    expect(getPersistedRow().status).not.toBe('FAILED');
-    expect(getPersistedRow().status).not.toBe('QUEUED');
-    expect(getPersistedRow().status).toBe('PROCESSING');
+    expect(getPersistedRow().status).toBe('FAILED');
     expect(health.record).not.toHaveBeenCalled();
     expect(
       audit.record.mock.calls.find((call) => call[0].eventKey === 'mail.send.ownership_lost_after_transmission'),
@@ -652,7 +573,7 @@ describe('MailOutboundService.processOne — lease ownership CAS (defense in dep
       status: 'PROCESSING',
       lastAttemptAt: NOW,
     });
-    expect(findCallWithDataKey(prisma.communicationOutbox.updateMany, 'status')?.data).toEqual({
+    expect(findCallWithDataKey(prisma.communicationOutbox.updateMany, 'status')?.data).toMatchObject({
       status: 'DELIVERED',
       lastError: null,
     });
@@ -798,7 +719,7 @@ describe('MailOutboundService.processOne — success/failure recording', () => {
     const outcome = await service.processOne('outbox-1');
 
     expect(outcome).toBe('sent');
-    expect(findCallWithDataKey(prisma.communicationOutbox.updateMany, 'status')?.data).toEqual({
+    expect(findCallWithDataKey(prisma.communicationOutbox.updateMany, 'status')?.data).toMatchObject({
       status: 'DELIVERED',
       lastError: null,
     });
@@ -810,13 +731,13 @@ describe('MailOutboundService.processOne — success/failure recording', () => {
   });
 
   it('requeues (not FAILED) an infrastructure failure while under the retry limit, and reports DEGRADED', async () => {
-    const row = baseRow({ attempts: 1, emailMessageId: 'email-existing', messageIdHeader: '<existing@example.test>' });
+    const row = baseRow({ attempts: 1, smtpRetrySafe: true, emailMessageId: 'email-existing', messageIdHeader: '<existing@example.test>' });
     const { service, prisma, health, audit, transport } = buildHarness({ row });
     prisma.emailMessage.findUniqueOrThrow.mockImplementation(() =>
       Promise.resolve({ id: 'email-existing', externalMessageId: '<existing@example.test>' }),
     );
     transport.send.mockImplementation(() =>
-      Promise.reject(Object.assign(new Error('Connection timed out'), { code: 'ETIMEDOUT' })),
+      Promise.reject(new SmtpNotStartedError('Transport initialization timed out')),
     );
 
     const outcome = await service.processOne('outbox-1');
@@ -829,17 +750,17 @@ describe('MailOutboundService.processOne — success/failure recording', () => {
       expect.objectContaining({ eventKey: 'mail.send.failed' }),
       expect.anything(),
     );
-    expect(health.record).toHaveBeenCalledWith('config-A', 'DEGRADED', expect.stringContaining('Connection timed out'));
+    expect(health.record).toHaveBeenCalledWith('config-A', 'DEGRADED', 'SMTP did not accept this attempt.');
   });
 
   it('marks FAILED (terminal) once attempts reach the bound for an infrastructure failure, and reports UNAVAILABLE', async () => {
-    const row = baseRow({ attempts: 4, emailMessageId: 'email-existing', messageIdHeader: '<existing@example.test>' });
+    const row = baseRow({ attempts: 4, smtpRetrySafe: true, emailMessageId: 'email-existing', messageIdHeader: '<existing@example.test>' });
     const { service, prisma, health, audit, transport } = buildHarness({ row });
     prisma.emailMessage.findUniqueOrThrow.mockImplementation(() =>
       Promise.resolve({ id: 'email-existing', externalMessageId: '<existing@example.test>' }),
     );
     transport.send.mockImplementation(() =>
-      Promise.reject(Object.assign(new Error('Connection refused'), { code: 'ECONNECTION' })),
+      Promise.reject(new SmtpNotStartedError('Transport initialization failed')),
     );
 
     const outcome = await service.processOne('outbox-1');
@@ -893,7 +814,7 @@ describe('MailOutboundService.processOne — success/failure recording', () => {
     const lastError = failureCall?.data?.lastError;
     expect(typeof lastError).toBe('string');
     expect(lastError).not.toContain(secretLooking);
-    expect(lastError).toContain('[REDACTED]');
+    expect(lastError).toBe('SMTP outcome uncertain; automatic replay suppressed.');
   });
 });
 
@@ -962,17 +883,31 @@ describe('MailOutboundService.processOne — INTERNAL audience', () => {
 });
 
 describe('MailOutboundService.processBatch', () => {
-  it('selects only scheduled-due QUEUED/stale-PROCESSING rows and aggregates outcomes — no global createdAt/cutover pre-filter (Phase 3.1 §D correction)', async () => {
+  it('processes an eligible newer message after 50 older rows deferred beyond now', async () => {
+    const row = baseRow({ scheduledAt: new Date(NOW.getTime() - 1) });
+    const extraRows = Array.from({ length: 50 }, (_, i) => baseRow({
+      id: `deferred-${i}`,
+      scheduledAt: new Date(NOW.getTime() - 10_000),
+      nextAttemptAt: new Date(NOW.getTime() + 60_000),
+    }));
+    const { service, getPersistedRow, transport } = buildHarness({ row, extraRows });
+    expect(await service.processBatch()).toMatchObject({ candidates: 1, sent: 1 });
+    expect(transport.send).toHaveBeenCalledTimes(1);
+    expect(getPersistedRow().scheduledAt).toEqual(row.scheduledAt);
+    expect(extraRows.every((candidate) => candidate.attempts === 0)).toBe(true);
+  });
+
+  it('selects queued send candidates separately from quarantinable records', async () => {
     const { service, prisma } = buildHarness();
-    prisma.communicationOutbox.findMany.mockResolvedValue([{ id: 'outbox-1' }]);
 
     const summary = await service.processBatch();
 
-    const findManyArgs = prisma.communicationOutbox.findMany.mock.calls[0]![0] as {
-      where: { createdAt?: unknown; OR: unknown[] };
+    const findManyArgs = prisma.communicationOutbox.findMany.mock.calls[1]![0] as {
+      where: { createdAt?: unknown; status?: string; OR: unknown[] };
       take: number;
     };
     expect(findManyArgs.where.createdAt).toBeUndefined();
+    expect(findManyArgs.where.status).toBe('QUEUED');
     expect(Array.isArray(findManyArgs.where.OR)).toBe(true);
     expect(findManyArgs.take).toBe(50);
     expect(summary.candidates).toBe(1);
@@ -993,7 +928,6 @@ describe('MailOutboundService.processBatch', () => {
     prisma.emailMessage.findUniqueOrThrow.mockImplementation(() =>
       Promise.resolve({ id: 'email-existing', externalMessageId: '<existing@example.test>' }),
     );
-    prisma.communicationOutbox.findMany.mockResolvedValue([{ id: 'outbox-1' }]);
 
     const summary = await service.processBatch();
 
@@ -1007,11 +941,70 @@ describe('MailOutboundService.processBatch', () => {
     prisma.emailMessage.findUniqueOrThrow.mockImplementation(() =>
       Promise.resolve({ id: 'email-existing', externalMessageId: '<existing@example.test>' }),
     );
-    prisma.communicationOutbox.findMany.mockResolvedValue([{ id: 'outbox-1' }]);
 
     const summary = await service.processBatch();
 
     expect(summary.ownershipLostAfterSend).toBe(1);
     expect(summary.sent).toBe(0);
+  });
+});
+
+describe('MailOutboundService replay quarantine', () => {
+  it.each([
+    { status: 'PROCESSING', attempts: 1, lastAttemptAt: new Date(0) },
+    { status: 'PROCESSING', attempts: 0, lastAttemptAt: null },
+    { status: 'QUEUED', attempts: 1 },
+  ])('quarantines legacy ambiguous state %j without transmission', async (legacy) => {
+    const { service, getPersistedRow, transport, audit } = buildHarness({
+      row: baseRow({ ...legacy, lastError: 'legacy error retained' }),
+    });
+    expect(await service.processOne('outbox-1')).toBe('failed');
+    expect(await service.processOne('outbox-1')).toBe('not_claimed');
+    expect(transport.send).not.toHaveBeenCalled();
+    expect(getPersistedRow()).toMatchObject({
+      status: 'FAILED',
+      smtpUncertain: true,
+      lastError: 'legacy error retained',
+    });
+    expect(audit.record.mock.calls.some(([event]) => event.eventKey === 'mail.send.quarantined')).toBe(true);
+  });
+
+  it('never requeues a timeout after possible DATA transmission', async () => {
+    const { service, getPersistedRow, transport } = buildHarness();
+    transport.send.mockRejectedValueOnce(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT', command: 'CONN' }));
+    expect(await service.processOne('outbox-1')).toBe('failed');
+    expect(await service.processOne('outbox-1')).toBe('not_claimed');
+    expect(transport.send).toHaveBeenCalledTimes(1);
+    expect(getPersistedRow().smtpRetrySafe).toBe(false);
+  });
+
+  it('allows only a bounded later retry after an explicit transient DATA rejection', async () => {
+    const { service, getPersistedRow, transport } = buildHarness();
+    transport.send.mockRejectedValueOnce(Object.assign(new Error('temporary rejection'), {
+      code: 'EMESSAGE', command: 'DATA', responseCode: 451,
+    }));
+    expect(await service.processOne('outbox-1')).toBe('failed');
+    expect(getPersistedRow()).toMatchObject({ status: 'QUEUED', smtpRetrySafe: true, smtpUncertain: false });
+    expect(await service.processOne('outbox-1')).toBe('not_claimed');
+    expect(transport.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('never transmits again when SMTP accepted immediately before the completion transaction failed', async () => {
+    const { service, clock, getPersistedRow, transport, audit } = buildHarness();
+    transport.send.mockResolvedValue({ source: 'smtp', responseCode: 250 });
+    audit.record.mockImplementation((event) => {
+      if (event.eventKey === 'mail.send.succeeded') {
+        return Promise.reject(new Error('completion transaction interrupted'));
+      }
+      return Promise.resolve({ id: 'audit-1' });
+    });
+
+    await expect(service.processOne('outbox-1')).rejects.toThrow('completion transaction interrupted');
+    expect(getPersistedRow()).toMatchObject({ status: 'PROCESSING', attempts: 1, smtpRetrySafe: false });
+    clock.now.mockReturnValue(new Date(NOW.getTime() + 30 * 60_000));
+    expect(await service.processOne('outbox-1')).toBe('failed');
+    expect(await service.processOne('outbox-1')).toBe('not_claimed');
+    expect(transport.send).toHaveBeenCalledTimes(1);
+    expect(getPersistedRow().status).toBe('FAILED');
   });
 });

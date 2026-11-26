@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AnthropicProviderAdapter } from './anthropic-provider-adapter';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { GoogleGeminiProviderAdapter } from './google-gemini-provider-adapter';
 import { isSupportedAiProvider, type AiProviderId, type LlmProviderAdapter } from './llm-provider-adapter';
 import { OpenAiProviderAdapter } from './openai-provider-adapter';
@@ -30,6 +31,6 @@ export class LlmProviderRegistry {
   /** Returns null for anything not in SUPPORTED_AI_PROVIDERS — never throws, never falls back to a
    * default adapter. An unknown/unsupported provider string must fail closed at the caller. */
   resolve(provider: string): LlmProviderAdapter | null {
-    return isSupportedAiProvider(provider) ? this.adapters[provider] : null;
+    return !aiOperationalPolicy.isDeferred() && isSupportedAiProvider(provider) ? this.adapters[provider] : null;
   }
 }

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -21,6 +22,7 @@ export function ServiceTypesManager() {
   const [items, setItems] = useState<ServiceType[]>([]);
   const [editing, setEditing] = useState<ServiceType | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const saveState = useModalSave();
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   async function load() {
@@ -41,18 +43,21 @@ export function ServiceTypesManager() {
       description: value('description') || undefined,
       ...(editing ? { active: value('active') === 'true' } : {}),
     };
+    if (!saveState.begin()) return;
     try {
-      await apiRequest(`/service-types${editing ? `/${editing.id}` : ''}`, {
+      const saved = await apiRequest<ServiceType>(`/service-types${editing ? `/${editing.id}` : ''}`, {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
-      setFormOpen(false);
-      setEditing(null);
+      setEditing(saved);
+      saveState.markSaved();
       setMessage('Service Type saved and audited.');
       setError('');
-      await load();
+      await load().catch(() => setError('Saved successfully, but the list could not be refreshed.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    } finally {
+      saveState.finish();
     }
   }
   return (
@@ -73,7 +78,7 @@ export function ServiceTypesManager() {
             className="button-primary"
             onClick={() => {
               setEditing(null);
-              setFormOpen(true);
+              setError(''); setMessage(''); setFormOpen(true);
             }}
             type="button"
           >
@@ -83,14 +88,15 @@ export function ServiceTypesManager() {
       )}
       {formOpen && (
         <Modal
-          onClose={() => setFormOpen(false)}
+          closeDisabled={saveState.busy}
+          onClose={() => { if (!saveState.busy) setFormOpen(false); }}
           title={editing ? `Edit ${editing.code}` : 'Create Service Type'}
         >
           <Notice message={error} />
           <Notice message={message} tone="success" />
           <form
             className="form-grid"
-            key={editing?.id ?? 'new'}
+            key={`${editing?.id ?? 'new'}:${saveState.revision}`}
             onSubmit={(event) => void save(event)}
           >
             {!editing && (
@@ -117,10 +123,10 @@ export function ServiceTypesManager() {
               <textarea defaultValue={editing?.description ?? ''} name="description" rows={3} />
             </label>
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
+              <button className="button-primary" disabled={saveState.busy} type="submit">
                 Save
               </button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+              <button className="button-secondary" disabled={saveState.busy} onClick={() => setFormOpen(false)} type="button">
                 Cancel
               </button>
             </div>
@@ -153,7 +159,7 @@ export function ServiceTypesManager() {
                       className="button-small"
                       onClick={() => {
                         setEditing(item);
-                        setFormOpen(true);
+                        setError(''); setMessage(''); setFormOpen(true);
                       }}
                       type="button"
                     >

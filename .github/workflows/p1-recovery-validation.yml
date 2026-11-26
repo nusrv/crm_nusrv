@@ -1,0 +1,25 @@
+# Manually invoked source checks only. No database rehearsal, deployment or live mail.
+name: P1 recovery source validation
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p1-recovery-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-checks:
+    name: Source, browser, and production build (no MariaDB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Run isolated source and browser validation
+        run: bash scripts/validate-release-source.sh

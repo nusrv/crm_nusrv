@@ -718,3 +718,89 @@ tbody tr:last-child td {
 .nusrv-buyer {
   overflow-wrap: anywhere;
 }
+
+
+/* P1 payment receipt: an acknowledgement, never the official tax invoice. */
+.payment-receipt-print {
+  background: #fff;
+  color: #111827;
+  border: 1px solid #cbd5e1;
+  padding: 22px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.payment-receipt-header {
+  display: grid;
+  grid-template-columns: minmax(0, 110px) 1fr auto;
+  align-items: center;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #111827;
+}
+.payment-receipt-header h2 {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.payment-receipt-logo { max-width: 100px; max-height: 65px; object-fit: contain; }
+.payment-receipt-id { overflow-wrap: anywhere; font-size: 11px; max-width: 135px; text-align: right; }
+.payment-receipt-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 0; }
+.payment-receipt-parties > div { min-width: 0; overflow-wrap: anywhere; }
+.payment-receipt-details { border-top: 1px solid #cbd5e1; }
+.payment-receipt-details > div {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px; padding: 7px 0; border-bottom: 1px solid #e2e8f0;
+}
+.payment-receipt-details dt { font-weight: 600; }
+.payment-receipt-details dd { overflow-wrap: anywhere; text-align: right; }
+.payment-receipt-amount {
+  display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  margin-top: 20px; padding: 16px; border: 2px solid #111827;
+  font-size: 16px; font-weight: 700;
+}
+.payment-receipt-note { margin-top: 12px; overflow-wrap: anywhere; }
+.payment-receipt-footer {
+  margin-top: 28px; border-top: 1px solid #cbd5e1; padding-top: 12px;
+  font-size: 11px; color: #475569;
+}
+@media print {
+  body:has(.payment-receipt-print) * { visibility: hidden !important; }
+  body:has(.payment-receipt-print) .payment-receipt-print,
+  body:has(.payment-receipt-print) .payment-receipt-print * { visibility: visible !important; }
+  body:has(.payment-receipt-print) .payment-receipt-print {
+    position: fixed !important; left: 0 !important; top: 0 !important;
+    width: 210mm !important; max-width: 210mm !important;
+    min-height: 0 !important; margin: 0 !important; border: 0 !important;
+    padding: 10mm 12mm !important; background: #fff !important; box-shadow: none !important;
+  }
+}
+
+@media print {
+  body:not(:has(.payment-receipt-print)) .payment-collection-panel { display: none !important; }
+  body:has(.payment-receipt-print) .invoice-print-view { display: none !important; }
+}
+
+/* OD-11 approved personal layout, scoped independently of company invoices. */
+.personal-invoice-document { font-family: Arial, Tahoma, sans-serif; }
+.personal-invoice-header { font-size: 10pt; line-height: 1.5; overflow-wrap: anywhere; }
+.personal-invoice-title { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8mm; border-bottom: 2px solid #263c43; padding: 7mm 0 5mm; }
+.personal-invoice-title h1 { font-size: 25pt; font-weight: 700; color: #263c43; margin: 2mm 0; }
+.personal-invoice-title h1 span { font-size: 17pt; font-weight: 400; }
+.personal-invoice-eyebrow { font-size: 9pt; text-transform: uppercase; letter-spacing: .08em; }
+.personal-invoice-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5mm 3mm; margin: 0; }
+.personal-invoice-meta dt { font-weight: 600; }
+.personal-invoice-meta dd { text-align: right; }
+.personal-invoice-parties { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8mm; margin: 7mm 0; }
+.personal-invoice-parties section { border-top: 1px solid #263c43; padding-top: 3mm; min-width: 0; }
+.personal-invoice-parties h2 { font-size: 10pt; font-weight: 600; color: #263c43; margin-bottom: 2mm; }
+.personal-invoice-parties h2 span { float: right; }
+.personal-invoice-name { font-weight: 700; font-size: 12pt; }
+.personal-invoice-logo { max-width: 32mm; max-height: 16mm; object-fit: contain; }
+.personal-invoice-qr { display: flex; justify-content: flex-end; margin: 2mm 0; break-inside: avoid; }
+.personal-invoice-qr img { width: 34mm; height: 34mm; object-fit: contain; }
+.personal-invoice-document .nusrv-items { margin-top: 6mm; }
+.personal-invoice-document .nusrv-items th { border-top: 1px solid #263c43; border-bottom: 1px solid #263c43; }
+.personal-invoice-document .nusrv-items td { border-bottom: 1px solid #ddd; }
+.personal-invoice-document:has(.invoice-draft-banner) .nusrv-totals { margin-top: 10mm; margin-bottom: 12mm; }
+.personal-invoice-document .nusrv-totals div:last-child { border-top: 2px solid #263c43; }
+.personal-invoice-document .nusrv-footer { text-align: left; }

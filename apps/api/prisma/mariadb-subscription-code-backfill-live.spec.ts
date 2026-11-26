@@ -168,15 +168,16 @@ liveDescribe('Subscription Code backfill migration against real pre-existing dat
 
       await connection.query(backfillMigration);
       prisma = new PrismaClient({ adapter: new PrismaMariaDb(toMariaDbDriverUrl(url)) });
-    }, 60_000);
+    }, 120_000);
 
     afterAll(async () => {
-      await prisma?.$disconnect();
-      if (connection) {
-        await resetDatabase(connection);
-        await connection.end();
+      try {
+        await prisma?.$disconnect();
+        if (connection) await resetDatabase(connection);
+      } finally {
+        if (connection) await connection.end();
       }
-    }, 30_000);
+    }, 120_000);
 
     it('resolves the collision/swap scenario without a duplicate-key error and preserves subscription ids', async () => {
       const rows: Array<{ id: string; subscription_code: string }> = await connection.query(
@@ -262,14 +263,15 @@ liveDescribe('Subscription Code backfill migration against real pre-existing dat
           ('sub-x', 'cust-ff1', 'svc-1', 'LEG-S-XXXXXXXXXXXXXXXX',   'Sub X', '2026-01-01', '2027-01-01', 'ANNUAL', '100.000', 'JOD', 'ACTIVE', '2026-01-01 10:00:00', NOW()),
           ('sub-y', 'cust-ff1', 'svc-1', '__scode_migrating__sub-x', 'Sub Y', '2026-01-01', '2027-01-01', 'ANNUAL', '100.000', 'JOD', 'ACTIVE', '2026-01-02 10:00:00', NOW());
       `);
-    }, 30_000);
+    }, 120_000);
 
     afterAll(async () => {
-      if (connection) {
-        await resetDatabase(connection);
-        await connection.end();
+      try {
+        if (connection) await resetDatabase(connection);
+      } finally {
+        if (connection) await connection.end();
       }
-    }, 30_000);
+    }, 120_000);
 
     it('aborts before modifying any subscription row, and original codes remain exactly as they were', async () => {
       await expect(connection.query(backfillMigration)).rejects.toThrow(/Duplicate entry/i);
@@ -299,14 +301,15 @@ liveDescribe('Subscription Code backfill migration against real pre-existing dat
           ('sub-a', 'cust-ff1', 'svc-1', 'LEG-S-AAAAAAAAAAAAAAAA', 'Sub A', '2026-01-01', '2027-01-01', 'ANNUAL', '100.000', 'JOD', 'ACTIVE', '2026-01-01 10:00:00', NOW()),
           ('sub-b', 'cust-ff1', 'svc-1', 'LEG-S-BBBBBBBBBBBBBBBB', 'Sub B', '2026-01-01', '2027-01-01', 'ANNUAL', '100.000', 'JOD', 'ACTIVE', '2026-01-02 10:00:00', NOW());
       `);
-    }, 30_000);
+    }, 120_000);
 
     afterAll(async () => {
-      if (connection) {
-        await resetDatabase(connection);
-        await connection.end();
+      try {
+        if (connection) await resetDatabase(connection);
+      } finally {
+        if (connection) await connection.end();
       }
-    }, 30_000);
+    }, 120_000);
 
     it("rolls Phase 1's temporary renames back when a later statement in the same transaction fails, leaving the original codes untouched", async () => {
       await expect(connection.query(migrationWithSabotagedPhase2())).rejects.toThrow(

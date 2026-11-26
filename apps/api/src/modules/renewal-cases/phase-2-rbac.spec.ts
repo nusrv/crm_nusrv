@@ -51,11 +51,11 @@ describe('Phase 2 RBAC', () => {
     'markAccepted',
     'markDoNotRenew',
     'markFulfilled',
-  ])('allows operational roles except Management to %s', (method) => {
+  ])('allows only ADMIN to %s', (method) => {
     const roles = methodRoles(RenewalCasesController, method) ?? [];
-    expect(roles).toEqual(['ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT']);
-    for (const role of roles) expect(allowed(roles, role)).toBe(true);
-    expect(allowed(roles, 'MANAGEMENT')).toBe(false);
+    expect(roles).toEqual(['ADMIN']);
+    expect(allowed(roles, 'ADMIN')).toBe(true);
+    for (const role of ['ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT', 'MANAGEMENT']) expect(allowed(roles, role)).toBe(false);
   });
 
   it.each(['list', 'summary'])(

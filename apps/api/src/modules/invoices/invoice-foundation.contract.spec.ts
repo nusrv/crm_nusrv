@@ -66,7 +66,10 @@ describe('Phase 4A invoice foundation contracts', () => {
     expect(subscriptionModal).toContain('Create Invoice');
     expect(detail).toContain('Validate / Preflight');
     expect(detail).toContain('Mark Ready for JoFotara');
-    expect(detail).toContain('Record manual JoFotara result');
+    // P1 owner policy requires an explicit, separately labeled officialization
+    // action — recording draft data or marking READY must not be mistaken for it.
+    expect(detail).toContain('Officialize Invoice');
+    expect(detail).toContain('/officialize');
     expect(detail).toContain('Print / Save PDF');
   });
 });

@@ -394,6 +394,51 @@ export class MailInboundIngestService {
     const referenceTokens = parseMessageIdTokens(message.referencesHeader);
     const references = buildReferencesStorageValue(referenceTokens, MAX_BODY_TEXT_BYTES);
 
+    // A recognized report is never a customer reply, even with capture disabled.
+    // With the gate off, retain it on IMAP and stop before advancing this UID.
+    // With the gate on, persist review-only evidence before allowing cursor advancement.
+    if (message.dsnReview) {
+      if (this.config.get<string>('P2_DSN_REVIEW_CAPTURE_ENABLED') !== 'true') {
+        throw new Error('Report-shaped mail awaits review capture activation; cursor retained.');
+      }
+      const review = message.dsnReview;
+      return this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM mail_configurations WHERE id = ${mailConfiguration.id} FOR UPDATE`;
+        const current = await tx.mailConfiguration.findUnique({ where: { id: mailConfiguration.id } });
+        if (!current || !current.enabled || !current.inboundSyncEnabled ||
+            current.scopeKey !== mailConfiguration.scopeKey || current.environment !== mailConfiguration.environment ||
+            current.imapHost !== mailConfiguration.imapHost || current.imapPort !== mailConfiguration.imapPort ||
+            current.imapSecure !== mailConfiguration.imapSecure || current.imapUsername !== mailConfiguration.imapUsername ||
+            current.imapCredentialsCiphertext !== mailConfiguration.imapCredentialsCiphertext ||
+            current.imapFolder !== mailConfiguration.imapFolder || current.lastSyncUidValidity !== uidValidity) {
+          throw new Error('Mailbox changed during report capture.');
+        }
+        const existing = await tx.mailDsnReview.findUnique({ where: { identityKey } });
+        if (existing) {
+          if (existing.sourceSha256 !== review.sourceSha256) throw new Error('Conflicting report source bytes.');
+          return { status: 'duplicate' as const, humanReview: true };
+        }
+        if (await tx.emailMessage.findUnique({ where: { imapIdentityKey: identityKey }, select: { id: true } })) {
+          // Do not silently bless an old ordinary-message classification as a verified report.
+          // Preserve the old row and add the separate review record for explicit human investigation.
+          await this.audit.record({ actorType: ActorType.SYSTEM, eventKey: 'mail.dsn.legacy_message_review_required',
+            subjectType: 'MailConfiguration', subjectId: mailConfiguration.id,
+            metadata: { uid: message.uid.toString(), uidValidity: uidValidity.toString() } }, tx);
+        }
+        const row = await tx.mailDsnReview.create({ data: {
+          identityKey, mailConfigurationId: mailConfiguration.id, folder: canonicalFolder, uidValidity,
+          uid: message.uid, reason: review.reason, sourceSha256: review.sourceSha256,
+          subject, fromAddress, bodyText, occurredAt,
+        } });
+        await this.audit.record({ actorType: ActorType.SYSTEM, eventKey: 'mail.dsn.review_captured',
+          subjectType: 'MailDsnReview', subjectId: row.id, metadata: {
+            mailConfigurationId: mailConfiguration.id, uid: message.uid.toString(),
+            uidValidity: uidValidity.toString(), reason: review.reason,
+          } }, tx);
+        return { status: 'inserted' as const, humanReview: true };
+      }, { isolationLevel: 'ReadCommitted' });
+    }
+
     try {
       const transactionResult = await this.prisma.$transaction(async (tx) => {
         const correlation = await this.correlation.correlate(tx, {
@@ -455,6 +500,28 @@ export class MailInboundIngestService {
           },
           tx,
         );
+
+        // An unambiguous inbound reply opens human review, never a commercial decision.
+        // Invalidate earlier reminder drafts/attempts that have not crossed the send boundary.
+        if (correlation.renewalCaseId && classificationStatus === ClassificationStatus.PENDING) {
+          const changed = await tx.renewalCase.updateMany({
+            where: {
+              id: correlation.renewalCaseId,
+              status: { in: ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER', 'HUMAN_REVIEW'] },
+              customerDecision: 'UNDECIDED',
+            },
+            data: { status: 'HUMAN_REVIEW', communicationRevision: { increment: 1 } },
+          });
+          if (changed.count === 1) {
+            await this.audit.record({
+              actorType: ActorType.SYSTEM,
+              eventKey: 'renewal.reply.detected_for_review',
+              subjectType: 'RenewalCase',
+              subjectId: correlation.renewalCaseId,
+              metadata: { emailMessageId: emailMessage.id, threadId: correlation.threadId },
+            }, tx);
+          }
+        }
 
         return {
           emailMessageId: emailMessage.id,

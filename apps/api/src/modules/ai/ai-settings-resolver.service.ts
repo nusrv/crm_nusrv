@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { SecretEncryptionService } from '../../security/secret-encryption.service';
+import { aiOperationalPolicy } from './ai-operational-policy';
 
 export const AI_SETTINGS_DEFAULT_CONFIDENCE_THRESHOLD = 0.9;
 
@@ -55,11 +56,11 @@ export class AiSettingsResolverService {
       };
     }
     return {
-      enabled: row.enabled,
+      enabled: !aiOperationalPolicy.isDeferred() && row.enabled,
       provider: row.provider,
       model: row.model,
       confidenceThreshold: row.confidenceThreshold != null ? Number(row.confidenceThreshold) : AI_SETTINGS_DEFAULT_CONFIDENCE_THRESHOLD,
-      autoRouteAcceptEnabled: row.autoRouteAccept,
+      autoRouteAcceptEnabled: !aiOperationalPolicy.isDeferred() && row.enabled && row.autoRouteAccept,
       autoRouteAcceptCutoverAt: row.autoRouteAcceptCutoverAt,
     };
   }
@@ -69,6 +70,7 @@ export class AiSettingsResolverService {
    * when no key is configured; never throws for that case (a caller must treat null as "AI cannot
    * actually run," not as an error). */
   async getApiKey(): Promise<string | null> {
+    if (aiOperationalPolicy.isDeferred()) return null;
     const row = await this.prisma.aiSettings.findUnique({
       where: { singleton: true },
       select: { apiKeyCiphertext: true },

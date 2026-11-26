@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { AiModelDiscoveryService } from './ai-model-discovery.service';
 import { LlmPermanentError } from './llm-errors';
 
@@ -25,6 +26,10 @@ function fakeAdapter(impl?: () => Promise<unknown>) {
 function fakeRegistry(adapters: Record<string, ReturnType<typeof fakeAdapter> | undefined>) {
   return { resolve: (provider: string) => adapters[provider] ?? null };
 }
+
+// Exercise the retained AI implementation behind the frozen production gate.
+beforeEach(() => { jest.spyOn(aiOperationalPolicy, 'isDeferred').mockReturnValue(false); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 describe('AiModelDiscoveryService — case rules (§F)', () => {
   it('P1/P2/P3 — discovers models for OPENAI/ANTHROPIC/GOOGLE_GEMINI with a supplied key', async () => {

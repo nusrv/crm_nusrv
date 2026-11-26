@@ -19,9 +19,11 @@ export interface InvoiceLineView {
 
 export interface InvoiceView {
   id: string;
-  customerId: string;
+  revision?: number;
+  customerId: string | null;
   billingEntityId: string;
-  sourceSubscriptionId: string;
+  sourceSubscriptionId: string | null;
+  sourceRenewalCaseId?: string | null;
   status: 'DRAFT' | 'READY_FOR_FAWTARA' | 'FAWTARA_ACCEPTED' | 'FAWTARA_REJECTED' | 'CANCELLED';
   internalReference: string;
   invoiceDate: string;
@@ -73,15 +75,16 @@ export interface InvoiceView {
   officialValueDiscrepancies: Array<{ field: string; crm: string; official: string }>;
   locked: boolean;
   finalPrintEnabled: boolean;
+  verifiedOfficial?: boolean;
   submissionPending: boolean;
   reconciliationRequired: boolean;
   reconciliationNote: string | null;
   reconciledAt: string | null;
   officializationProvenance: 'MANUAL' | 'API' | null;
   lines: InvoiceLineView[];
-  customer: { id: string; customerCode: string; nameEn: string | null; nameAr: string | null };
+  customer: { id: string; customerCode: string; nameEn: string | null; nameAr: string | null } | null;
   billingEntity: { id: string; code: string; name: string };
-  sourceSubscription: { id: string; subscriptionCode: string; name: string; status: string };
+  sourceSubscription: { id: string; subscriptionCode: string; name: string; status: string } | null;
 }
 
 export interface InvoicePreflightResult {

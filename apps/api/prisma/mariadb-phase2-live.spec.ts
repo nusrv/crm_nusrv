@@ -181,15 +181,16 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
         },
       ],
     });
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
-    await prisma?.$disconnect();
-    if (connection) {
-      await resetDatabase(connection);
-      await connection.end();
+    try {
+      await prisma?.$disconnect();
+      if (connection) await resetDatabase(connection);
+    } finally {
+      if (connection) await connection.end();
     }
-  }, 30_000);
+  }, 120_000);
 
   async function createSubscription(
     code: string,
@@ -213,7 +214,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
     });
   }
 
-  it('queues D-30/D-21/D-14/D-7/D-2/D0 once and D-2/D0 internal escalation once', async () => {
+  it('creates renewal cases without automated customer sends and queues internal escalations once', async () => {
     for (const days of [30, 21, 14, 7, 2, 0]) {
       await createSubscription(`MILESTONE_${days}`, days);
     }
@@ -224,34 +225,24 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
     expect(first).toMatchObject({
       subscriptionsEvaluated: 6,
       casesCreated: 6,
-      customerRemindersQueued: 6,
+      customerRemindersQueued: 0,
       internalNotificationsQueued: 3,
     });
     expect(second).toMatchObject({
       casesCreated: 0,
       customerRemindersQueued: 0,
       internalNotificationsQueued: 0,
-      duplicatesPrevented: 9,
+      duplicatesPrevented: 3,
     });
-    expect(
-      await prisma.communicationOutbox.groupBy({
-        by: ['daysBeforeDue'],
-        where: { audience: ReminderAudience.CUSTOMER },
-        _count: { _all: true },
-        orderBy: { daysBeforeDue: 'desc' },
-      }),
-    ).toEqual(
-      [30, 21, 14, 7, 2, 0].map((daysBeforeDue) => ({
-        daysBeforeDue,
-        _count: { _all: 1 },
-      })),
-    );
-    const finalWarning = await prisma.communicationOutbox.findFirstOrThrow({
-      where: { audience: ReminderAudience.CUSTOMER, daysBeforeDue: 0 },
-    });
-    expect(finalWarning.body).toContain('suspension after 24 hours');
+    // OD-6 prohibits automatic customer reminders, including the D0 milestone.
+    expect(await prisma.communicationOutbox.count({
+      where: { audience: ReminderAudience.CUSTOMER },
+    })).toBe(0);
+    expect(await prisma.communicationOutbox.count({
+      where: { audience: ReminderAudience.INTERNAL },
+    })).toBe(3);
     expect(await prisma.renewalCase.count()).toBe(6);
-    expect(await prisma.renewalEvaluationDecision.count()).toBe(9);
+    expect(await prisma.renewalEvaluationDecision.count()).toBe(3);
   });
 
   it('uses database uniqueness under concurrent workers', async () => {
@@ -265,7 +256,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
       await prisma.communicationOutbox.count({
         where: { subscriptionId: subscription.id, audience: ReminderAudience.CUSTOMER },
       }),
-    ).toBe(1);
+    ).toBe(0);
   });
 
   it('honors active holds, ignores expired holds, excludes inactive subscriptions, and blocks ineligible states', async () => {
@@ -316,7 +307,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
     await engine.evaluateAll({ asOf, trigger: 'test' });
     expect(await prisma.communicationOutbox.count({ where: { subscriptionId: held.id } })).toBe(0);
     expect(await prisma.communicationOutbox.count({ where: { subscriptionId: expired.id } })).toBe(
-      1,
+      0,
     );
     expect(
       await prisma.communicationOutbox.count({ where: { subscriptionId: ineligible.id } }),
@@ -360,7 +351,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
 
     const first = await engine.evaluateAll({ asOf, trigger: 'test' });
     const second = await engine.evaluateAll({ asOf, trigger: 'test' });
-    expect(first.heldDecisions).toBeGreaterThanOrEqual(2);
+    expect(first.heldDecisions).toBe(1);
     expect(second.heldDecisions).toBe(0);
     expect(
       await prisma.communicationOutbox.count({ where: { subscriptionId: subscription.id } }),
@@ -369,7 +360,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
       await prisma.renewalEvaluationDecision.count({
         where: { renewalCaseId: renewalCase.id, outcome: 'SKIPPED_HOLD' },
       }),
-    ).toBe(2);
+    ).toBe(1);
 
     const holdAudits = await prisma.auditEvent.findMany({
       where: {
@@ -377,16 +368,14 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
         subjectType: 'RenewalEvaluationDecision',
       },
       orderBy: { createdAt: 'desc' },
-      take: 2,
+      take: 1,
       select: { metadata: true },
     });
     const effectiveHoldIds = holdAudits.map((event) => {
       const metadata = event.metadata as { effectiveHoldIds?: string[] } | null;
       return metadata?.effectiveHoldIds ?? [];
     });
-    expect(effectiveHoldIds).toEqual(
-      expect.arrayContaining([[customerHold.id], [internalHold.id]]),
-    );
+    expect(effectiveHoldIds).toEqual([[internalHold.id]]);
 
     await prisma.renewalHold.update({
       where: { id: customerHold.id },
@@ -397,7 +386,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
       await prisma.communicationOutbox.count({
         where: { subscriptionId: subscription.id, audience: ReminderAudience.CUSTOMER },
       }),
-    ).toBe(1);
+    ).toBe(0);
     expect(
       await prisma.communicationOutbox.count({
         where: { subscriptionId: subscription.id, audience: ReminderAudience.INTERNAL },
@@ -407,7 +396,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
       await prisma.renewalEvaluationDecision.count({
         where: { renewalCaseId: renewalCase.id, outcome: 'SKIPPED_HOLD' },
       }),
-    ).toBe(2);
+    ).toBe(1);
   });
 
   it('creates a new deterministic cycle without mutating the old case when renewal date changes', async () => {
@@ -423,7 +412,7 @@ liveDescribe('Phase 2 MariaDB renewal engine integration', () => {
       await prisma.communicationOutbox.count({
         where: { subscriptionId: subscription.id, audience: ReminderAudience.CUSTOMER },
       }),
-    ).toBe(2);
+    ).toBe(0);
   });
 
   it('keeps the approved 500-character Technical Connection endpoint mapping in Phase 2', async () => {

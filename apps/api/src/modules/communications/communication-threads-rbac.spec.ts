@@ -29,31 +29,31 @@ describe('Communication Center RBAC (§20)', () => {
     expect(methodRoles(CommunicationThreadsController, 'detail') ?? []).toEqual([]);
   });
 
-  it('restricts resolving a thread to ADMIN + SALES_DEVELOPMENT only', () => {
+  it('restricts resolving a thread to ADMIN only', () => {
     const roles = methodRoles(CommunicationThreadsController, 'resolve') ?? [];
-    expect(roles).toEqual(['ADMIN', 'SALES_DEVELOPMENT']);
+    expect(roles).toEqual(['ADMIN']);
     expect(allowed(roles, 'ADMIN')).toBe(true);
-    expect(allowed(roles, 'SALES_DEVELOPMENT')).toBe(true);
+    expect(allowed(roles, 'SALES_DEVELOPMENT')).toBe(false);
     for (const role of ['ACCOUNTANT', 'IT', 'MANAGEMENT']) {
       expect(allowed(roles, role)).toBe(false);
     }
   });
 
-  it('restricts sending an operator reply to ADMIN + SALES_DEVELOPMENT only', () => {
+  it('restricts sending an operator reply to ADMIN only', () => {
     const roles = methodRoles(CommunicationThreadsController, 'reply') ?? [];
-    expect(roles).toEqual(['ADMIN', 'SALES_DEVELOPMENT']);
+    expect(roles).toEqual(['ADMIN']);
     expect(allowed(roles, 'ADMIN')).toBe(true);
-    expect(allowed(roles, 'SALES_DEVELOPMENT')).toBe(true);
+    expect(allowed(roles, 'SALES_DEVELOPMENT')).toBe(false);
     for (const role of ['ACCOUNTANT', 'IT', 'MANAGEMENT']) {
       expect(allowed(roles, role)).toBe(false);
     }
   });
 
-  it('Slice F §9/§16 — restricts generating a suggested reply draft to ADMIN + SALES_DEVELOPMENT only', () => {
+  it('Slice F §9/§16 — restricts generating a suggested reply draft to ADMIN only', () => {
     const roles = methodRoles(CommunicationThreadsController, 'draftReply') ?? [];
-    expect(roles).toEqual(['ADMIN', 'SALES_DEVELOPMENT']);
+    expect(roles).toEqual(['ADMIN']);
     expect(allowed(roles, 'ADMIN')).toBe(true);
-    expect(allowed(roles, 'SALES_DEVELOPMENT')).toBe(true);
+    expect(allowed(roles, 'SALES_DEVELOPMENT')).toBe(false);
     for (const role of ['ACCOUNTANT', 'IT', 'MANAGEMENT']) {
       expect(allowed(roles, role)).toBe(false);
     }

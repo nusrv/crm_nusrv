@@ -6,6 +6,7 @@ import { ActorType, HealthStatus } from '../../generated/prisma/enums';
 import type { AiSettings, Prisma } from '../../generated/prisma/client';
 import { SecretEncryptionService } from '../../security/secret-encryption.service';
 import { AiHealthService } from './ai-health.service';
+import { AI_DEFERRED_MESSAGE, aiOperationalPolicy } from './ai-operational-policy';
 import { AiSettingsResolverService } from './ai-settings-resolver.service';
 import type { UpdateAiSettingsDto } from './ai-settings.dto';
 import { LlmMalformedOutputError, LlmPermanentError, LlmTransientError } from './llm-errors';
@@ -52,7 +53,7 @@ export class AiSettingsService {
 
   async get(): Promise<SerializedAiSettings> {
     const row = await this.prisma.aiSettings.findUnique({ where: { singleton: true } });
-    return row ? this.serialize(row) : SAFE_DEFAULTS;
+    return row ? this.operationalView(this.serialize(row)) : SAFE_DEFAULTS;
   }
 
   /**
@@ -72,6 +73,9 @@ export class AiSettingsService {
    * so a rejected switch never clears/overwrites the previously valid configuration.
    */
   async update(dto: UpdateAiSettingsDto, context: MutationContext): Promise<SerializedAiSettings> {
+    if (aiOperationalPolicy.isDeferred() && (dto.enabled === true || dto.autoRouteAccept === true)) {
+      throw new BadRequestException(AI_DEFERRED_MESSAGE);
+    }
     if (dto.apiKey !== undefined && dto.clearApiKey) {
       throw new BadRequestException('Provide a new API key or clear it, not both.');
     }
@@ -112,10 +116,10 @@ export class AiSettingsService {
     // §I — fail-closed, independently of the browser: AI cannot be enabled without a configured
     // model and API key; Auto Accept cannot be enabled without AI enabled, a configured model/key,
     // and a valid cutover.
-    if (nextEnabled && (!nextModel || !nextApiKeyConfigured)) {
+    if (!aiOperationalPolicy.isDeferred() && nextEnabled && (!nextModel || !nextApiKeyConfigured)) {
       throw new BadRequestException('AI cannot be enabled without a configured model and API key.');
     }
-    if (nextAutoRouteAccept) {
+    if (!aiOperationalPolicy.isDeferred() && nextAutoRouteAccept) {
       if (!nextEnabled) throw new BadRequestException('Automatic acceptance requires AI to be enabled.');
       if (!nextCutoverRaw || Number.isNaN(Date.parse(nextCutoverRaw))) {
         throw new BadRequestException('Automatic acceptance requires a valid cutover date/time.');
@@ -156,7 +160,7 @@ export class AiSettingsService {
       );
       return safe;
     });
-    return record;
+    return this.operationalView(record);
   }
 
   /**
@@ -176,6 +180,9 @@ export class AiSettingsService {
   async test(): Promise<{ success: boolean; provider: string; model: string | null; timestamp: Date; latencyMs?: number; message: string }> {
     const settings = await this.aiSettings.getSettings();
     const timestamp = new Date();
+    if (aiOperationalPolicy.isDeferred()) {
+      return { success: false, provider: settings.provider, model: settings.model, timestamp, message: AI_DEFERRED_MESSAGE };
+    }
     const apiKey = await this.aiSettings.getApiKey();
     if (!settings.model || !apiKey) {
       return { success: false, provider: settings.provider, model: settings.model, timestamp, message: 'Provider/model/API key are not fully configured.' };
@@ -194,6 +201,10 @@ export class AiSettingsService {
       await this.health.record(HealthStatus.UNAVAILABLE, `Manual AI connection test failed: ${sanitized}`);
       return { success: false, provider: settings.provider, model: settings.model, timestamp, message: sanitized };
     }
+  }
+
+  private operationalView(settings: SerializedAiSettings): SerializedAiSettings {
+    return aiOperationalPolicy.isDeferred() ? { ...settings, enabled: false, autoRouteAccept: false } : settings;
   }
 
   private serialize(row: AiSettings): SerializedAiSettings {

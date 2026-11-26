@@ -9,6 +9,7 @@ import { useControlPanel } from './app-shell';
 import { CustomerCombobox, type CustomerComboboxOption } from './customer-combobox';
 import type { CurrencyOption } from './currencies-manager';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 
 const PRESET_INTERVALS = ['12', '24', '36', '60'] as const;
@@ -116,14 +117,15 @@ export function SubscriptionModal({
   subscriptionId: string | null;
   lockedCustomer?: CustomerComboboxOption;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (id: string) => void;
   onDeleted: () => void;
 }) {
   const router = useRouter();
   const { can } = useControlPanel();
-  const canManage = can('ADMIN', 'ACCOUNTANT');
-  const canMap = can('ADMIN', 'IT');
+  const canManage = can('ADMIN');
+  const canMap = can('ADMIN');
   const [editing, setEditing] = useState<Subscription | null>(null);
+  const saveState = useModalSave();
   const [loading, setLoading] = useState(Boolean(subscriptionId));
   const [types, setTypes] = useState<ServiceTypeOption[]>([]);
   const [packages, setPackages] = useState<PackageOption[]>([]);
@@ -290,20 +292,26 @@ export function SubscriptionModal({
       body.renewalDate = value('renewalDate');
     }
 
+    if (!saveState.begin()) return;
     try {
-      await apiRequest(`/subscriptions${editing ? `/${editing.id}` : ''}`, {
+      const saved = await apiRequest<Subscription>(`/subscriptions${editing ? `/${editing.id}` : ''}`, {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
+      setEditing(saved);
+      saveState.markSaved();
       setError('');
-      onSaved();
+      setMessage('Subscription saved and audited.');
+      onSaved(saved.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    } finally {
+      saveState.finish();
     }
   }
 
   async function deleteSubscription() {
-    if (!editing) return;
+    if (!editing || saveState.busy) return;
     if (
       !window.confirm(
         `Permanently delete subscription ${editing.subscriptionCode} (${editing.name})? This cannot be undone.`,
@@ -321,7 +329,7 @@ export function SubscriptionModal({
   }
 
   async function createInvoice() {
-    if (!editing) return;
+    if (!editing || saveState.busy) return;
     try {
       const invoice = await apiRequest<{ id: string }>(
         `/invoices/from-subscription/${editing.id}`,
@@ -377,7 +385,8 @@ export function SubscriptionModal({
   return (
     <Modal
       maxWidth="56rem"
-      onClose={onClose}
+      closeDisabled={saveState.busy}
+      onClose={() => { if (!saveState.busy) onClose(); }}
       title={loading ? 'Loading…' : editing ? `Edit ${editing.name}` : 'Create subscription'}
     >
       <Notice message={error} />
@@ -400,7 +409,7 @@ export function SubscriptionModal({
           {canManage && (
             <form
               className="form-grid"
-              key={editing?.id ?? 'new'}
+              key={`${editing?.id ?? 'new'}:${saveState.revision}`}
               onSubmit={(event) => void save(event)}
             >
               {editing ? (
@@ -485,6 +494,7 @@ export function SubscriptionModal({
                   </label>
                   <label className="field">
                     <span>Renewal Interval</span>
+                    <small className="muted">How long the subscription is extended in each cycle.</small>
                     <select
                       onChange={(event) => setIntervalPreset(event.target.value as IntervalPreset)}
                       value={intervalPreset}
@@ -651,7 +661,7 @@ export function SubscriptionModal({
                 <textarea defaultValue={editing?.notes ?? ''} name="notes" rows={2} />
               </label>
               <div className="field-wide flex gap-3">
-                <button className="button-primary" type="submit">
+                <button className="button-primary" disabled={saveState.busy} type="submit">
                   Save subscription
                 </button>
                 {editing?.status === 'ACTIVE' && (
@@ -663,7 +673,7 @@ export function SubscriptionModal({
                     Create Invoice
                   </button>
                 )}
-                <button className="button-secondary" onClick={onClose} type="button">
+                <button className="button-secondary" disabled={saveState.busy} onClick={onClose} type="button">
                   Cancel
                 </button>
                 {editing && (
@@ -682,8 +692,7 @@ export function SubscriptionModal({
             <div className={canManage ? 'mt-6 border-t border-[var(--line)] pt-5' : undefined}>
               <h3 className="text-lg font-semibold">Technical mappings for {editing.name}</h3>
               <p className="mt-1 text-sm text-[var(--muted)]">
-                Mappings are service-specific. Disabling one mapping does not affect unrelated
-                subscriptions.
+                Links a CRM subscription to an external service identifier. A mapping does not execute an external action.
               </p>
               <div className="mt-4 space-y-3">
                 {editing.connections.length ? (

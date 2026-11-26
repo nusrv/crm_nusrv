@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus, mailDispatchStatus } from '../lib/workspace-status';
+
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiRequest, type PageResult } from '../lib/api';
@@ -28,6 +30,9 @@ interface RenewalCase {
   id: string;
   dueDate: string;
   status: string;
+  clarificationPending: boolean;
+  unreadReplyCount: number;
+  reminderSummary: { acceptedCount: number; lastAcceptedAt: string | null; limited?: boolean };
   subscription: {
     id: string;
     subscriptionCode: string;
@@ -47,7 +52,7 @@ interface RenewalCase {
     servicePackage: { name: string } | null;
   };
   holds: RenewalHold[];
-  communicationOutbox: Array<{ status: string; queuedAt: string; audience: string }>;
+  communicationOutbox: Array<{ status: string; queuedAt: string; audience: string; smtpUncertain?: boolean }>;
   _count: { communicationOutbox: number };
 }
 
@@ -115,9 +120,12 @@ function addDays(base: Date, days: number): Date {
 
 export function RenewalCasesManager() {
   const { can } = useControlPanel();
-  const canHold = can('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT');
+  const canHold = can('ADMIN');
 
   const [cases, setCases] = useState<RenewalCase[]>([]);
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<PageResult<RenewalCase>['meta'] | null>(null);
+  const [customerFilter, setCustomerFilter] = useState('');
   const [asOf, setAsOf] = useState('');
   const [summary, setSummary] = useState<RenewalSummary | null>(null);
   const [outbox, setOutbox] = useState<OutboxMessage[]>([]);
@@ -138,6 +146,7 @@ export function RenewalCasesManager() {
   const [holdTarget, setHoldTarget] = useState<string | null>(null);
   const [holdReason, setHoldReason] = useState('');
   const [detailCaseId, setDetailCaseId] = useState<string | null>(null);
+  const [prepareOnOpen, setPrepareOnOpen] = useState(false);
   const [outboxOpen, setOutboxOpen] = useState(false);
   const [outboxSearch, setOutboxSearch] = useState('');
   const [outboxStatus, setOutboxStatus] = useState('');
@@ -145,7 +154,7 @@ export function RenewalCasesManager() {
   const [error, setError] = useState('');
 
   const hasFilters = Boolean(
-    search ||
+    customerFilter || search ||
     status ||
     holdStatus ||
     serviceTypeId ||
@@ -157,7 +166,8 @@ export function RenewalCasesManager() {
   );
 
   const load = useCallback(async () => {
-    const params = new URLSearchParams({ pageSize: '50' });
+    const params = new URLSearchParams({ pageSize: '50', page: String(page) });
+    if (customerFilter) params.set('customerId', customerFilter);
     if (search) params.set('search', search);
     if (status) params.set('status', status);
     if (holdStatus) params.set('holdStatus', holdStatus);
@@ -182,13 +192,14 @@ export function RenewalCasesManager() {
     // should degrade to an empty list here, never crash the page on a stray .map() over
     // undefined.
     setCases(caseResult.data ?? []);
+    setMeta(caseResult.meta);
     setAsOf(caseResult.asOf ?? new Date().toISOString());
     setOutbox(outboxResult.data ?? []);
     setServiceTypes(serviceTypeResult ?? []);
     setPackages(packageResult ?? []);
     setBillingEntities(billingEntityResult ?? []);
   }, [
-    search,
+    page, customerFilter, search,
     status,
     holdStatus,
     serviceTypeId,
@@ -215,7 +226,19 @@ export function RenewalCasesManager() {
     });
   }, [loadSummary]);
 
+  useEffect(() => {
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      const query = new URLSearchParams(window.location.search);
+      if (query.get('case')) setDetailCaseId(query.get('case'));
+      if (query.get('customer')) setCustomerFilter(query.get('customer') ?? '');
+    });
+    return () => { active = false; };
+  }, []);
+
   function selectUrgency(value: string) {
+    setPage(1);
     setUrgency(value);
     const today = new Date();
     if (value === 'overdue') {
@@ -237,6 +260,7 @@ export function RenewalCasesManager() {
   }
 
   function clearFilters() {
+    setPage(1); setCustomerFilter('');
     setSearch('');
     setStatus('');
     setHoldStatus('');
@@ -299,8 +323,9 @@ export function RenewalCasesManager() {
     <>
       <PageHeading
         title="Renewal operations"
-        description="Operational management of subscriptions that have entered the renewal workflow — driven by renewal cases, not a raw subscription list. No email is sent from this screen."
+        description="Operational management of subscriptions that have entered the renewal workflow — driven by renewal cases, not a raw subscription list. Prepare and review reminders here; email is sent only on explicit human approval."
       />
+      {customerFilter && <p className="muted">Showing renewal cases for the selected customer. <button className="button-small" type="button" onClick={() => { setCustomerFilter(''); setPage(1); }}>Show all customers</button></p>}
       {!holdTarget && !detailCaseId && (
         <>
           <Notice message={error} />
@@ -331,25 +356,25 @@ export function RenewalCasesManager() {
         <input
           aria-label="Search renewals"
           className="input"
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={(event) => { setPage(1); setSearch(event.target.value); }}
           placeholder="Customer code/name, subscription code/name"
           value={search}
         />
         <select
           aria-label="Renewal status"
           className="input"
-          onChange={(event) => setStatus(event.target.value)}
+          onChange={(event) => { setPage(1); setStatus(event.target.value); }}
           value={status}
         >
           <option value="">All statuses</option>
           {STATUS_OPTIONS.map((value) => (
-            <option key={value}>{value}</option>
+            <option key={value} value={value}>{workspaceStatus(value)}</option>
           ))}
         </select>
         <select
           aria-label="Hold state"
           className="input"
-          onChange={(event) => setHoldStatus(event.target.value)}
+          onChange={(event) => { setPage(1); setHoldStatus(event.target.value); }}
           value={holdStatus}
         >
           <option value="">Any hold state</option>
@@ -373,6 +398,7 @@ export function RenewalCasesManager() {
           aria-label="Service Type filter"
           className="input"
           onChange={(event) => {
+            setPage(1);
             setServiceTypeId(event.target.value);
             setServicePackageId('');
           }}
@@ -388,7 +414,7 @@ export function RenewalCasesManager() {
         <select
           aria-label="Package filter"
           className="input"
-          onChange={(event) => setServicePackageId(event.target.value)}
+          onChange={(event) => { setPage(1); setServicePackageId(event.target.value); }}
           value={servicePackageId}
         >
           <option value="">All packages</option>
@@ -403,7 +429,7 @@ export function RenewalCasesManager() {
         <select
           aria-label="Billing Entity filter"
           className="input"
-          onChange={(event) => setBillingEntityId(event.target.value)}
+          onChange={(event) => { setPage(1); setBillingEntityId(event.target.value); }}
           value={billingEntityId}
         >
           <option value="">All Billing Entities</option>
@@ -418,6 +444,7 @@ export function RenewalCasesManager() {
           <input
             aria-label="Due from"
             onChange={(event) => {
+              setPage(1);
               setDueFrom(event.target.value);
               setUrgency('');
             }}
@@ -430,6 +457,7 @@ export function RenewalCasesManager() {
           <input
             aria-label="Due to"
             onChange={(event) => {
+              setPage(1);
               setDueTo(event.target.value);
               setUrgency('');
             }}
@@ -521,22 +549,29 @@ export function RenewalCasesManager() {
                   </td>
                   <td>{customer.billingEntity.name}</td>
                   <td>
-                    <span className="status-pill">{renewalCase.status}</span>
+                    <span className="status-pill">{workspaceStatus(renewalCase.status)}</span>
                   </td>
                   <td>
                     {reminderStatusLabel(
                       renewalCase.communicationOutbox[0],
                       renewalCase._count.communicationOutbox,
                     )}
+                    <p className="text-xs muted">SMTP accepted: {renewalCase.reminderSummary.limited ? 'at least ' : ''}{renewalCase.reminderSummary.acceptedCount} · Last: {renewalCase.reminderSummary.lastAcceptedAt ? new Date(renewalCase.reminderSummary.lastAcceptedAt).toLocaleString() : '—'}</p>
                   </td>
                   <td className="space-x-2 whitespace-nowrap">
                     <button
                       className="link-button"
-                      onClick={() => setDetailCaseId(renewalCase.id)}
+                      onClick={() => { setPrepareOnOpen(false); setDetailCaseId(renewalCase.id); }}
                       type="button"
                     >
                       View
                     </button>
+                    {canHold && ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER'].includes(renewalCase.status) && !renewalCase.clarificationPending && (
+                      <button className="button-small" type="button" onClick={() => { setPrepareOnOpen(true); setDetailCaseId(renewalCase.id); }}>Prepare Reminder</button>
+                    )}
+                    {canHold && renewalCase.unreadReplyCount > 0 && (
+                      <button className="button-small" type="button" onClick={() => { setPrepareOnOpen(false); setDetailCaseId(renewalCase.id); }}>{renewalCase.unreadReplyCount} unread {renewalCase.unreadReplyCount === 1 ? 'reply' : 'replies'}</button>
+                    )}
                     {canHold && !activeHold && (
                       <button
                         className="link-button"
@@ -561,6 +596,7 @@ export function RenewalCasesManager() {
             })}
           </tbody>
         </table>
+        {meta && <div className="pagination"><span>Page {meta.page} of {Math.max(meta.pageCount, 1)} · {meta.total} renewal cases</span><button type="button" disabled={page <= 1} onClick={() => setPage(current => current - 1)}>Previous</button><button type="button" disabled={page >= meta.pageCount} onClick={() => setPage(current => current + 1)}>Next</button></div>}
         {!cases.length && (
           <p className="py-8 text-center text-sm text-[var(--muted)]">
             {hasFilters
@@ -601,7 +637,7 @@ export function RenewalCasesManager() {
               >
                 <option value="">All statuses</option>
                 {['QUEUED', 'PROCESSING', 'DELIVERED', 'FAILED', 'CANCELLED'].map((value) => (
-                  <option key={value}>{value}</option>
+                  <option key={value} value={value}>{mailDispatchStatus(value)}</option>
                 ))}
               </select>
             </div>
@@ -631,7 +667,7 @@ export function RenewalCasesManager() {
                       </td>
                       <td>{message.recipient}</td>
                       <td>{message.daysBeforeDue === 0 ? 'D0' : `D-${message.daysBeforeDue}`}</td>
-                      <td>{message.status}</td>
+                      <td>{mailDispatchStatus(message.status)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -648,9 +684,11 @@ export function RenewalCasesManager() {
 
       {detailCaseId && (
         <RenewalCaseDetail
+          key={detailCaseId}
           caseId={detailCaseId}
+          prepareOnOpen={prepareOnOpen}
           onChanged={() => void handleDetailChanged()}
-          onClose={() => setDetailCaseId(null)}
+          onClose={() => { setDetailCaseId(null); const url = new URL(window.location.href); url.searchParams.delete('case'); window.history.replaceState(null, '', url); }}
         />
       )}
     </>

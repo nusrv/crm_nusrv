@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { AiSettingsResolverService } from './ai-settings-resolver.service';
@@ -50,6 +51,7 @@ export class AiClassificationEnqueueService {
   ) {}
 
   async enqueueIfEnabled(emailMessageId: string): Promise<void> {
+    if (aiOperationalPolicy.isDeferred()) return;
     const settings = await this.aiSettings.getSettings();
     if (!settings.enabled) return;
     try {

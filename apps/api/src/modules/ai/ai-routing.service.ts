@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../database/prisma.service';
 import { AiSettingsResolverService } from './ai-settings-resolver.service';
@@ -74,6 +75,9 @@ export class AiRoutingService {
   ) {}
 
   async processBatch(): Promise<AiRoutingBatchSummary> {
+    if (aiOperationalPolicy.isDeferred()) {
+      return { candidates: 0, succeeded: 0, skipped: 0, failed: 0, notClaimed: 0, conflicts: 0, paused: 0 };
+    }
     const now = this.clock.now();
     const staleThreshold = this.staleThreshold(now);
     // Contract-audit hardening §4 / Phase 3.1 §J — while the persisted AiSettings.autoRouteAccept
@@ -114,6 +118,7 @@ export class AiRoutingService {
   }
 
   async processOne(decisionId: string): Promise<AiRoutingOutcome> {
+    if (aiOperationalPolicy.isDeferred()) return 'paused';
     // Contract-audit hardening §3 — the execution kill switch. Checked BEFORE claim() so a paused
     // AUTO_ACCEPT decision consumes zero attempts, its lease/status/action are left completely
     // untouched, and no audit event is written. This does NOT reinterpret the decision: `action`

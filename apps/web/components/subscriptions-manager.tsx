@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus } from '../lib/workspace-status';
+
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
 import type { CurrencyOption } from './currencies-manager';
@@ -50,8 +52,8 @@ interface BillingEntityOption {
 
 export function SubscriptionsManager() {
   const { can } = useControlPanel();
-  const canManage = can('ADMIN', 'ACCOUNTANT');
-  const canMap = can('ADMIN', 'IT');
+  const canManage = can('ADMIN');
+  const canMap = can('ADMIN');
   const [result, setResult] = useState<PageResult<SubscriptionRow> | null>(null);
   const [lockedCustomer, setLockedCustomer] = useState<CustomerComboboxOption | undefined>(
     undefined,
@@ -159,10 +161,10 @@ export function SubscriptionsManager() {
     setLockedCustomer(undefined);
   }
 
-  function handleSaved() {
-    closeForm();
+  function handleSaved(id: string) {
+    setEditingId(id);
     setMessage('Subscription saved and audited.');
-    void load();
+    void load().catch(() => setError('Subscription saved; refresh the list to see it.'));
   }
 
   function handleDeleted() {
@@ -211,7 +213,7 @@ export function SubscriptionsManager() {
             value={status}
           >
             <option value="">All statuses</option>
-            <option>ACTIVE</option>
+            <option value="ACTIVE">Active</option>
             <option>SUSPENDED</option>
             <option>CLOSED</option>
           </select>
@@ -357,7 +359,7 @@ export function SubscriptionsManager() {
                     <span className="muted">Cost {subscription.supplierCost ?? '—'}</span>
                   </td>
                   <td>{subscription.connections.length}</td>
-                  <td>{subscription.status}</td>
+                  <td>{workspaceStatus(subscription.status)}</td>
                   <td>
                     <button
                       className="button-small"

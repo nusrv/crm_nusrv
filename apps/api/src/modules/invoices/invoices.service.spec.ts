@@ -140,6 +140,7 @@ function subscription(status: SubscriptionStatus = SubscriptionStatus.ACTIVE) {
         id: 'entity-1',
         code: 'NS',
         legalName: 'New Serve',
+        active: true,
         taxNumber: 'ISSUER-TAX',
         address: 'Issuer Address',
         invoiceEmail: 'billing@example.com',
@@ -277,6 +278,14 @@ describe('InvoicesService creation', () => {
     expect(result.issuerLogoAssetId).toBe('original-logo');
   });
 
+  it('refuses subscription invoice creation for an inactive legal issuer', async () => {
+    const source = subscription();
+    source.customer.billingEntity.active = false;
+    const { service, create } = harness(source);
+    await expect(service.createFromSubscription('subscription-1', context)).rejects.toThrow('active invoice issuer');
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('rejects every non-ACTIVE subscription on the server', async () => {
     const { service } = harness(subscription(SubscriptionStatus.SUSPENDED));
     await expect(service.createFromSubscription('subscription-1', context)).rejects.toThrow(
@@ -305,6 +314,137 @@ describe('InvoicesService creation', () => {
     await expect(service.createFromSubscription('subscription-1', context)).rejects.toBeInstanceOf(
       ConflictException,
     );
+  });
+});
+
+describe('InvoicesService independent manual drafts (P1.1)', () => {
+  function manualHarness(active = true, customer: Record<string, unknown> | null = null) {
+    const issuer = {
+      ...subscription().customer.billingEntity,
+      active,
+      issuerType: 'COMPANY',
+      legalNameAr: null,
+      countryCode: 'JO',
+      invoiceBranding: null,
+      bankDetailsCiphertext: null,
+      lastInvoiceCounter: 2n,
+    };
+    const create = jest.fn(({ data }: { data: Record<string, unknown> }) => {
+      const lines = (data.lines as { create: Array<Record<string, unknown>> }).create;
+      return Promise.resolve(invoice({
+        ...data,
+        id: 'manual-invoice-1',
+        status: InvoiceStatus.DRAFT,
+        sourceSubscriptionId: null,
+        sourceRenewalCaseId: null,
+        activeDraftKey: null,
+        customerId: data.customerId ?? null,
+        sourceSubscription: null,
+        customer,
+        billingEntity: issuer,
+        lines: lines.map((line, index) => ({
+          id: `manual-line-${index + 1}`,
+          invoiceId: 'manual-invoice-1',
+          ...line,
+        })),
+      }));
+    });
+    const tx = {
+      invoiceSequence: { upsert: jest.fn(() => Promise.resolve({ year: 2026, lastValue: 2 })) },
+      billingEntity: { update: jest.fn(() => Promise.resolve(issuer)) },
+      customer: { findUnique: jest.fn(() => Promise.resolve(customer)) },
+      invoice: { create },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    return { ...serviceWith(prisma), create, tx };
+  }
+
+  const oneTimeInput = {
+    billingEntityId: 'entity-1',
+    currencyCode: 'JOD',
+    invoiceDate: '2026-11-23',
+    periodStart: '2026-11-23',
+    periodEnd: '2026-11-24',
+    customerNameEn: 'One-time buyer',
+    customerAddress: 'Customer billing address',
+    customerCountry: 'Jordan',
+    lines: [{
+      description: 'One-time consulting service',
+      quantity: '1',
+      unitPrice: '45.000',
+      discountAmount: '0',
+    }],
+  };
+
+  it('creates an unaffiliated DRAFT without a customer, subscription or renewal case', async () => {
+    const h = manualHarness();
+    const result = await h.service.createManualDraft(oneTimeInput, context);
+    expect(result.id).toBe('manual-invoice-1');
+    expect(result.status).toBe(InvoiceStatus.DRAFT);
+    expect(result.customerId).toBeNull();
+    expect(result.sourceSubscriptionId).toBeNull();
+    expect(result.sourceRenewalCaseId).toBeNull();
+    expect(result.customerNameEnSnapshot).toBe('One-time buyer');
+    expect(result.customerCodeSnapshot).toBe('ONE-TIME');
+    expect(result.grandTotal).toBe('45.000');
+    expect(result.lines[0]?.description).toBe('One-time consulting service');
+    expect(result.lines[0]?.taxRate).toBeNull();
+    expect(h.create).toHaveBeenCalledTimes(1);
+    const input = h.create.mock.calls[0]![0].data;
+    expect(input).not.toHaveProperty('sourceSubscriptionId');
+    expect(input).not.toHaveProperty('sourceRenewalCaseId');
+    expect(h.audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ eventKey: 'invoice.manual_draft_created' }),
+      expect.anything(),
+    );
+  });
+
+  it('snapshots a registered buyer and primary active phone without a fake subscription', async () => {
+    const customer = { ...subscription().customer, id: 'customer-1', billingEntityId: 'entity-1' };
+    const h = manualHarness(true, customer);
+    const result = await h.service.createManualDraft({
+      ...oneTimeInput, customerId: 'customer-1', customerNameEn: undefined,
+      customerAddress: undefined, customerCountry: undefined,
+    }, context);
+    expect(result.customerId).toBe('customer-1');
+    expect(result.sourceSubscriptionId).toBeNull();
+    expect(result.customerNameEnSnapshot).toBe('Original Customer');
+    expect(result.customerPhoneSnapshot).toBe('+962700000000');
+  });
+
+  it('rejects a registered buyer of another issuer and a nameless one-time buyer', async () => {
+    const h = manualHarness(true, { ...subscription().customer, id: 'customer-1', billingEntityId: 'another-issuer' });
+    await expect(h.service.createManualDraft({ ...oneTimeInput, customerId: 'customer-1' }, context)).rejects.toThrow('belonging to the invoice issuer');
+    await expect(h.service.createManualDraft({ ...oneTimeInput, customerNameEn: ' ' }, context)).rejects.toThrow('buyer name');
+    expect(h.create).not.toHaveBeenCalled();
+  });
+
+  it('does not officialize or collect a zero-priced draft on creation', async () => {
+    const h = manualHarness();
+    const result = await h.service.createManualDraft({
+      ...oneTimeInput,
+      lines: [{ ...oneTimeInput.lines[0]!, unitPrice: '0.000' }],
+    }, context);
+    expect(result.grandTotal).toBe('0.000');
+    expect(result.status).toBe(InvoiceStatus.DRAFT);
+    expect(result.verifiedOfficial).toBe(false);
+  });
+
+  it('refuses an inactive legal issuer before persisting an invoice', async () => {
+    const h = manualHarness(false);
+    await expect(h.service.createManualDraft(oneTimeInput, context))
+      .rejects.toThrow(BadRequestException);
+    expect(h.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects reversed periods without opening a database transaction', async () => {
+    const h = manualHarness();
+    await expect(h.service.createManualDraft({
+      ...oneTimeInput, periodEnd: '2026-11-22',
+    }, context)).rejects.toThrow(BadRequestException);
+    expect(h.tx.invoice.create).not.toHaveBeenCalled();
   });
 });
 
@@ -416,14 +556,27 @@ describe('InvoicesService manual JoFotara officialization', () => {
           invoiceNumber: 'EINV-1',
           acceptedAt: '2026-11-17T10:00:00.000Z',
           qrPayload: 'official-payload',
+          qrImageDataUrl:
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=',
+          officialCurrencyCode: 'JOD',
+          officialSubtotal: '100.000',
+          officialDiscountTotal: '0.000',
+          officialTaxTotal: '16.000',
+          officialGrandTotal: '116.000',
         },
         context,
       ),
     ).rejects.toThrow('Only a READY_FOR_FAWTARA invoice can be officialized');
   });
 
-  it('persists official number, UUID, QR and values, locks the invoice, and audits discrepancies', async () => {
-    const ready = invoice({ status: InvoiceStatus.READY_FOR_FAWTARA });
+  it.each(['COMPANY', 'INDIVIDUAL'] as const)('persists official number, QR and versioned %s layout, locks the invoice, and audits discrepancies', async (issuerType) => {
+    const ready = invoice({
+      status: InvoiceStatus.READY_FOR_FAWTARA,
+      issuerPresentationSnapshot: {
+        version: 1, profileRevision: 1, issuerType, logoAssetId: null,
+        countryCode: 'JO', details: {}, visibility: defaultInvoiceVisibility(),
+      },
+    });
     let updateData: Record<string, unknown> = {};
     const tx = {
       invoice: {
@@ -446,7 +599,12 @@ describe('InvoicesService manual JoFotara officialization', () => {
       invoice: { findUnique: jest.fn(() => Promise.resolve(ready)) },
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
-    const { service, audit } = serviceWith(prisma);
+    // This case exercises the successful officialization path. The generic
+    // harness's preflight spy intentionally has no default result; supply a
+    // successful issuer/document preflight explicitly for this fixture.
+    const { service, audit } = serviceWith(prisma, {
+      validate: jest.fn(() => ({ valid: true, checks: [] })),
+    });
 
     const result = await service.recordFawtaraResult(
       ready.id,
@@ -456,9 +614,12 @@ describe('InvoicesService manual JoFotara officialization', () => {
         invoiceUuid: 'official-uuid',
         qrPayload: 'official-qr-payload',
         qrImageDataUrl:
-          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jPZkAAAAASUVORK5CYII=',
+          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=',
         acceptedAt: '2026-11-17T10:00:00.000Z',
         officialCurrencyCode: 'JOD',
+        officialSubtotal: '100.000',
+        officialDiscountTotal: '0.000',
+        officialTaxTotal: '16.000',
         officialGrandTotal: '117.000',
       },
       context,
@@ -468,6 +629,10 @@ describe('InvoicesService manual JoFotara officialization', () => {
       expect.objectContaining<Record<string, unknown>>({
         status: InvoiceStatus.FAWTARA_ACCEPTED,
         activeDraftKey: null,
+        issuerPresentationSnapshot: expect.objectContaining({
+          issuerType,
+          templateVersion: issuerType === 'INDIVIDUAL' ? 'personal-v1' : 'nusrv-company-v1',
+        }),
         fawtaraInvoiceNumber: 'EINV-1',
         fawtaraInvoiceUuid: 'official-uuid',
         fawtaraQrPayload: 'official-qr-payload',
@@ -558,6 +723,10 @@ describe('Invoice hardening', () => {
     );
     expect((await h.service.findOne('invoice-1')).finalPrintEnabled).toBe(false);
   });
+  it('blocks a final invoice document if historical official evidence is incomplete', async () => {
+    const h = harness(invoice({ status: 'FAWTARA_ACCEPTED', fawtaraQrImageDataUrl: 'data:image/png;base64,aA==' }));
+    expect((await h.service.findOne('invoice-1')).finalPrintEnabled).toBe(false);
+  });
   it('requires a cancellation reason', async () => {
     await expect(harness().service.cancelDraft('invoice-1', '  ', context)).rejects.toThrow(
       'reason',
@@ -594,7 +763,12 @@ describe('Invoice hardening', () => {
         status: 'FAWTARA_ACCEPTED',
         reconciliationRequired: true,
         officialGrandTotal: amount('117.000'),
-        fawtaraQrImageDataUrl: 'data:image/png;base64,aA==',
+        officializationProvenance: 'MANUAL',
+        fawtaraStatus: 'SUBMITTED',
+        fawtaraInvoiceNumber: 'OFFICIAL-117',
+        fawtaraAcceptedAt: new Date('2026-11-17'),
+        officialCurrencyCode: 'JOD',
+        fawtaraQrImageDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=',
       }),
     );
     const result = await h.service.reconcile(

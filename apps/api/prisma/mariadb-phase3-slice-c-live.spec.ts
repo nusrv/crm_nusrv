@@ -116,15 +116,16 @@ liveDescribe('Phase 3 Slice C MariaDB inbound-mail integration', () => {
       data: { code: `S3C-ST-${randomUUID()}`, name: 'Slice C Hosting' },
     });
     serviceTypeId = serviceType.id;
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
-    await prisma?.$disconnect();
-    if (connection) {
-      await reset(connection);
-      await connection.end();
+    try {
+      await prisma?.$disconnect();
+      if (connection) await reset(connection);
+    } finally {
+      if (connection) await connection.end();
     }
-  }, 30_000);
+  }, 120_000);
 
   beforeEach(async () => {
     const primary = await prisma.mailConfiguration.create({

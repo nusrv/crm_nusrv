@@ -1,4 +1,8 @@
 'use client';
+
+// Next uses the automatic JSX runtime; standalone TSX receipt/branding checks
+// also support the classic JSX transform and therefore need React in scope.
+import React from 'react';
 import {
   readIssuerPresentation,
   defaultInvoiceVisibility,
@@ -32,13 +36,61 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
   if (official && !invoice.finalPrintEnabled)
     return (
       <p className="no-print">
-        Final customer document blocked: resolve reconciliation and supply an official graphical QR.
+        Final customer document blocked: verify the official invoice record, graphical QR, issuer details and reconciliation.
       </p>
     );
   const discrepancy = invoice.officialValueDiscrepancies.length > 0;
+  // OD-11: new official invoices use the immutable template version. Historical
+  // official records without a personal-v1 marker retain their original layout.
+  const personalLayout = presentation?.issuerType === 'INDIVIDUAL' &&
+    (!official || presentation.templateVersion === 'personal-v1');
   return (
-    <article className="invoice-document nusrv-paper">
+    <article className={`invoice-document nusrv-paper${personalLayout ? ' personal-invoice-document' : ''}`}>
       {!official && <div className="invoice-draft-banner">DRAFT / NOT OFFICIAL</div>}
+      {personalLayout ? (
+        <header className="personal-invoice-header">
+          <div className="personal-invoice-title">
+            <div>
+              <p className="personal-invoice-eyebrow">Individual / Personal</p>
+              <h1>Invoice <span dir="rtl">فاتورة</span></h1>
+              <p>{invoice.internalReference}</p>
+            </div>
+            <dl className="personal-invoice-meta">
+              <dt>Electronic Invoice Number</dt><dd>{official ? invoice.fawtaraInvoiceNumber : 'Not issued'}</dd>
+              <dt>Invoice Date</dt><dd>{date(invoice.invoiceDate)}</dd>
+              <dt>Invoice Type</dt><dd>{invoice.invoiceTypeName ? invoice.invoiceTypeName.startsWith('1') ? 'Export Invoice' : 'Local Invoice' : 'Service Invoice'}</dd>
+              <dt>Currency</dt><dd>{invoice.effectiveCurrencyCode}</dd>
+            </dl>
+          </div>
+          <div className="personal-invoice-parties">
+            <section>
+              <h2>Issued by <span dir="rtl">المُصدر</span></h2>
+              {visible.logo && invoice.issuerLogoDataUrl && (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img className="personal-invoice-logo" src={invoice.issuerLogoDataUrl} alt="Issuer logo" />
+              )}
+              <p className="personal-invoice-name">{visible.nameEn && invoice.issuerLegalNameSnapshot}</p>
+              <p dir="auto">{visible.nameAr && invoice.issuerLegalNameArSnapshot}</p>
+              <p>{visible.address && invoice.issuerAddressSnapshot}</p>
+              <p>{visible.country && (details.countryName || presentation?.countryCode)}</p>
+              {visible.taxNumber && <p>Sales Tax No.: {invoice.issuerTaxNumberSnapshot || '-'}</p>}
+            </section>
+            <section>
+              <h2>Bill to <span dir="rtl">العميل</span></h2>
+              <p className="personal-invoice-name">{invoice.customerNameEnSnapshot || invoice.customerNameArSnapshot}</p>
+              <p dir="auto">{invoice.customerNameEnSnapshot && invoice.customerNameArSnapshot}</p>
+              <p>{invoice.customerPhoneSnapshot}</p>
+              <p>{invoice.customerAddressSnapshot} {invoice.customerCountrySnapshot}</p>
+            </section>
+          </div>
+          {official && invoice.fawtaraQrImageDataUrl && (
+            <div className="personal-invoice-qr">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={invoice.fawtaraQrImageDataUrl} alt="Official JoFotara QR" />
+            </div>
+          )}
+        </header>
+      ) : (
       <header className="nusrv-header">
         <div>
           {visible.logo && logo && (
@@ -56,11 +108,6 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
             <p dir="rtl">{visible.nameAr && invoice.issuerLegalNameArSnapshot}</p>
             <p>{visible.address && invoice.issuerAddressSnapshot}</p>
             <p>{visible.country && (details.countryName || presentation?.countryCode)}</p>
-            <p>
-              {visible.taxNumber &&
-                invoice.issuerTaxNumberSnapshot &&
-                `Tax / National No. ${invoice.issuerTaxNumberSnapshot}`}
-            </p>
           </div>
           <div className="nusrv-rule" />
           <h1>Invoice {invoice.internalReference}</h1>
@@ -99,9 +146,12 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
           <p>
             {invoice.customerAddressSnapshot} {invoice.customerCountrySnapshot}
           </p>
-          <p className="nusrv-tax">Sales Tax No.: {invoice.customerTaxNumberSnapshot || '-'}</p>
+          {visible.taxNumber && (
+            <p className="nusrv-tax">Sales Tax No.: {invoice.issuerTaxNumberSnapshot || '-'}</p>
+          )}
         </div>
       </header>
+      )}
       {discrepancy && (
         <div className="nusrv-reconciliation">
           <strong>Reconciled official values</strong>
@@ -138,7 +188,8 @@ export function InvoiceRenderer({ invoice }: { invoice: InvoiceView }) {
               <td>{l.unitPrice}</td>
               <td>{l.discountAmount}</td>
               <td>
-                {l.taxRate}%<small>{l.taxAmount}</small>
+                {l.taxRate === null ? 'Tax review required' : `${l.taxRate}%`}
+                <small>{l.taxAmount}</small>
               </td>
               <td>{money(l.lineTotal, invoice.currencyCode)}</td>
             </tr>

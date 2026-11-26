@@ -6,8 +6,10 @@ import { apiRequest, type PageResult } from '../lib/api';
 import { customerDisplayName, customerSecondaryName } from '../lib/customer-name';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
+import { SubscriptionModal } from './subscription-modal';
 
 interface BillingEntity {
   id: string;
@@ -67,7 +69,7 @@ function composePhone(rawPhone: string, callingCode: string): string | undefined
 
 export function CustomersManager() {
   const { can } = useControlPanel();
-  const canManage = can('ADMIN', 'SALES_DEVELOPMENT');
+  const canManage = can('ADMIN');
   const [customers, setCustomers] = useState<PageResult<Customer> | null>(null);
   const [entities, setEntities] = useState<BillingEntity[]>([]);
   const [search, setSearch] = useState('');
@@ -78,6 +80,7 @@ export function CustomersManager() {
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const saveState = useModalSave();
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -113,7 +116,7 @@ export function CustomersManager() {
     const target = customers?.data.find((item) => item.id === pendingEditId);
     if (target) {
       setEditing(target);
-      setFormOpen(true);
+      setError(''); setSuccess(''); setFormOpen(true);
       setPendingEditId('');
       return;
     }
@@ -122,7 +125,7 @@ export function CustomersManager() {
     void apiRequest<Customer>(`/customers/${pendingEditId}`)
       .then((customer) => {
         setEditing(customer);
-        setFormOpen(true);
+        setError(''); setSuccess(''); setFormOpen(true);
       })
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'))
       .finally(() => setPendingEditId(''));
@@ -130,12 +133,12 @@ export function CustomersManager() {
 
   function openCreate() {
     setEditing(null);
-    setFormOpen(true);
+    setError(''); setSuccess(''); setFormOpen(true);
   }
 
   function openEdit(customer: Customer) {
     setEditing(customer);
-    setFormOpen(true);
+    setError(''); setSuccess(''); setFormOpen(true);
   }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
@@ -170,17 +173,20 @@ export function CustomersManager() {
       ...(editing ? {} : { status: value('status') }),
       notes: value('notes') || undefined,
     };
+    if (!saveState.begin()) return;
     try {
-      await apiRequest(`/customers${editing ? `/${editing.id}` : ''}`, {
+      const saved = await apiRequest<Customer>(`/customers${editing ? `/${editing.id}` : ''}`, {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
       setSuccess(editing ? 'Customer updated and audited.' : 'Customer created and audited.');
-      setFormOpen(false);
-      setEditing(null);
-      await load();
+      setEditing(saved);
+      saveState.markSaved();
+      await load().catch(() => setError('Saved successfully, but the list could not be refreshed.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -323,7 +329,8 @@ export function CustomersManager() {
       )}
       {formOpen && (
         <Modal
-          onClose={() => setFormOpen(false)}
+          closeDisabled={saveState.busy}
+          onClose={() => { if (!saveState.busy) setFormOpen(false); }}
           title={editing ? `Edit ${customerDisplayName(editing)}` : 'Create customer'}
         >
           <Notice message={error} />
@@ -336,7 +343,7 @@ export function CustomersManager() {
           )}
           <form
             className="form-grid"
-            key={editing?.id ?? 'new'}
+            key={`${editing?.id ?? 'new'}:${saveState.revision}`}
             onSubmit={(event) => void save(event)}
           >
             <Field label="Customer Name (English)" name="nameEn" value={String(defaults.nameEn)} />
@@ -422,14 +429,16 @@ export function CustomersManager() {
               <textarea defaultValue={String(defaults.notes)} name="notes" rows={3} />
             </label>
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
+              <button className="button-primary" disabled={saveState.busy} type="submit">
                 {editing ? 'Save changes' : 'Create customer'}
               </button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+              <button className="button-secondary" disabled={saveState.busy} onClick={() => setFormOpen(false)} type="button">
                 Cancel
               </button>
             </div>
           </form>
+          {editing && can('ADMIN') && <CustomerSubscriptionPanel key={editing.id} customer={editing}
+            onChanged={() => void load().catch(() => setError('Saved; refresh the customer list.'))} />}
         </Modal>
       )}
       <section className="panel">
@@ -690,4 +699,38 @@ function Pagination({
       </button>
     </div>
   );
+}
+
+
+// A child dialog stays inside the parent customer dialog. Closing it restores
+// the same mounted customer form, search, filters and list position.
+function CustomerSubscriptionPanel({ customer, onChanged }: { customer: Customer; onChanged: () => void }) {
+  const [rows, setRows] = useState<Array<{ id: string; name: string; subscriptionCode: string; status: string }> | null>(null);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+  const [id, setId] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const result = await apiRequest<PageResult<{ id: string; name: string; subscriptionCode: string; status: string }>>(
+      '/subscriptions?' + new URLSearchParams({ customerId: customer.id, pageSize: '50' }).toString());
+    setRows(result.data);
+  }, [customer.id]);
+  useEffect(() => { void load().catch(() => setError('Unable to load subscriptions.')); }, [load]);
+  function changed(savedId?: string) {
+    if (savedId) setId(savedId);
+    void load().catch(() => setError('Saved, but the subscription list could not be refreshed.'));
+    onChanged();
+  }
+  return <section className="mt-6 border-t border-[var(--line)] pt-5">
+    <h4 className="font-semibold">Subscriptions</h4>
+    <Notice message={error} />
+    <div className="mt-3 flex flex-wrap gap-2">
+      <button className="button-small" type="button" onClick={() => { setId(null); setOpen(true); }}>Add subscription</button>
+      {rows?.map(row => <button className="button-secondary" type="button" key={row.id}
+        onClick={() => { setId(row.id); setOpen(true); }}>{row.name} · {row.subscriptionCode}</button>)}
+    </div>
+    {rows?.length === 50 && <p className="muted text-sm mt-2">Showing the first 50 subscriptions. Open the customer details for the full list.</p>}
+    {open && <SubscriptionModal subscriptionId={id} lockedCustomer={customer}
+      onClose={() => { setOpen(false); setId(null); }}
+      onSaved={changed} onDeleted={() => { setOpen(false); setId(null); changed(); }} />}
+  </section>;
 }

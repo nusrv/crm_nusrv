@@ -1,3 +1,5 @@
+import { CustomerPaymentBalancesController, PaymentsController } from './payments.controller';
+import { PaymentsService } from './payments.service';
 import { JoFotaraConnectionsController } from './jofotara-connections.controller';
 import { JoFotaraConnectionsService } from './jofotara-connections.service';
 import { FawtaraMapper } from './fawtara-mapper';
@@ -7,11 +9,13 @@ import { Module } from '@nestjs/common';
 import { InvoicePreflightService } from './invoice-preflight.service';
 import { InvoicesController } from './invoices.controller';
 import { InvoicesService } from './invoices.service';
+import { InvoiceQrCorrectionsController } from './invoice-qr-corrections.controller';
 
 @Module({
-  controllers: [InvoicesController, JoFotaraConnectionsController],
+  controllers: [CustomerPaymentBalancesController, InvoiceQrCorrectionsController, PaymentsController, InvoicesController, JoFotaraConnectionsController],
   providers: [
     InvoicesService,
+    PaymentsService,
     InvoicePreflightService,
     JoFotaraConnectionsService,
     FawtaraMapper,

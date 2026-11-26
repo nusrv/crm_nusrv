@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -20,6 +21,7 @@ export function CurrenciesManager() {
   const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
   const [editing, setEditing] = useState<CurrencyOption | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const saveState = useModalSave();
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const load = useCallback(async () => setCurrencies(await apiRequest('/currencies')), []);
@@ -32,12 +34,12 @@ export function CurrenciesManager() {
 
   function openCreate() {
     setEditing(null);
-    setFormOpen(true);
+    setError(''); setMessage(''); setFormOpen(true);
   }
 
   function openEdit(currency: CurrencyOption) {
     setEditing(currency);
-    setFormOpen(true);
+    setError(''); setMessage(''); setFormOpen(true);
   }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
@@ -45,8 +47,9 @@ export function CurrenciesManager() {
     const form = new FormData(event.currentTarget);
     const value = (name: string) => String(form.get(name) ?? '').trim();
     const code = editing?.code ?? value('code').toUpperCase();
+    if (!saveState.begin()) return;
     try {
-      await apiRequest(`/currencies${editing ? `/${code}` : ''}`, {
+      const saved = await apiRequest<CurrencyOption>(`/currencies${editing ? `/${code}` : ''}`, {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify({
           ...(editing ? {} : { code }),
@@ -57,13 +60,15 @@ export function CurrenciesManager() {
           changeReason: value('changeReason') || undefined,
         }),
       });
-      setFormOpen(false);
-      setEditing(null);
+      setEditing(saved);
+      saveState.markSaved();
       setMessage('Exchange rate saved and audited.');
       setError('');
-      await load();
+      await load().catch(() => setError('Saved successfully, but the list could not be refreshed.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to save exchange rate.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -88,12 +93,13 @@ export function CurrenciesManager() {
       )}
       {formOpen && (
         <Modal
-          onClose={() => setFormOpen(false)}
+          closeDisabled={saveState.busy}
+          onClose={() => { if (!saveState.busy) setFormOpen(false); }}
           title={editing ? `Edit ${editing.code}` : 'Add supported currency'}
         >
           <Notice message={error} />
           <Notice message={message} tone="success" />
-          <form className="form-grid" key={editing?.code ?? 'new'} onSubmit={save}>
+          <form className="form-grid" key={`${editing?.code ?? 'new'}:${saveState.revision}`} onSubmit={save}>
             <Field
               label="ISO currency code"
               name="code"
@@ -126,10 +132,10 @@ export function CurrenciesManager() {
             </label>
             <Field label="Change reason" name="changeReason" value="" />
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
+              <button className="button-primary" disabled={saveState.busy} type="submit">
                 Save currency
               </button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+              <button className="button-secondary" disabled={saveState.busy} onClick={() => setFormOpen(false)} type="button">
                 Cancel
               </button>
             </div>

@@ -41,7 +41,7 @@ const environmentSchema = z
     JWT_ACCESS_SECRET: z.string().min(32),
     JWT_REFRESH_SECRET: z.string().min(32),
     JWT_ACCESS_TTL: duration.default('15m'),
-    JWT_REFRESH_TTL: duration.default('7d'),
+    JWT_REFRESH_TTL: duration.default('24h'),
     ENCRYPTION_KEY_BASE64: base64Key,
     CAPTCHA_PROVIDER: z.enum(['none', 'mock', 'turnstile', 'recaptcha']).default('mock'),
     CAPTCHA_TEST_TOKEN: z.string().min(8).optional(),
@@ -95,6 +95,12 @@ const environmentSchema = z
     MAIL_SEND_CUTOVER_AT: z.string().optional(),
     // See SMTP_MODE's doc comment — the identical infrastructure-capability concept for IMAP.
     IMAP_MODE: z.enum(['mock', 'real']).default('mock'),
+    // Operator queue only; never authorizes provider polling or sending.
+    P2_ACTION_QUEUE_ENABLED: z.enum(['true', 'false']).default('false'),
+    // Temporary deployment maintenance freeze: does not change any mailbox or outbox row.
+    MAIL_WORKERS_PAUSED: z.enum(['true', 'false']).default('false'),
+    P2_SENT_OBSERVATION_ENABLED: z.enum(['true', 'false']).default('false'),
+    P2_DSN_REVIEW_CAPTURE_ENABLED: z.enum(['true', 'false']).default('false'),
     // Phase 3.1 §D/§Q correction — DEPRECATED / PARSED-ONLY, same reasoning as MAIL_SEND_ENABLED.
     // MailConfiguration.inboundSyncEnabled is the sole per-mailbox runtime authority.
     IMAP_SYNC_ENABLED: z.enum(['true', 'false']).default('false'),

@@ -17,6 +17,11 @@ describe('renewal-transition-policy', () => {
     [RenewalCaseStatus.REMINDER_CYCLE, RenewalCaseStatus.DO_NOT_RENEW],
     [RenewalCaseStatus.AWAITING_CUSTOMER, RenewalCaseStatus.DO_NOT_RENEW],
     [RenewalCaseStatus.HUMAN_REVIEW, RenewalCaseStatus.DO_NOT_RENEW],
+    // The legal transition is only the state-machine gate. The service separately
+    // requires the same-cycle verified official invoice, regardless of payment.
+    [RenewalCaseStatus.ACCEPTED, RenewalCaseStatus.FULFILLED],
+    [RenewalCaseStatus.INVOICE_DRAFT, RenewalCaseStatus.FULFILLED],
+    [RenewalCaseStatus.COLLECTING, RenewalCaseStatus.FULFILLED],
     [RenewalCaseStatus.PAYMENT_CONFIRMED, RenewalCaseStatus.FULFILLED],
   ])('allows %s -> %s', (from, to) => {
     expect(isLegalRenewalCaseTransition(from, to)).toBe(true);
@@ -27,10 +32,8 @@ describe('renewal-transition-policy', () => {
     // The specific regressions/premature jumps called out explicitly.
     [RenewalCaseStatus.ACCEPTED, RenewalCaseStatus.AWAITING_CUSTOMER],
     [RenewalCaseStatus.UPCOMING, RenewalCaseStatus.FULFILLED],
-    // FULFILLED is not a generic "close this case" button — only PAYMENT_CONFIRMED reaches it,
-    // per 03_WORKFLOWS_AND_STATE_MACHINE.md §4. ACCEPTED is explicitly NOT a shortcut, even though
-    // it is the state immediately before the (unbuilt) invoice/payment chain.
-    [RenewalCaseStatus.ACCEPTED, RenewalCaseStatus.FULFILLED],
+    // FULFILLED still cannot be reached from a pending or undecided case.
+    // Eligibility for ACCEPTED additionally requires a verified official invoice.
     [RenewalCaseStatus.REMINDER_CYCLE, RenewalCaseStatus.FULFILLED],
     [RenewalCaseStatus.AWAITING_CUSTOMER, RenewalCaseStatus.FULFILLED],
     [RenewalCaseStatus.HUMAN_REVIEW, RenewalCaseStatus.FULFILLED],
@@ -42,10 +45,7 @@ describe('renewal-transition-policy', () => {
     [RenewalCaseStatus.REJECTED, RenewalCaseStatus.ACCEPTED],
     [RenewalCaseStatus.CLOSED, RenewalCaseStatus.AWAITING_CUSTOMER],
     [RenewalCaseStatus.DO_NOT_RENEW, RenewalCaseStatus.ACCEPTED],
-    // Phase 3-6 states are structurally scaffolded but never legal predecessors of a current-phase
-    // target — nothing in this application can currently produce them anyway.
-    [RenewalCaseStatus.INVOICE_DRAFT, RenewalCaseStatus.FULFILLED],
-    [RenewalCaseStatus.COLLECTING, RenewalCaseStatus.FULFILLED],
+
   ])('rejects %s -> %s', (from, to) => {
     expect(isLegalRenewalCaseTransition(from, to)).toBe(false);
     expect(() => assertLegalRenewalCaseTransition(from, to)).toThrow();

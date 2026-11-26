@@ -108,15 +108,16 @@ liveDescribe('Phase 3 Slice E MariaDB Communication Center integration', () => {
       data: { email: `reviewer-${randomUUID()}@example.test`, displayName: 'Slice E Reviewer', passwordHash: 'not-a-real-hash' },
     });
     reviewerId = reviewer.id;
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
-    await prisma?.$disconnect();
-    if (connection) {
-      await reset(connection);
-      await connection.end();
+    try {
+      await prisma?.$disconnect();
+      if (connection) await reset(connection);
+    } finally {
+      if (connection) await connection.end();
     }
-  }, 30_000);
+  }, 120_000);
 
   let mailConfigurationId: string;
   beforeEach(async () => {

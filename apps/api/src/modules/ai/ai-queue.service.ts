@@ -1,6 +1,7 @@
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { AI_RECOVERY_SCAN_INTERVAL_MS } from './ai-timing.constants';
 import { AI_ROUTING_RECOVERY_SCAN_INTERVAL_MS } from './ai-routing.constants';
 import {
@@ -34,6 +35,7 @@ export class AiQueueService implements OnModuleInit {
   constructor(@InjectQueue(AI_QUEUE) private readonly queue: Queue) {}
 
   async onModuleInit(): Promise<void> {
+    if (aiOperationalPolicy.isDeferred()) return;
     await this.queue.upsertJobScheduler(
       AI_RECOVERY_SCHEDULER,
       { every: AI_RECOVERY_SCAN_INTERVAL_MS },

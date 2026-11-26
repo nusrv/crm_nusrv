@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus } from '../lib/workspace-status';
+
 import Link from 'next/link';
 import {
   readIssuerPresentation,
@@ -13,6 +15,9 @@ import { InvoiceRenderer } from './invoice-renderer';
 import type { InvoiceLineView, InvoicePreflightResult, InvoiceView } from './invoice-types';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
+import { useControlPanel } from './app-shell';
+import { InvoicePaymentsPanel } from './invoice-payments-panel';
+import { InvoiceQrRecovery } from './p1-recovery-panels';
 
 type EditableLine = Pick<
   InvoiceLineView,
@@ -27,8 +32,14 @@ type EditableLine = Pick<
 >;
 
 const dateInput = (value: string | null) => (value ? value.slice(0, 10) : '');
+const localDateTimeInput = () => {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+};
 
 export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
+  const { can } = useControlPanel();
+  const admin = can('ADMIN');
   const [invoice, setInvoice] = useState<InvoiceView | null>(null);
   const [lines, setLines] = useState<EditableLine[]>([]);
   const [preflight, setPreflight] = useState<InvoicePreflightResult | null>(null);
@@ -36,10 +47,6 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
   const [message, setMessage] = useState('');
   const [visibility, setVisibility] = useState<InvoiceVisibility>(defaultInvoiceVisibility());
   const [qrImageDataUrl, setQrImageDataUrl] = useState('');
-  const [connections, setConnections] = useState<
-    Array<{ id: string; displayName: string; isDefault: boolean }>
-  >([]);
-  const [connectionId, setConnectionId] = useState('');
   const [history, setHistory] = useState<
     Array<{
       id: string;
@@ -61,11 +68,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
       readIssuerPresentation(value.issuerPresentationSnapshot)?.visibility ??
         defaultInvoiceVisibility(),
     );
-    setConnections(
-      await apiRequest(`/billing-entities/${value.billingEntityId}/jofotara-connections`),
-    );
     setHistory(await apiRequest(`/invoices/${invoiceId}/submissions`));
-    setConnectionId(value.selectedConnectionId || '');
     setLines(
       value.lines.map((line) => ({
         description: line.description,
@@ -128,7 +131,6 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
             invoiceTypeName: String(form.get('invoiceTypeName')) || undefined,
             issuerCountryCode: String(form.get('issuerCountryCode')) || undefined,
             buyerCountryCode: String(form.get('buyerCountryCode')) || undefined,
-            selectedConnectionId: connectionId || null,
             issuerBankDetails: form.has('issuerBankDetails')
               ? String(form.get('issuerBankDetails'))
               : undefined,
@@ -185,7 +187,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
     }
     await run(
       () => apiRequest(`/invoices/${invoiceId}/mark-ready`, { method: 'POST' }),
-      'Invoice marked READY_FOR_FAWTARA.',
+      'Invoice ready to record official details.',
     );
   }
 
@@ -193,9 +195,18 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const optional = (name: string) => String(form.get(name) ?? '').trim() || undefined;
+    if (!qrImageDataUrl) {
+      setError('Load the official QR image first.');
+      return;
+    }
+    const acceptedAt = new Date(String(form.get('acceptedAt')));
+    if (!Number.isFinite(acceptedAt.getTime())) {
+      setError('Enter a valid acceptance date.');
+      return;
+    }
     await run(
       () =>
-        apiRequest(`/invoices/${invoiceId}/record-fawtara-result`, {
+        apiRequest(`/invoices/${invoiceId}/officialize`, {
           method: 'POST',
           body: JSON.stringify({
             fawtaraStatus: String(form.get('fawtaraStatus')),
@@ -203,7 +214,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
             invoiceUuid: optional('invoiceUuid'),
             qrPayload: optional('qrPayload'),
             qrImageDataUrl: qrImageDataUrl || undefined,
-            acceptedAt: String(form.get('acceptedAt')),
+            acceptedAt: acceptedAt.toISOString(),
             officialCurrencyCode: optional('officialCurrencyCode'),
             officialSubtotal: optional('officialSubtotal'),
             officialDiscountTotal: optional('officialDiscountTotal'),
@@ -239,9 +250,9 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
   return (
     <div className="invoice-workspace">
       <PageHeading
-        eyebrow="Human-controlled JoFotara invoicing"
+        eyebrow="Manual invoice recording"
         title={invoice.internalReference}
-        description={`${invoice.status} · ${invoice.customerCodeSnapshot} · ${invoice.sourceSubscription.name}`}
+        description={`${workspaceStatus(invoice.status)} · ${invoice.customerCodeSnapshot} · ${invoice.sourceSubscription?.name ?? 'Independent invoice'}`}
         actions={
           <div className="no-print flex gap-2">
             <Link className="button-secondary" href="/dashboard/invoices">
@@ -270,7 +281,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
         {invoice.officializationProvenance && (
           <p>Officialization: {invoice.officializationProvenance}</p>
         )}
-        {invoice.status === 'DRAFT' && (
+        {admin && invoice.status === 'DRAFT' && (
           <button
             className="button-secondary"
             onClick={() => {
@@ -292,7 +303,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
             Cancel draft
           </button>
         )}
-        {invoice.reconciliationRequired && (
+        {admin && invoice.reconciliationRequired && (
           <button
             className="button-secondary"
             onClick={() => {
@@ -322,7 +333,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
           </p>
         ))}
       </div>
-      {invoice.status === 'DRAFT' && (
+      {admin && invoice.status === 'DRAFT' && (
         <section className="panel no-print mb-6">
           <h3 className="text-xl font-semibold">Review and edit draft snapshot</h3>
           <p className="muted mt-1 text-sm">
@@ -527,60 +538,16 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
                 Validate / Preflight
               </button>
               <button className="button-secondary" onClick={() => void markReady()} type="button">
-                Mark Ready for JoFotara
+                Ready to Record Official Invoice
               </button>
             </div>
           </form>
         </section>
       )}
 
-      <section className="panel no-print mb-6">
-        <h2>JoFotara submission</h2>
-        <label>
-          Connection (same Billing Entity)
-          <select value={connectionId} onChange={(e) => setConnectionId(e.target.value)}>
-            <option value="">Billing Entity default</option>
-            {connections.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.displayName}
-                {c.isDefault ? ' (default)' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
-        {invoice.status === 'READY_FOR_FAWTARA' && (
-          <button
-            className="button-primary"
-            onClick={() => {
-              const latest = history.at(-1);
-              const recover =
-                latest?.outcome === 'UNKNOWN' ||
-                (latest?.outcome === 'PENDING' &&
-                  new Date(latest.createdAt).getTime() < Date.now() - 300000);
-              if (
-                window.confirm(
-                  recover
-                    ? 'Recover uncertain submission with the original XML, ID, UUID and connection? This contacts REAL JoFotara.'
-                    : 'This creates a REAL JoFotara invoice. Confirm a legitimate commercial invoice reviewed by an authorized human.',
-                )
-              )
-                void run(
-                  () =>
-                    apiRequest(`/invoices/${invoiceId}/submit-official`, {
-                      method: 'POST',
-                      body: JSON.stringify({
-                        confirmation: 'CREATE_REAL_JOFOTARA_INVOICE',
-                        connectionId: connectionId || undefined,
-                        recoverUncertain: recover,
-                      }),
-                    }),
-                  'JoFotara response received. Review status and history.',
-                );
-            }}
-          >
-            Submit Real JoFotara Invoice
-          </button>
-        )}
+      <details className="panel no-print mb-6">
+        <summary>Advanced — historical JoFotara submissions (API deferred)</summary>
+        <p>Real API submission is disabled. Record official invoices issued outside CRM.</p>
         {history.map((h) => (
           <div key={h.id}>
             <strong>
@@ -592,10 +559,10 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
             <small className="break-all">XML SHA-256: {h.requestXmlHash}</small>
           </div>
         ))}
-      </section>
-      {invoice.status === 'READY_FOR_FAWTARA' && !invoice.submissionPending && (
+      </details>
+      {admin && invoice.status === 'READY_FOR_FAWTARA' && !invoice.submissionPending && (
         <section className="panel no-print mb-6">
-          <h3 className="text-xl font-semibold">Record manual JoFotara result</h3>
+          <h3 className="text-xl font-semibold">تثبيت الفاتورة الرسمية / Officialize Invoice</h3>
           <p className="muted mt-1 text-sm">
             Issue/finalize this invoice outside the CRM, then record the official result here. This
             action makes accepted values authoritative and locks the invoice.
@@ -615,24 +582,27 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
               name="acceptedAt"
               required
               type="datetime-local"
-              value={new Date().toISOString().slice(0, 16)}
+              value={localDateTimeInput()}
             />
             <Field
-              label="Official currency (optional)"
+              label="Official currency"
               name="officialCurrencyCode"
               value={invoice.currencyCode}
+              required
             />
-            <Field label="Official subtotal (optional)" name="officialSubtotal" type="number" />
+            <Field label="Official subtotal" name="officialSubtotal" type="number" required />
             <Field
-              label="Official discount total (optional)"
+              label="Official discount total"
               name="officialDiscountTotal"
               type="number"
+              required
             />
-            <Field label="Official tax total (optional)" name="officialTaxTotal" type="number" />
+            <Field label="Official tax total" name="officialTaxTotal" type="number" required />
             <Field
-              label="Official grand total (optional)"
+              label="Official grand total"
               name="officialGrandTotal"
               type="number"
+              required
             />
             <label className="field field-wide">
               <span>Official EINV_QR payload / Base64</span>
@@ -654,7 +624,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
             </label>
             <div className="field-wide flex gap-3">
               <button className="button-primary" type="submit">
-                Confirm official JoFotara invoice
+                تثبيت الفاتورة الرسمية / Officialize Invoice
               </button>
               <button
                 className="button-secondary"
@@ -700,7 +670,7 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
         </section>
       )}
 
-      {invoice.status === 'FAWTARA_REJECTED' && (
+      {admin && invoice.status === 'FAWTARA_REJECTED' && (
         <section className="panel no-print mb-6">
           <h3 className="text-xl font-semibold">JoFotara rejection recorded</h3>
           <p className="mt-2">{invoice.latestFawtaraMessage}</p>
@@ -719,6 +689,8 @@ export function InvoiceDetail({ invoiceId }: { invoiceId: string }) {
         </section>
       )}
 
+      {admin && invoice.status === 'FAWTARA_ACCEPTED' && typeof invoice.revision === 'number' && <div className="panel no-print mb-6"><InvoiceQrRecovery invoiceId={invoiceId} revision={invoice.revision} onChanged={load} /></div>}
+      {admin && <InvoicePaymentsPanel invoiceId={invoiceId} eligible={invoice.verifiedOfficial === true} />}
       {preflight && <PreflightPanel result={preflight} />}
 
       <div className="invoice-print-view">

@@ -89,6 +89,7 @@ export const defaultInvoiceVisibility = (): InvoiceVisibility =>
 export interface IssuerPresentation {
   version: 1;
   legacyNusrvLogo?: boolean;
+  templateVersion?: 'nusrv-company-v1' | 'personal-v1';
   profileRevision: number;
   issuerType: 'COMPANY' | 'INDIVIDUAL';
   logoAssetId: string | null;
@@ -112,6 +113,9 @@ export function readIssuerPresentation(value: unknown): IssuerPresentation | nul
   return {
     version: 1,
     legacyNusrvLogo: v.legacyNusrvLogo === true,
+    ...(v.templateVersion === 'nusrv-company-v1' || v.templateVersion === 'personal-v1'
+      ? { templateVersion: v.templateVersion }
+      : {}),
     profileRevision: typeof v.profileRevision === 'number' ? v.profileRevision : 0,
     issuerType: v.issuerType === 'INDIVIDUAL' ? 'INDIVIDUAL' : 'COMPANY',
     logoAssetId: typeof v.logoAssetId === 'string' ? v.logoAssetId : null,

@@ -1,10 +1,15 @@
 'use client';
 
+import { cutoverInputUtc, cutoverUpdate } from '../lib/mail-cutover';
+import { SentObservationControls } from './sent-observation-controls';
+
 import { Fragment, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { visibleSettingsGroups, canViewIntegrationSettings } from '../lib/workspace-navigation';
 import { apiRequest } from '../lib/api';
-import { AiModelCombobox, type AiModelOption } from './ai-model-combobox';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -58,7 +63,7 @@ interface MailChannelStatus {
   configured: boolean;
   operationallyEnabled: boolean;
   deploymentAdapter: 'REAL' | 'MOCK';
-  effective: 'READY' | 'NOT_CONFIGURED' | 'DISABLED' | 'BLOCKED_BY_DEPLOYMENT';
+  effective: 'READY' | 'NOT_CONFIGURED' | 'DISABLED' | 'BLOCKED_BY_DEPLOYMENT' | 'PAUSED_FOR_MAINTENANCE';
 }
 
 interface HealthOverview {
@@ -89,6 +94,7 @@ function aiProviderLabel(id: string): string {
 
 const EFFECTIVE_STATUS_LABEL: Record<MailChannelStatus['effective'], string> = {
   READY: 'Ready',
+  PAUSED_FOR_MAINTENANCE: 'Paused for deployment maintenance',
   NOT_CONFIGURED: 'Not configured',
   DISABLED: 'Disabled in Settings',
   BLOCKED_BY_DEPLOYMENT: 'BLOCKED — deployment has no real adapter',
@@ -107,29 +113,31 @@ function EffectiveStatusCell({ status }: { status: MailChannelStatus }) {
   );
 }
 
-type TabKey = 'mail' | 'ai' | 'health';
+type TabKey = 'overview' | 'mail' | 'ai' | 'health';
 
 export function SettingsManager() {
-  const { can } = useControlPanel();
+  const { can, user } = useControlPanel();
   const canManage = can('ADMIN');
-  const [tab, setTab] = useState<TabKey>('mail');
+  const canViewIntegrations = canViewIntegrationSettings(user.roles);
+  const [tab, setTab] = useState<TabKey>('overview');
+  const activeTab = canViewIntegrations ? tab : 'overview';
+  const groups = visibleSettingsGroups(user.roles);
 
   return (
     <>
       <PageHeading
         title="Settings"
-        description="Administer Mail/Outlook and AI operational configuration directly from the CRM — no SSH, Plesk, or restart required for routine changes."
+        description="Business configuration, renewal rules, communication settings and advanced administration. Daily operations remain in the main navigation."
       />
-      <div className="mb-6 flex gap-2 border-b border-[var(--line)]">
-        {(
-          [
-            ['mail', 'Email & Mailboxes'],
-            ['ai', 'AI'],
-            ['health', 'Integration Health'],
-          ] as const
-        ).map(([key, label]) => (
+      {canViewIntegrations && <div className="mb-6 flex flex-wrap gap-2 border-b border-[var(--line)]">
+        {([
+          ['overview', 'Overview'],
+          ['mail', 'Email & Mailboxes'],
+          ['health', 'Integration Health'],
+          ['ai', 'Advanced — AI (inactive)'],
+        ] as const).map(([key, label]) => (
           <button
-            className={`px-4 py-2 text-sm font-medium ${tab === key ? 'border-b-2 border-[var(--accent)] text-[var(--accent)]' : 'text-[var(--muted)]'}`}
+            className={`px-4 py-2 text-sm font-medium ${activeTab === key ? 'border-b-2 border-[var(--accent)] text-[var(--accent)]' : 'text-[var(--muted)]'}`}
             key={key}
             onClick={() => setTab(key)}
             type="button"
@@ -137,10 +145,30 @@ export function SettingsManager() {
             {label}
           </button>
         ))}
-      </div>
-      {tab === 'mail' && <MailSettingsSection canManage={canManage} />}
-      {tab === 'ai' && <AiSettingsSection canManage={canManage} />}
-      {tab === 'health' && <IntegrationHealthSection />}
+      </div>}
+      {activeTab === 'overview' && <div className="space-y-5">
+        {groups.map(group => <section key={group.title} className="panel">
+          <h2 className="text-lg font-semibold">{group.title}</h2>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {group.links.map(link => <Link href={link.href} key={link.href} className="rounded-lg border border-[var(--line)] p-3 hover:bg-[var(--surface)]">
+              <strong>{link.label}</strong><p className="muted mt-1 text-sm">{link.description}</p>
+            </Link>)}
+          </div>
+        </section>)}
+        {canViewIntegrations && <section className="panel">
+          <h2 className="text-lg font-semibold">Communications / Integrations</h2>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <button className="button-secondary" type="button" onClick={() => setTab('mail')}>Mail settings</button>
+            <button className="button-secondary" type="button" onClick={() => setTab('health')}>Integration health</button>
+            <button className="button-secondary" type="button" onClick={() => setTab('ai')}>Advanced: AI — inactive</button>
+          </div>
+          <p className="muted mt-3 text-sm">AI processing and external JoFotara issuance remain deferred. Manage issuer legal details and manual invoice presentation under Billing Entities.</p>
+        </section>}
+        {!groups.length && !canViewIntegrations && <Notice message="No settings are available for your current role." />}
+      </div>}
+      {activeTab === 'mail' && canViewIntegrations && <MailSettingsSection canManage={canManage} />}
+      {activeTab === 'ai' && canViewIntegrations && <AiSettingsSection canManage={canManage} />}
+      {activeTab === 'health' && canViewIntegrations && <IntegrationHealthSection />}
     </>
   );
 }
@@ -152,6 +180,7 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
   const [items, setItems] = useState<MailSettingsRow[]>([]);
   const [editing, setEditing] = useState<MailSettingsRow | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const saveState = useModalSave();
   const [scopeType, setScopeType] = useState<'GLOBAL' | 'BILLING_ENTITY'>('GLOBAL');
   const [authMode, setAuthMode] = useState<'BASIC' | 'MICROSOFT_OAUTH2'>('BASIC');
   const [error, setError] = useState('');
@@ -169,19 +198,20 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
     setEditing(null);
     setScopeType('GLOBAL');
     setAuthMode('BASIC');
-    setFormOpen(true);
+    setMessage(''); setError(''); setFormOpen(true);
   }
   function openEdit(item: MailSettingsRow) {
     setEditing(item);
     setScopeType(item.scope === 'GLOBAL' ? 'GLOBAL' : 'BILLING_ENTITY');
     setAuthMode(item.authMode ?? 'BASIC');
-    setFormOpen(true);
+    setMessage(''); setError(''); setFormOpen(true);
   }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const value = (name: string) => String(form.get(name) ?? '').trim();
+    if (!saveState.begin()) return;
     try {
       const scope = scopeType === 'GLOBAL' ? 'GLOBAL' : `BILLING_ENTITY:${value('billingEntityId')}`;
       const body: Record<string, unknown> = {
@@ -201,7 +231,7 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
         smtpPort: Number(value('smtpPort')),
         smtpSecure: form.get('smtpSecure') === 'on',
         outboundSendEnabled: form.get('outboundSendEnabled') === 'on',
-        outboundSendCutoverAt: value('outboundSendCutoverAt') ? new Date(value('outboundSendCutoverAt')).toISOString() : undefined,
+        outboundSendCutoverAt: cutoverUpdate(value('outboundSendCutoverAt'), editing?.outboundSendCutoverAt, Boolean(editing)),
       };
       if (authMode === 'BASIC') {
         if (value('password')) body.password = value('password');
@@ -212,17 +242,20 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
       }
       if (editing && form.get('clearCredentials') === 'on') body.clearCredentials = true;
 
-      await apiRequest(`/settings/mail${editing ? `/${editing.id}` : ''}`, {
+      const saved = await apiRequest<MailSettingsRow>(`/settings/mail${editing ? `/${editing.id}` : ''}`, {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
-      setFormOpen(false);
-      setEditing(null);
+      setEditing(saved);
+      setAuthMode(saved.authMode ?? 'BASIC');
+      saveState.markSaved();
       setError('');
       setMessage('Mail configuration saved. Credentials (if provided) were encrypted and the change was audited.');
-      await load();
+      await load().catch(() => setError('Settings saved, but the list could not be refreshed.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -260,9 +293,10 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
         </div>
       )}
       {formOpen && (
-        <Modal maxWidth="42rem" onClose={() => setFormOpen(false)} title={editing ? `Edit ${editing.label}` : 'Create Mail Configuration'}>
+        <Modal maxWidth="42rem" closeDisabled={saveState.busy} onClose={() => setFormOpen(false)} title={editing ? `Edit ${editing.label}` : 'Create Mail Configuration'}>
           <Notice message={error} />
-          <form className="form-grid" id="mail-settings-form" key={editing?.id ?? 'new'} onSubmit={(e) => void save(e)}>
+          <Notice message={message} tone="success" />
+          <form className="form-grid" id="mail-settings-form" key={`${editing?.id ?? 'new'}:${saveState.revision}`} onSubmit={(e) => void save(e)}>
             <h4 className="field-wide mt-2 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">General</h4>
             {!editing && (
               <label className="field">
@@ -395,19 +429,19 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
               </p>
             )}
             <label className="field field-wide">
-              <span>Outbound send cutover (messages queued before this instant are never sent)</span>
+              <span>Outbound send cutover (UTC; earlier queued reminders are not sent)</span>
               <input
-                defaultValue={editing?.outboundSendCutoverAt ? editing.outboundSendCutoverAt.slice(0, 16) : ''}
+                defaultValue={cutoverInputUtc(editing?.outboundSendCutoverAt)}
                 name="outboundSendCutoverAt"
                 type="datetime-local"
               />
             </label>
 
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
+              <button className="button-primary" disabled={saveState.busy} type="submit">
                 Save
               </button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+              <button className="button-secondary" disabled={saveState.busy} onClick={() => setFormOpen(false)} type="button">
                 Cancel
               </button>
             </div>
@@ -460,6 +494,7 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
                       <button className="button-small" onClick={() => void runTest(item.id, 'smtp')} type="button">
                         Test SMTP
                       </button>
+                      <SentObservationControls mailboxId={item.id} />
                     </div>
                   )}
                 </td>
@@ -481,190 +516,95 @@ function MailSettingsSection({ canManage }: { canManage: boolean }) {
 function AiSettingsSection({ canManage }: { canManage: boolean }) {
   const [settings, setSettings] = useState<AiSettingsView | null>(null);
   const [formOpen, setFormOpen] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState('OPENAI');
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [discoveredModels, setDiscoveredModels] = useState<AiModelOption[]>([]);
-  const [discoveryLoading, setDiscoveryLoading] = useState(false);
-  const [discoveryError, setDiscoveryError] = useState('');
-  const [customModelMode, setCustomModelMode] = useState(true);
-  const [customModelId, setCustomModelId] = useState('');
-  const [selectedModelId, setSelectedModelId] = useState('');
+  const saveState = useModalSave();
+  const [provider, setProvider] = useState('OPENAI');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [testResult, setTestResult] = useState('');
-  const [confirmAutoAccept, setConfirmAutoAccept] = useState(false);
 
-  async function load() {
-    setSettings(await apiRequest<AiSettingsView>('/settings/ai'));
-  }
   useEffect(() => {
-    void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'));
+    void apiRequest<AiSettingsView>('/settings/ai')
+      .then(setSettings)
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed.'));
   }, []);
 
+  if (!settings) return <Notice message={error} />;
+  const providerChanged = settings.provider !== provider;
+
   function openEdit() {
-    setSelectedProvider(settings?.provider ?? 'OPENAI');
-    setApiKeyInput('');
-    setDiscoveredModels([]);
-    setDiscoveryError('');
-    // No discovery has happened yet at open time — default to custom mode pre-filled with the
-    // currently saved model, so Save works unchanged even if the admin never clicks "Load Models".
-    setCustomModelMode(true);
-    setCustomModelId(settings?.model ?? '');
-    setSelectedModelId('');
-    setFormOpen(true);
-  }
-
-  const providerChanged = settings !== null && selectedProvider !== settings.provider;
-
-  // Requirement: changing provider clears the previous selected model — a model ID from one
-  // provider is never meaningful for another. Switching back to the currently-saved provider
-  // restores that provider's saved model instead of leaving the field empty.
-  function handleProviderChange(nextProvider: string) {
-    setSelectedProvider(nextProvider);
-    setApiKeyInput('');
-    setDiscoveredModels([]);
-    setDiscoveryError('');
-    setSelectedModelId('');
-    setCustomModelMode(true);
-    setCustomModelId(nextProvider === settings?.provider ? (settings?.model ?? '') : '');
-  }
-
-  async function loadModels() {
-    setDiscoveryLoading(true);
-    setDiscoveryError('');
-    try {
-      const body: Record<string, unknown> = { provider: selectedProvider };
-      if (apiKeyInput.trim()) body.apiKey = apiKeyInput.trim();
-      const result = await apiRequest<{ success: boolean; models: AiModelOption[]; message?: string }>('/settings/ai/discover-models', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      if (!result.success) {
-        setDiscoveryError(result.message || 'Model discovery is temporarily unavailable.');
-        setDiscoveredModels([]);
-        return;
-      }
-      setDiscoveredModels(result.models);
-      if (!result.models.length) {
-        setDiscoveryError('The provider returned no models for this credential.');
-        return;
-      }
-      // If the model already active (custom or previously selected) is present in the fresh list,
-      // switch into list mode with it pre-selected; otherwise leave the admin's current choice alone
-      // — never force a selection, never silently overwrite a deliberate custom entry.
-      const currentId = customModelMode ? customModelId : selectedModelId;
-      const match = result.models.find((candidate) => candidate.id === currentId);
-      if (match) {
-        setCustomModelMode(false);
-        setSelectedModelId(match.id);
-      }
-    } catch (cause) {
-      setDiscoveryError(cause instanceof Error ? cause.message : 'Model discovery is temporarily unavailable.');
-      setDiscoveredModels([]);
-    } finally {
-      setDiscoveryLoading(false);
-    }
+    setProvider(settings!.provider);
+    setModel(settings!.model ?? '');
+    setApiKey('');
+    setError('');
+    setMessage(''); setFormOpen(true);
   }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const value = (name: string) => String(form.get(name) ?? '').trim();
-    const autoRouteAccept = form.get('autoRouteAccept') === 'on';
-    if (autoRouteAccept && !settings?.autoRouteAccept && !confirmAutoAccept) {
-      setError('Please confirm the automatic-acceptance warning checkbox before enabling it.');
-      return;
-    }
-    const model = customModelMode ? customModelId.trim() : selectedModelId;
-    if (!model) {
-      setError(customModelMode ? 'Enter a Model ID.' : 'Select a model, or switch to "Use custom model ID".');
-      return;
-    }
+    const fields = new FormData(event.currentTarget);
+    const threshold = String(fields.get('confidenceThreshold') ?? '');
+    if (!saveState.begin()) return;
     try {
-      const body: Record<string, unknown> = {
-        enabled: form.get('enabled') === 'on',
-        provider: selectedProvider,
-        model,
-        confidenceThreshold: value('confidenceThreshold') ? Number(value('confidenceThreshold')) : undefined,
-        autoRouteAccept,
-        autoRouteAcceptCutoverAt: value('autoRouteAcceptCutoverAt') ? new Date(value('autoRouteAcceptCutoverAt')).toISOString() : undefined,
-      };
-      if (apiKeyInput.trim()) body.apiKey = apiKeyInput.trim();
-      if (form.get('clearApiKey') === 'on') body.clearApiKey = true;
-
-      await apiRequest('/settings/ai', { method: 'PATCH', body: JSON.stringify(body) });
-      setFormOpen(false);
+      const updated = await apiRequest<AiSettingsView>('/settings/ai', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          provider,
+          model: model.trim() || undefined,
+          confidenceThreshold: threshold ? Number(threshold) : undefined,
+          apiKey: apiKey.trim() || undefined,
+          clearApiKey: fields.get('clearApiKey') === 'on' || undefined,
+        }),
+      });
+      setSettings(updated);
+      setApiKey('');
+      saveState.markSaved();
       setError('');
-      setMessage('AI settings saved and audited.');
-      setConfirmAutoAccept(false);
-      await load();
+      setMessage('AI settings saved. Processing remains inactive.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    } finally {
+      saveState.finish();
     }
   }
-
-  async function runTest() {
-    try {
-      const result = await apiRequest<{ success: boolean; message: string; latencyMs?: number }>('/settings/ai/test', { method: 'POST' });
-      setTestResult(result.success ? `Connected${result.latencyMs ? ` (${result.latencyMs}ms)` : ''}` : `Failed: ${result.message}`);
-    } catch (cause) {
-      setTestResult(cause instanceof Error ? cause.message : 'Test failed.');
-    }
-  }
-
-  if (!settings) return <Notice message={error} />;
-
-  const loadModelsDisabled = discoveryLoading || (providerChanged && !apiKeyInput.trim());
-  const loadModelsLabel = discoveryLoading
-    ? 'Loading models…'
-    : providerChanged || !settings.apiKeyConfigured
-      ? 'Verify & Load Models'
-      : 'Refresh Models';
 
   return (
     <>
-      {!formOpen && (
-        <>
+      {!formOpen && <Notice message={error} />}
+      <Notice message={message} tone="success" />
+      {formOpen && (
+        <Modal maxWidth="36rem" closeDisabled={saveState.busy} onClose={() => setFormOpen(false)} title="Edit AI Settings">
           <Notice message={error} />
           <Notice message={message} tone="success" />
-        </>
-      )}
-      {formOpen && (
-        <Modal maxWidth="36rem" onClose={() => setFormOpen(false)} title="Edit AI Settings">
-          <Notice message={error} />
-          <form className="form-grid" onSubmit={(e) => void save(e)}>
-            <label className="checkbox field-wide">
-              <input defaultChecked={settings.enabled} name="enabled" type="checkbox" /> AI Processing Enabled
-            </label>
+          <form className="form-grid" key={saveState.revision} onSubmit={(event) => void save(event)}>
             <label className="field">
               <span>Provider</span>
-              <select onChange={(e) => handleProviderChange(e.target.value)} value={selectedProvider}>
+              <select
+                onChange={(event) => {
+                  const nextProvider = event.target.value;
+                  setProvider(nextProvider);
+                  setModel(nextProvider === settings.provider ? (settings.model ?? '') : '');
+                  setApiKey('');
+                }}
+                value={provider}
+              >
                 {AI_PROVIDER_OPTIONS.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
+                  <option key={option.id} value={option.id}>{option.label}</option>
                 ))}
               </select>
             </label>
-            {providerChanged && (
-              <p className="field-wide text-sm text-amber-700">
-                Changing AI provider requires a new API key and model for the selected provider.
-              </p>
-            )}
+            <label className="field">
+              <span>Model ID</span>
+              <input onChange={(event) => setModel(event.target.value)} required={providerChanged} value={model} />
+            </label>
             <label className="field field-wide">
-              <span>
-                {providerChanged
-                  ? `New API Key for ${aiProviderLabel(selectedProvider)} (required)`
-                  : settings.apiKeyConfigured
-                    ? 'Replace API Key (leave blank to keep the current one, or to Refresh Models with it)'
-                    : 'API Key'}
-              </span>
+              <span>{settings.apiKeyConfigured && !providerChanged ? 'Replace stored API key' : 'API key'}</span>
               <input
                 autoComplete="new-password"
-                onChange={(e) => setApiKeyInput(e.target.value)}
+                onChange={(event) => setApiKey(event.target.value)}
                 required={providerChanged}
                 type="password"
-                value={apiKeyInput}
+                value={apiKey}
               />
             </label>
             {settings.apiKeyConfigured && !providerChanged && (
@@ -672,99 +612,27 @@ function AiSettingsSection({ canManage }: { canManage: boolean }) {
                 <input name="clearApiKey" type="checkbox" /> Clear stored API key
               </label>
             )}
-            <div className="field-wide">
-              <button className="button-secondary" disabled={loadModelsDisabled} onClick={() => void loadModels()} type="button">
-                {loadModelsLabel}
-              </button>
-            </div>
-            <Notice message={discoveryError} />
-            {customModelMode ? (
-              <label className="field field-wide">
-                <span>Custom Model ID</span>
-                <input
-                  onChange={(e) => setCustomModelId(e.target.value)}
-                  placeholder={AI_PROVIDER_OPTIONS.find((o) => o.id === selectedProvider)?.modelPlaceholder}
-                  required
-                  value={customModelId}
-                />
-              </label>
-            ) : (
-              <AiModelCombobox onSelect={setSelectedModelId} options={discoveredModels} value={selectedModelId} />
-            )}
-            <div className="field-wide">
-              {customModelMode ? (
-                discoveredModels.length > 0 && (
-                  <button className="button-small" onClick={() => setCustomModelMode(false)} type="button">
-                    Use discovered models list
-                  </button>
-                )
-              ) : (
-                <button className="button-small" onClick={() => setCustomModelMode(true)} type="button">
-                  Use custom model ID
-                </button>
-              )}
-            </div>
             <label className="field">
-              <span>Confidence threshold (0–1)</span>
-              <input defaultValue={settings.confidenceThreshold ?? 0.9} max={1} min={0} name="confidenceThreshold" step={0.01} type="number" />
+              <span>Confidence threshold</span>
+              <input defaultValue={settings.confidenceThreshold ?? ''} max={1} min={0} name="confidenceThreshold" step={0.01} type="number" />
             </label>
-            <label className="checkbox field-wide">
-              <input
-                defaultChecked={settings.autoRouteAccept}
-                name="autoRouteAccept"
-                onChange={(e) => setConfirmAutoAccept(e.target.checked ? confirmAutoAccept : false)}
-                type="checkbox"
-              />{' '}
-              Automatic acceptance enabled
-            </label>
-            <label className="field field-wide">
-              <span>Automatic acceptance cutover</span>
-              <input
-                defaultValue={settings.autoRouteAcceptCutoverAt ? settings.autoRouteAcceptCutoverAt.slice(0, 16) : ''}
-                name="autoRouteAcceptCutoverAt"
-                type="datetime-local"
-              />
-            </label>
-            {!settings.autoRouteAccept && (
-              <label className="checkbox field-wide">
-                <input checked={confirmAutoAccept} onChange={(e) => setConfirmAutoAccept(e.target.checked)} type="checkbox" /> I understand
-                enabling automatic acceptance allows the AI to automatically mark high-confidence renewal acceptances as ACCEPTED without human
-                review, for messages received after the cutover.
-              </label>
-            )}
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
-                Save
-              </button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
-                Cancel
-              </button>
+              <button className="button-primary" disabled={saveState.busy} type="submit">Save</button>
+              <button className="button-secondary" disabled={saveState.busy} onClick={() => setFormOpen(false)} type="button">Close</button>
             </div>
           </form>
         </Modal>
       )}
       <section className="panel">
-        <p>AI Processing: <strong>{settings.enabled ? 'ON' : 'OFF'}</strong></p>
+        <p>AI processing <strong>Inactive (deferred)</strong></p>
         <p>Provider: {aiProviderLabel(settings.provider)}</p>
         <p>Model: {settings.model ?? 'Not configured'}</p>
-        <p>API Key: {settings.apiKeyConfigured ? 'Configured' : 'Not configured'}</p>
+        <p>API key: {settings.apiKeyConfigured ? 'Configured' : 'Not configured'}</p>
         <p>Confidence threshold: {settings.confidenceThreshold ?? '—'}</p>
-        <p>
-          Automatic acceptance: <strong>{settings.autoRouteAccept ? 'ON' : 'OFF'}</strong>
-          {settings.autoRouteAcceptCutoverAt ? ` (cutover ${new Date(settings.autoRouteAcceptCutoverAt).toLocaleString()})` : ''}
-        </p>
-        <p className="muted">Only high-confidence ACCEPT_RENEWAL classifications may ever auto-transition to ACCEPTED. REJECT_RENEWAL and PAYMENT_REPORTED — and everything else — always require human review.</p>
-        {testResult && <p className="muted">Last test: {testResult}</p>}
-        {canManage && (
-          <div className="mt-4 flex gap-3">
-            <button className="button-primary" onClick={openEdit} type="button">
-              Edit
-            </button>
-            <button className="button-secondary" onClick={() => void runTest()} type="button">
-              Test AI
-            </button>
-          </div>
+        {settings.autoRouteAcceptCutoverAt && (
+          <p>Saved acceptance cutover: {new Date(settings.autoRouteAcceptCutoverAt).toLocaleString()}</p>
         )}
+        {canManage && <button className="button-primary mt-4" onClick={openEdit} type="button">Edit</button>}
       </section>
     </>
   );
@@ -841,7 +709,7 @@ function IntegrationHealthSection() {
             <td>{overview.ai.health?.status ?? 'Never checked'}</td>
             <td>{overview.ai.health ? new Date(overview.ai.health.checkedAt).toLocaleString() : '—'}</td>
             <td>{overview.ai.health?.message ?? '—'}</td>
-            <td className="muted">No deployment-capability gate — see Settings → AI.</td>
+            <td className="muted">Deferred — operational AI processing is inactive.</td>
           </tr>
         </tbody>
       </table>

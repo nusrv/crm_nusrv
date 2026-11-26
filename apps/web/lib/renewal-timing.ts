@@ -46,6 +46,7 @@ export interface LatestReminder {
   status: string;
   queuedAt: string;
   audience: string;
+  smtpUncertain?: boolean;
 }
 
 /**
@@ -60,9 +61,10 @@ export function reminderStatusLabel(
   totalEverQueued: number,
 ): string {
   if (!totalEverQueued || !latest) return 'Not sent';
+  if (latest.smtpUncertain) return 'Dispatch uncertain — review required';
   switch (latest.status) {
     case 'DELIVERED':
-      return `Last reminder: ${latest.queuedAt.slice(0, 10)}`;
+      return `Dispatch recorded (queued ${latest.queuedAt.slice(0, 10)})`;
     case 'FAILED':
       return 'Failed';
     case 'CANCELLED':

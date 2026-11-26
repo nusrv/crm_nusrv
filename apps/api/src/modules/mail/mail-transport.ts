@@ -1,4 +1,5 @@
 import type { MailConfiguration } from '../../generated/prisma/client';
+import type { MailAcceptance } from './smtp-attempt-policy';
 
 /**
  * A fully prepared outbound message. Every field is already resolved by the caller
@@ -28,5 +29,5 @@ export const MAIL_TRANSPORT = Symbol('MAIL_TRANSPORT');
  * transport can decrypt lazily, at the last possible moment, and a mock transport never has to.
  */
 export interface MailTransport {
-  send(message: PreparedOutboundMessage, config: MailConfiguration): Promise<void>;
+  send(message: PreparedOutboundMessage, config: MailConfiguration): Promise<MailAcceptance | void>;
 }

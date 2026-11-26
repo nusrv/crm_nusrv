@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 import { OperatorReplyOutboundService } from './operator-reply-outbound.service';
 import { DEFER_RETRY_DELAY_MS, SMTP_RETRY_BACKOFF_MS } from './operator-reply-timing.constants';
+import type { MailAcceptance } from '../mail/smtp-attempt-policy';
 
 interface Row {
   id: string;
@@ -10,8 +11,11 @@ interface Row {
   recipient: string;
   status: string;
   attempts: number;
+  smtpRetrySafe: boolean;
+  actorId: string;
   lastAttemptAt: Date | null;
   lastError: string | null;
+  smtpUncertain: boolean;
   nextAttemptAt: Date | null;
   queuedAt: Date;
 }
@@ -22,6 +26,10 @@ function matches(row: Row, where: Record<string, unknown>): boolean {
       if (!(value as Record<string, unknown>[]).some((cond) => matches(row, cond))) return false;
       continue;
     }
+    if (key === 'AND') {
+      if (!(value as Record<string, unknown>[]).every((cond) => matches(row, cond))) return false;
+      continue;
+    }
     if (value && typeof value === 'object' && 'lt' in (value)) {
       const current = row[key as keyof Row] as Date | null;
       if (!current || !(current < (value as { lt: Date }).lt)) return false;
@@ -30,6 +38,11 @@ function matches(row: Row, where: Record<string, unknown>): boolean {
     if (value && typeof value === 'object' && 'gte' in (value)) {
       const current = row[key as keyof Row] as Date;
       if (!(current >= (value as { gte: Date }).gte)) return false;
+      continue;
+    }
+    if (value && typeof value === 'object' && 'gt' in (value)) {
+      const current = row[key as keyof Row] as number;
+      if (!(current > (value as { gt: number }).gt)) return false;
       continue;
     }
     if (value && typeof value === 'object' && 'lte' in (value)) {
@@ -44,15 +57,18 @@ function matches(row: Row, where: Record<string, unknown>): boolean {
 
 function harness(options: {
   row: Row;
+  extraRows?: Row[];
   thread?: { id: string; customerId: string | null };
   mailConfiguration?: { id: string; fromAddress: string; fromName: string; enabled: boolean; environment: string };
   emailMessage?: { id: string; subject: string; bodyText: string; externalMessageId: string | null; inReplyTo: string | null; references: string | null; renewalCaseId: string | null };
   resolvedRecipient?: { email: string; source: string } | null;
   mailConfigUsable?: boolean;
-  sendImpl?: () => Promise<void>;
+  sendImpl?: () => Promise<MailAcceptance>;
   clockNow?: Date;
 }) {
-  const rows = new Map<string, Row>([[options.row.id, { ...options.row }]]);
+  const rows = new Map<string, Row>(
+    [options.row, ...(options.extraRows ?? [])].map((row) => [row.id, { ...row }]),
+  );
   const thread = options.thread ?? { id: options.row.threadId, customerId: 'customer-1' };
   const mailConfiguration = options.mailConfiguration ?? {
     id: options.row.mailConfigurationId,
@@ -76,10 +92,15 @@ function harness(options: {
   const sendMock = jest.fn((message: Record<string, unknown>, config: unknown) => {
     void message;
     void config;
-    return (options.sendImpl ?? (() => Promise.resolve()))();
+    return options.sendImpl ? options.sendImpl() : Promise.resolve<MailAcceptance>({ source: 'mock' });
   });
 
   const operatorReplyOutbox = {
+    findMany: jest.fn(({ where, take }: { where: Record<string, unknown>; take: number }) => Promise.resolve(
+      [...rows.values()].filter((row) => matches(row, where))
+        .sort((left, right) => +left.queuedAt - +right.queuedAt).slice(0, take)
+        .map(({ id }) => ({ id })),
+    )),
     updateMany: jest.fn(({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
       let count = 0;
       for (const row of rows.values()) {
@@ -108,11 +129,13 @@ function harness(options: {
   const emailMessageUpdate = jest.fn(() => Promise.resolve({}));
   const prisma = {
     operatorReplyOutbox,
+    user: { findFirst: jest.fn(() => Promise.resolve({ id: options.row.actorId })) },
     mailConfiguration: { findUnique: jest.fn(() => Promise.resolve(mailConfiguration)) },
     emailMessage: { update: emailMessageUpdate },
     $transaction: jest.fn((cb: (tx: unknown) => unknown) =>
       Promise.resolve(
         cb({
+          $queryRaw: jest.fn(() => Promise.resolve([{ id: options.row.id }])),
           operatorReplyOutbox: { updateMany: operatorReplyOutbox.updateMany },
           emailMessage: { update: emailMessageUpdate },
         }),
@@ -174,8 +197,11 @@ function baseRow(overrides: Partial<Row> = {}): Row {
     recipient: 'customer@example.test',
     status: 'QUEUED',
     attempts: 0,
+    smtpRetrySafe: false,
+    actorId: 'admin-1',
     lastAttemptAt: null,
     lastError: null,
+    smtpUncertain: false,
     nextAttemptAt: null,
     queuedAt: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,
@@ -242,7 +268,7 @@ describe('OperatorReplyOutboundService (§9/§13/§14/§16)', () => {
     expect(preOutcome).toBe('deferred');
     expect(preAttempt.sendMock).not.toHaveBeenCalled();
 
-    const postAttempt = harness({ row: baseRow({ attempts: 1 }), resolvedRecipient: null });
+    const postAttempt = harness({ row: baseRow({ attempts: 1, smtpRetrySafe: true }), resolvedRecipient: null });
     const postOutcome = await postAttempt.service.processOne('outbox-1');
     expect(postOutcome).toBe('cancelled');
     expect(postAttempt.sendMock).not.toHaveBeenCalled();
@@ -262,7 +288,7 @@ describe('OperatorReplyOutboundService (§9/§13/§14/§16)', () => {
 
   it('cancels (never resends to a different address) when the recipient changed AFTER an attempt', async () => {
     const { service, rows, sendMock } = harness({
-      row: baseRow({ recipient: 'old@example.test', attempts: 1 }),
+      row: baseRow({ recipient: 'old@example.test', attempts: 1, smtpRetrySafe: true }),
       resolvedRecipient: { email: 'new@example.test', source: 'NORMALIZED_PRIMARY' },
     });
     const outcome = await service.processOne('outbox-1');
@@ -311,7 +337,7 @@ describe('OperatorReplyOutboundService (§9/§13/§14/§16)', () => {
   });
 
   it('an infrastructure SMTP failure is retried (QUEUED) and marks health DEGRADED', async () => {
-    const error = Object.assign(new Error('auth failed'), { code: 'EAUTH' });
+    const error = Object.assign(new Error('auth failed'), { code: 'EAUTH', command: 'AUTH' });
     const { service, rows, healthRecord } = harness({ row: baseRow(), sendImpl: () => Promise.reject(error) });
     const outcome = await service.processOne('outbox-1');
     expect(outcome).toBe('failed');
@@ -320,17 +346,59 @@ describe('OperatorReplyOutboundService (§9/§13/§14/§16)', () => {
   });
 
   it('two concurrent processOne() calls on the same row: only one claims and sends, the other is not_claimed', async () => {
-    const { service } = harness({ row: baseRow() });
+    const { service, sendMock } = harness({ row: baseRow() });
     const [a, b] = await Promise.all([service.processOne('outbox-1'), service.processOne('outbox-1')]);
     const outcomes = [a, b].sort();
     // One genuinely wins the CAS claim; the other observes the row already PROCESSING/terminal.
-    expect(outcomes).not.toEqual(['not_claimed', 'not_claimed']);
-    expect(outcomes.includes('sent') || outcomes.includes('not_claimed')).toBe(true);
+    expect(outcomes).toEqual(['not_claimed', 'sent']);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let 50 delayed older replies starve an eligible newer reply', async () => {
+    const now = new Date('2026-01-01T00:00:20.000Z');
+    const extraRows = Array.from({ length: 50 }, (_, i) => baseRow({
+      id: `deferred-${i}`,
+      nextAttemptAt: new Date(+now + 60_000),
+    }));
+    const { service, rows, sendMock } = harness({
+      row: baseRow({ queuedAt: now }), extraRows, clockNow: now,
+    });
+    expect(await service.processBatch()).toMatchObject({ candidates: 1, sent: 1 });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(rows.get('outbox-1')!.queuedAt).toEqual(now);
+    expect(extraRows.every((row) => rows.get(row.id)?.attempts === 0)).toBe(true);
+  });
+
+  it.each([
+    { status: 'PROCESSING', attempts: 1, lastAttemptAt: new Date(0) },
+    { status: 'PROCESSING', attempts: 0, lastAttemptAt: null },
+    { status: 'QUEUED', attempts: 1 },
+  ])('quarantines legacy ambiguous state %j without transmission', async (legacy) => {
+    const { service, rows, sendMock } = harness({ row: baseRow({ ...legacy, lastError: 'legacy error retained' }) });
+    expect(await service.processOne('outbox-1')).toBe('failed');
+    expect(await service.processOne('outbox-1')).toBe('not_claimed');
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(rows.get('outbox-1')).toMatchObject({
+      status: 'FAILED',
+      smtpUncertain: true,
+      lastError: 'legacy error retained',
+    });
+  });
+
+  it('never requeues a disconnection after possible DATA transmission', async () => {
+    const { service, rows, sendMock } = harness({
+      row: baseRow(),
+      sendImpl: () => Promise.reject(Object.assign(new Error('lost socket'), { code: 'ESOCKET', command: 'CONN' })),
+    });
+    expect(await service.processOne('outbox-1')).toBe('failed');
+    expect(await service.processOne('outbox-1')).toBe('not_claimed');
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(rows.get('outbox-1')!.smtpRetrySafe).toBe(false);
   });
 
   describe('§2 (contract audit) — DB-backed retry backoff', () => {
     const NOW = new Date('2026-01-01T00:00:00.000Z');
-    const infraError = () => Object.assign(new Error('auth failed'), { code: 'EAUTH' });
+    const infraError = () => Object.assign(new Error('auth failed'), { code: 'EAUTH', command: 'AUTH' });
 
     it('a retryable infrastructure failure at attempt 1 sets nextAttemptAt using the FIRST backoff tier (~1 min)', async () => {
       const { service, rows } = harness({ row: baseRow(), clockNow: NOW, sendImpl: () => Promise.reject(infraError()) });
@@ -430,23 +498,23 @@ describe('OperatorReplyOutboundService (§9/§13/§14/§16)', () => {
 
   describe('§3 (contract audit) — lastError cleanup', () => {
     it('an eventual successful send clears lastError, even after a prior failure left one behind', async () => {
-      const infraError = Object.assign(new Error('temporary auth hiccup'), { code: 'EAUTH' });
+      const infraError = Object.assign(new Error('temporary auth hiccup'), { code: 'EAUTH', command: 'AUTH' });
       let shouldFail = true;
       const { service, rows } = harness({
         row: baseRow(),
         clockNow: new Date('2026-01-01T00:00:00.000Z'),
-        sendImpl: () => (shouldFail ? Promise.reject(infraError) : Promise.resolve()),
+        sendImpl: () => (shouldFail ? Promise.reject(infraError) : Promise.resolve({ source: 'mock' })),
       });
 
       const failedOutcome = await service.processOne('outbox-1');
       expect(failedOutcome).toBe('failed');
-      expect(rows.get('outbox-1')!.lastError).toContain('auth hiccup');
+      expect(rows.get('outbox-1')!.lastError).toBe('SMTP did not accept this attempt.');
 
       shouldFail = false;
       const nextTry = harness({
         row: { ...rows.get('outbox-1')!, nextAttemptAt: null }, // simulate the backoff having elapsed.
         clockNow: new Date('2026-01-01T00:05:00.000Z'),
-        sendImpl: () => Promise.resolve(),
+        sendImpl: () => Promise.resolve({ source: 'mock' }),
       });
       const successOutcome = await nextTry.service.processOne('outbox-1');
       expect(successOutcome).toBe('sent');

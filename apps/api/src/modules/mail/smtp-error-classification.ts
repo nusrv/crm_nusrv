@@ -67,7 +67,7 @@ function isTransient(responseCode: number | undefined): boolean {
 export function classifySmtpError(error: unknown): SmtpErrorClassification {
   const candidate = (typeof error === 'object' && error !== null ? error : {}) as SmtpLikeError;
   const { code, command, responseCode } = candidate;
-  const stage = command?.toUpperCase();
+  const stage = typeof command === 'string' ? command.toUpperCase() : undefined;
 
   // A. Wins over everything below, unconditionally.
   if ((code && INFRASTRUCTURE_CODES.has(code)) || stage === 'CONN' || stage === 'AUTH') {
@@ -81,12 +81,13 @@ export function classifySmtpError(error: unknown): SmtpErrorClassification {
   }
 
   // C. DATA.
-  if (stage?.startsWith('DATA') && isPermanent(responseCode)) {
-    return { terminal: true, healthImpact: 'message' };
+  if (stage?.startsWith('DATA')) {
+    if (isPermanent(responseCode)) return { terminal: true, healthImpact: 'message' };
+    if (isTransient(responseCode)) return { terminal: false, healthImpact: 'message' };
   }
 
   // D. MAIL FROM.
-  if (stage?.startsWith('MAIL') && isPermanent(responseCode)) {
+  if (stage?.startsWith('MAIL') && (isPermanent(responseCode) || isTransient(responseCode))) {
     return { terminal: false, healthImpact: 'infrastructure' };
   }
 

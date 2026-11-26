@@ -14,6 +14,15 @@ describe('OperatorReplyWorker', () => {
     expect(result.candidates).toBe(0);
   });
 
+  it('does not touch outbound rows during a deployment freeze', async () => {
+    const processBatch = jest.fn();
+    const worker = new OperatorReplyWorker({ processBatch } as never, { get: () => 'true' } as never);
+    const result = await worker.process({ name: OPERATOR_REPLY_SEND_JOB } as never);
+    expect(result.candidates).toBe(0);
+    expect(result.sent).toBe(0);
+    expect(processBatch).not.toHaveBeenCalled();
+  });
+
   it('rejects an unsupported job name', async () => {
     const outbound = { processBatch: jest.fn() };
     const worker = new OperatorReplyWorker(outbound as never);

@@ -16,6 +16,7 @@ export interface MailboxSyncState {
 }
 
 export interface FetchedMailboxMessage {
+  dsnReview?: import('./dsn-review-capture').DsnReviewCapture;
   uid: bigint;
   /** Server-assigned receipt timestamp (IMAP INTERNALDATE) — Slice C §6 requires this, NEVER the
    * sender-controlled Date header, for EmailMessage.occurredAt. Undefined only in the documented
@@ -66,6 +67,20 @@ export interface MailboxReaderFactory {
 export type FetchSinceResult =
   | { outcome: 'ok'; messages: FetchedMailboxMessage[] }
   | { outcome: 'uidvalidity_changed'; currentUidValidity: bigint };
+
+export const MAX_SENT_OBSERVATIONS = 50;
+export const MAX_IMAP_UID = 4_294_967_295n;
+
+export type FetchSentSinceResult =
+  | FetchSinceResult
+  | { outcome: 'bounded_search_unavailable' | 'integrity_error' };
+
+export interface SentMailboxReader {
+  /** Select the lowest available UIDs above the cursor before fetching message data. */
+  fetchSentMessagesSince(
+    folder: string, expectedUidValidity: bigint, afterUid: bigint, limit: number,
+  ): Promise<FetchSentSinceResult>;
+}
 
 export interface MailboxReader {
   /** Opens/selects `folder` and returns its current UIDVALIDITY/UIDNEXT. Used only for the

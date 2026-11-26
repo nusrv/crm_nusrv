@@ -25,6 +25,7 @@ import { MailImapHealthService } from './modules/mail/mail-imap-health.service';
 import { MailInboundCorrelationService } from './modules/mail/mail-inbound-correlation.service';
 import { MailInboundIngestService } from './modules/mail/mail-inbound-ingest.service';
 import { MailInboundSenderResolutionService } from './modules/mail/mail-inbound-sender-resolution.service';
+import { MailSentObservationService } from './modules/mail/mail-sent-observation.service';
 import { MailImapWorker } from './modules/mail/mail-imap.worker';
 import { MailOutboundService } from './modules/mail/mail-outbound.service';
 import { MAIL_QUEUE } from './modules/mail/mail-queue.constants';
@@ -40,7 +41,7 @@ import { RenewalEngineService } from './modules/renewal-cases/renewal-engine.ser
 import { RENEWAL_QUEUE } from './modules/renewal-cases/renewal-queue.constants';
 import { RenewalTemplateRenderer } from './modules/renewal-cases/renewal-template.renderer';
 import { RenewalWorker } from './modules/renewal-cases/renewal.worker';
-import { QueueFoundationModule } from './queue/queue-foundation.module';
+import { WorkerQueueFoundationModule } from './queue/queue-foundation.module';
 import { SecurityModule } from './security/security.module';
 import { TimeModule } from './time/time.module';
 
@@ -62,7 +63,7 @@ import { TimeModule } from './time/time.module';
     TimeModule,
     SecurityModule,
     AuditModule,
-    QueueFoundationModule,
+    WorkerQueueFoundationModule,
     CustomersModule,
     BullModule.registerQueue({ name: RENEWAL_QUEUE }),
     BullModule.registerQueue({ name: MAIL_QUEUE }),
@@ -120,6 +121,7 @@ import { TimeModule } from './time/time.module';
         return resolveImapAdapterCapability(config) === 'MOCK' ? mock : real;
       },
     },
+    MailSentObservationService,
     MailImapWorker,
     AiClassificationEnqueueService,
     AiHealthService,

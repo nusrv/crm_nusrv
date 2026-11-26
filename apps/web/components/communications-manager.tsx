@@ -1,5 +1,7 @@
 'use client';
 
+import { workspaceStatus } from '../lib/workspace-status';
+
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiRequest, type PageResult } from '../lib/api';
@@ -72,7 +74,7 @@ export function CommunicationsManager() {
             <option value="">All statuses</option>
             {STATUS_OPTIONS.map((option) => (
               <option key={option} value={option}>
-                {option}
+                {workspaceStatus(option)}
               </option>
             ))}
           </select>
@@ -122,12 +124,12 @@ export function CommunicationsManager() {
                   </td>
                   <td>{new Date(thread.lastMessageAt).toLocaleString()}</td>
                   <td>
-                    <span className="status-pill">{thread.status}</span>
+                    <span className="status-pill">{workspaceStatus(thread.status)}</span>
                   </td>
                   <td>
                     {thread.requiresAttention ? (
                       <span className="status-pill danger">
-                        Needs review{thread.pendingHumanReviewCount > 0 ? ` (${thread.pendingHumanReviewCount})` : ''}
+                        {thread.pendingHumanReviewCount > 0 ? `${thread.pendingHumanReviewCount} unread` : 'Needs review'}
                       </span>
                     ) : (
                       '—'

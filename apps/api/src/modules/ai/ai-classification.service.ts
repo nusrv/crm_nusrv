@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { PrismaService } from '../../database/prisma.service';
 import { AuditService } from '../../audit/audit.service';
 import { ClockService } from '../../time/clock.service';
@@ -59,6 +60,7 @@ export class AiClassificationService {
    * that knows the job's own attempt budget — see ai.worker.ts.
    */
   async classifyMessage(emailMessageId: string, isLastAttempt: boolean): Promise<ClassifyMessageOutcome> {
+    if (aiOperationalPolicy.isDeferred()) return 'skipped_disabled';
     // Phase 3.1 §J — resolved ONCE per attempt, from the persisted AiSettings row, read fresh every
     // call (never cached across attempts) so a Settings-UI change takes effect on the very next
     // classification with no restart. The same resolved settings object is threaded through to

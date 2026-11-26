@@ -23,7 +23,10 @@ import { BusinessTimeService } from '../../time/business-time.service';
 import { ClockService } from '../../time/clock.service';
 import { InvoicePreflightService } from './invoice-preflight.service';
 import { calculateInvoice, moneyEqual, type InvoiceLineCalculationInput } from './invoice-money';
+import { isVerifiedOfficialInvoice, officialInvoiceEvidence } from './official-invoice-eligibility';
+import { acceptedRenewalPeriod, lockAcceptedRenewal } from '../renewal-cases/accepted-renewal-invoice';
 import type {
+  CreateManualInvoiceDto,
   InvoiceLineInputDto,
   InvoiceListQueryDto,
   RecordFawtaraRejectionDto,
@@ -34,7 +37,7 @@ import type {
 const invoiceInclude = {
   lines: { orderBy: { position: 'asc' as const } },
   customer: { select: { id: true, customerCode: true, nameEn: true, nameAr: true } },
-  billingEntity: { select: { id: true, code: true, name: true, active: true } },
+  billingEntity: { select: { id: true, code: true, name: true, active: true, issuerType: true } },
   sourceSubscription: {
     select: { id: true, subscriptionCode: true, name: true, status: true },
   },
@@ -104,7 +107,13 @@ export class InvoicesService {
     };
   }
 
-  async createFromSubscription(subscriptionId: string, context: MutationContext) {
+  async createForRenewal(caseId: string, context: MutationContext) {
+    const renewal = await this.prisma.renewalCase.findUnique({ where: { id: caseId } });
+    if (!renewal) throw new NotFoundException('Renewal case not found.');
+    return this.createFromSubscription(renewal.subscriptionId, context, caseId);
+  }
+
+  async createFromSubscription(subscriptionId: string, context: MutationContext, renewalCaseId?: string) {
     const subscription = await this.prisma.subscription.findUnique({
       where: { id: subscriptionId },
       include: {
@@ -131,8 +140,15 @@ export class InvoicesService {
       throw new BadRequestException('An invoice cannot be created for an inactive customer.');
     }
 
-    const periodStart = subscription.startDate;
-    const periodEnd = subscription.currentTermEndDate ?? subscription.renewalDate;
+    const renewal = renewalCaseId
+      ? await this.prisma.renewalCase.findUnique({ where: { id: renewalCaseId } })
+      : null;
+    if (renewalCaseId && (!renewal || renewal.subscriptionId !== subscriptionId)) {
+      throw new NotFoundException('Renewal case not found.');
+    }
+    const proposed = renewal ? acceptedRenewalPeriod(renewal) : null;
+    const periodStart = proposed?.start ?? subscription.startDate;
+    const periodEnd = proposed?.end ?? subscription.currentTermEndDate ?? subscription.renewalDate;
     this.assertPeriod(periodStart, periodEnd);
     const activeDraftKey = this.activeDraftKey(subscription.id, periodStart, periodEnd);
     const duplicate = await this.prisma.invoice.findUnique({ where: { activeDraftKey } });
@@ -168,6 +184,17 @@ export class InvoicesService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        if (renewalCaseId) {
+          const current = await lockAcceptedRenewal(tx, renewalCaseId, subscriptionId);
+          if (
+            current.period.start.getTime() !== periodStart.getTime() ||
+            current.period.end.getTime() !== periodEnd.getTime() ||
+            current.renewal.subscription.customerId !== subscription.customerId ||
+            current.renewal.subscription.customer.billingEntityId !== billingEntity.id
+          ) throw new ConflictException('Accepted renewal details changed. Reload the case.');
+          const issued = await tx.invoice.findUnique({ where: { renewalOfficialKey: renewalCaseId } });
+          if (issued) throw new ConflictException('An official invoice already exists for this renewal.');
+        }
         const sequence = await tx.invoiceSequence.upsert({
           where: {
             billingEntityId_year: {
@@ -188,6 +215,7 @@ export class InvoicesService {
           data: { lastInvoiceCounter: { increment: 1 } },
           include: { invoiceBranding: true },
         });
+        if (!currentIssuer.active) throw new BadRequestException('Choose an active invoice issuer.');
         const presentation = snapshotPresentation(currentIssuer, currentIssuer.invoiceBranding);
         const line = calculated.lines[0]!;
         const invoice = await tx.invoice.create({
@@ -195,6 +223,7 @@ export class InvoicesService {
             customerId: subscription.customerId,
             billingEntityId: billingEntity.id,
             sourceSubscriptionId: subscription.id,
+            ...(renewalCaseId ? { sourceRenewalCaseId: renewalCaseId } : {}),
             internalReference,
             invoiceCounter: currentIssuer.lastInvoiceCounter,
             activeDraftKey,
@@ -263,11 +292,114 @@ export class InvoicesService {
             subjectType: 'Invoice',
             subjectId: invoice.id,
             newState: this.auditSnapshot(invoice),
-            metadata: { sourceSubscriptionId: subscription.id },
+            metadata: { sourceSubscriptionId: subscription.id, renewalCaseId },
             ipAddress: context.ipAddress,
           },
           tx,
         );
+        return this.toView(invoice);
+      });
+    } catch (error) {
+      throwMappedPrismaError(error);
+    }
+  }
+
+  async createManualDraft(input: CreateManualInvoiceDto, context: MutationContext) {
+    const invoiceDate = new Date(input.invoiceDate);
+    const periodStart = new Date(input.periodStart);
+    const periodEnd = new Date(input.periodEnd);
+    this.assertPeriod(periodStart, periodEnd);
+    if (!Number.isFinite(invoiceDate.getTime()) || !/^[A-Z]{3}$/.test(input.currencyCode) ||
+        !input.lines?.length) {
+      throw new BadRequestException('Supply an invoice date, currency and at least one line.');
+    }
+    if (!input.customerId && !this.optionalText(input.customerNameEn) && !this.optionalText(input.customerNameAr)) {
+      throw new BadRequestException('Supply a one-time buyer name in English or Arabic.');
+    }
+    const totals = calculateInvoice(input.lines.map((line) =>
+      this.toCalculationInput(line, undefined, null, periodStart, periodEnd)));
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const customer = input.customerId
+          ? await tx.customer.findUnique({ where: { id: input.customerId }, include: {
+              phoneNumbers: { where: { active: true }, orderBy: [{ primary: 'desc' }, { createdAt: 'asc' }], take: 1 },
+            } })
+          : null;
+        if (input.customerId && (!customer || customer.billingEntityId !== input.billingEntityId ||
+            customer.status !== 'ACTIVE')) {
+          throw new BadRequestException('Choose an active customer belonging to the invoice issuer.');
+        }
+        const sequence = await tx.invoiceSequence.upsert({
+          where: { billingEntityId_year: { billingEntityId: input.billingEntityId, year: invoiceDate.getUTCFullYear() } },
+          create: { billingEntityId: input.billingEntityId, year: invoiceDate.getUTCFullYear(), lastValue: 1 },
+          update: { lastValue: { increment: 1 } },
+        });
+        const issuer = await tx.billingEntity.update({
+          where: { id: input.billingEntityId },
+          data: { lastInvoiceCounter: { increment: 1 } },
+          include: { invoiceBranding: true },
+        });
+        if (!issuer.active) throw new BadRequestException('Choose an active invoice issuer.');
+        const presentation = snapshotPresentation(issuer, issuer.invoiceBranding);
+        const invoice = await tx.invoice.create({
+          data: {
+            customerId: customer?.id,
+            billingEntityId: issuer.id,
+            internalReference: `${issuer.code}-INV-${sequence.year}-${String(sequence.lastValue).padStart(6, '0')}`,
+            invoiceCounter: issuer.lastInvoiceCounter,
+            invoiceDate,
+            periodStart,
+            periodEnd,
+            currencyCode: input.currencyCode,
+            customerCodeSnapshot: customer?.customerCode ?? 'ONE-TIME',
+            customerNameEnSnapshot: this.optionalText(input.customerNameEn) ?? customer?.nameEn,
+            customerNameArSnapshot: this.optionalText(input.customerNameAr) ?? customer?.nameAr,
+            customerAddressSnapshot: this.optionalText(input.customerAddress) ?? customer?.address,
+            customerCountrySnapshot: this.optionalText(input.customerCountry) ?? customer?.country,
+            customerPhoneSnapshot: this.optionalText(input.customerPhone) ?? customer?.phoneNumbers[0]?.phoneNumber ?? customer?.phone,
+            customerTaxNumberSnapshot: this.optionalText(input.customerTaxNumber) ?? customer?.taxNumber,
+            issuerCodeSnapshot: issuer.code,
+            issuerLegalNameSnapshot: issuer.legalName,
+            issuerLegalNameArSnapshot: issuer.legalNameAr,
+            issuerCountryCodeSnapshot: issuer.countryCode,
+            issuerPresentationSnapshot: presentation as unknown as Prisma.InputJsonValue,
+            issuerLogoAssetId: presentation.logoAssetId,
+            issuerTaxNumberSnapshot: issuer.taxNumber,
+            issuerAddressSnapshot: issuer.address,
+            issuerInvoiceEmailSnapshot: issuer.invoiceEmail,
+            issuerBankDetailsSnapshot: issuer.bankDetailsCiphertext
+              ? this.decryptBankDetails(issuer.bankDetailsCiphertext)
+              : null,
+            subtotal: totals.subtotal,
+            discountTotal: totals.discountTotal,
+            taxTotal: totals.taxTotal,
+            grandTotal: totals.grandTotal,
+            lines: { create: totals.lines.map((line) => ({
+              position: line.position,
+              description: line.description,
+              quantity: line.quantity,
+              unitPrice: line.unitPrice,
+              discountAmount: line.discountAmount,
+              lineSubtotal: line.lineSubtotal,
+              taxAmount: line.taxAmount,
+              lineTotal: line.lineTotal,
+              taxCategoryCode: line.taxCategoryCode,
+              taxRate: line.taxRate,
+              periodStart: line.periodStart,
+              periodEnd: line.periodEnd,
+            })) },
+          },
+          include: invoiceInclude,
+        });
+        await this.audit.record({
+          actorType: ActorType.USER,
+          actorId: context.actorId,
+          eventKey: 'invoice.manual_draft_created',
+          subjectType: 'Invoice',
+          subjectId: invoice.id,
+          newState: this.auditSnapshot(invoice),
+          ipAddress: context.ipAddress,
+        }, tx);
         return this.toView(invoice);
       });
     } catch (error) {
@@ -314,13 +446,19 @@ export class InvoicesService {
     const periodStart = input.periodStart ? new Date(input.periodStart) : oldState.periodStart;
     const periodEnd = input.periodEnd ? new Date(input.periodEnd) : oldState.periodEnd;
     this.assertPeriod(periodStart, periodEnd);
+    const sourceSubscriptionId = oldState.sourceSubscriptionId;
+    if (oldState.sourceRenewalCaseId &&
+        (periodStart.getTime() !== oldState.periodStart.getTime() ||
+          periodEnd.getTime() !== oldState.periodEnd.getTime())) {
+      throw new BadRequestException('Renewal invoice dates must match the accepted renewal case.');
+    }
 
     const lines = input.lines
       ? input.lines.map((line, index) =>
           this.toCalculationInput(
             line,
             oldState.lines[index],
-            oldState.sourceSubscriptionId,
+            sourceSubscriptionId,
             periodStart,
             periodEnd,
           ),
@@ -341,11 +479,9 @@ export class InvoicesService {
           identifiersSnapshotJson: line.identifiersSnapshotJson,
         }));
     const calculated = calculateInvoice(lines);
-    const activeDraftKey = this.activeDraftKey(
-      oldState.sourceSubscriptionId,
-      periodStart,
-      periodEnd,
-    );
+    const activeDraftKey = sourceSubscriptionId
+      ? this.activeDraftKey(sourceSubscriptionId, periodStart, periodEnd)
+      : null;
 
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -475,67 +611,12 @@ export class InvoicesService {
     );
   }
 
-  async preflight(id: string, connectionId?: string) {
+  async preflight(id: string) {
     const invoice = await this.requireInvoice(id);
     const result = this.preflightService.validate(invoice);
-    const selected = connectionId ?? invoice.selectedConnectionId;
-    const connection = await this.prisma.joFotaraConnection.findFirst({
-      where: {
-        billingEntityId: invoice.billingEntityId,
-        ...(selected ? { id: selected } : { defaultEntityKey: invoice.billingEntityId }),
-      },
-    });
-    const add = (code: string, label: string, pass: boolean, message: string, blocking = true) =>
-      result.checks.push({ code, label, status: pass ? 'PASS' : 'FAIL', message, blocking });
-    add(
-      'BILLING_ENTITY',
-      'Billing Entity',
-      invoice.billingEntity.active,
-      'Invoice must belong to an active Billing Entity.',
-    );
-    const errors = this.mapper.readiness(invoice);
-    add(
-      'UBL_MAPPING',
-      'UBL mapping readiness',
-      errors.length === 0,
-      errors.join(' ') || 'Supported official profile is complete.',
-    );
-    add(
-      'CONNECTION',
-      'Billing Entity connection',
-      Boolean(connection?.enabled),
-      'An enabled connection belonging to this Billing Entity is required.',
-    );
-    add(
-      'INCOME_SOURCE',
-      'Income Source Sequence',
-      Boolean(connection && /^\d+$/.test(connection.incomeSourceSequence)),
-      'Connection must have its own numeric income source sequence.',
-    );
-    add(
-      'CLIENT_ID',
-      'Client ID configured',
-      Boolean(connection?.clientIdCiphertext),
-      'Encrypted Client ID required.',
-    );
-    add(
-      'SECRET_KEY',
-      'Secret Key configured',
-      Boolean(connection?.secretKeyCiphertext),
-      'Encrypted Secret Key required.',
-    );
-    add(
-      'PRODUCTION_PERMISSION',
-      'Production submission',
-      Boolean(connection?.productionSubmissionEnabled),
-      connection?.productionSubmissionEnabled
-        ? 'ENABLED: explicit human action still required.'
-        : 'DISABLED: readiness is allowed, real submission is blocked.',
-      false,
-    );
-    result.valid = result.valid && result.checks.every((c) => !c.blocking || c.status === 'PASS');
-    result.scopeNote =
-      'Snapshot arithmetic, supported ISTD UBL mapping, and issuer-scoped connection readiness. Production permission is separate. No network request is performed.';
+    result.checks.push({ code: 'BILLING_ENTITY', label: 'Legal issuer', status: invoice.billingEntity.active ? 'PASS' : 'FAIL', blocking: true, message: 'An active legal issuer is required.' });
+    result.valid = result.valid && invoice.billingEntity.active;
+    result.scopeNote = 'Manual official issue: invoice snapshot and arithmetic readiness. JoFotara API credentials are not required. No network request is performed.';
     return result;
   }
 
@@ -567,11 +648,9 @@ export class InvoicesService {
         'Only a READY or FAWTARA_REJECTED invoice can return to DRAFT.',
       );
     }
-    const activeDraftKey = this.activeDraftKey(
-      oldState.sourceSubscriptionId,
-      oldState.periodStart,
-      oldState.periodEnd,
-    );
+    const activeDraftKey = oldState.sourceSubscriptionId
+      ? this.activeDraftKey(oldState.sourceSubscriptionId, oldState.periodStart, oldState.periodEnd)
+      : null;
     return this.transitionStatus(
       oldState,
       InvoiceStatus.DRAFT,
@@ -583,11 +662,6 @@ export class InvoicesService {
 
   async recordFawtaraResult(id: string, input: RecordFawtaraResultDto, context: MutationContext) {
     const oldState = await this.requireInvoice(id);
-    this.requireStatus(
-      oldState,
-      InvoiceStatus.READY_FOR_FAWTARA,
-      'Only a READY_FOR_FAWTARA invoice can be officialized.',
-    );
     if (!isManualQrImage(input.qrImageDataUrl)) {
       throw new BadRequestException(
         'An official graphical QR image is required for manual officialization.',
@@ -600,8 +674,9 @@ export class InvoicesService {
       throw new BadRequestException('Accepted EINV status and official number are required.');
     }
     const acceptedAt = new Date(input.acceptedAt);
-    if (!Number.isFinite(acceptedAt.getTime())) {
-      throw new BadRequestException('A valid JoFotara acceptance date is required.');
+    if (!Number.isFinite(acceptedAt.getTime()) || acceptedAt < oldState.invoiceDate ||
+        acceptedAt > this.clock.now()) {
+      throw new BadRequestException('Acceptance date must be between the invoice date and the present.');
     }
 
     const officialValues = {
@@ -611,21 +686,55 @@ export class InvoicesService {
       taxTotal: input.officialTaxTotal ?? null,
       grandTotal: input.officialGrandTotal ?? null,
     };
+    if (!officialValues.currencyCode || !/^[A-Z]{3}$/.test(officialValues.currencyCode) ||
+        [officialValues.subtotal, officialValues.discountTotal, officialValues.taxTotal, officialValues.grandTotal]
+          .some((amount) => amount === null || !/^\d{1,11}(?:\.\d{1,3})?$/.test(amount))) {
+      throw new BadRequestException('The official invoice currency and all official monetary values are required.');
+    }
+    if (this.matchesOfficialization(oldState, input, acceptedAt)) return this.toView(oldState);
+    this.requireStatus(
+      oldState,
+      InvoiceStatus.READY_FOR_FAWTARA,
+      'Only a READY_FOR_FAWTARA invoice can be officialized.',
+    );
+    const preflight = this.preflightService.validate(oldState);
+    if (!preflight.valid || !oldState.billingEntity.active) {
+      throw new BadRequestException({ message: 'Invoice and issuer details must pass preflight.', preflight });
+    }
+    const presentation = readIssuerPresentation(oldState.issuerPresentationSnapshot) ??
+      snapshotPresentation({ issuerType: oldState.billingEntity.issuerType });
     const discrepancies = this.officialDiscrepancies(oldState, officialValues);
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        if (oldState.sourceRenewalCaseId) {
+          if (!oldState.sourceSubscriptionId) throw new ConflictException('Renewal invoice has no linked subscription.');
+          const { renewal, period } = await lockAcceptedRenewal(tx, oldState.sourceRenewalCaseId, oldState.sourceSubscriptionId);
+          if (oldState.customerId !== renewal.subscription.customerId ||
+              oldState.billingEntityId !== renewal.subscription.customer.billingEntityId ||
+              oldState.periodStart.getTime() !== period.start.getTime() ||
+              oldState.periodEnd.getTime() !== period.end.getTime()) {
+            throw new ConflictException('The linked invoice no longer matches the accepted renewal.');
+          }
+        }
         const changed = await tx.invoice.updateMany({
           where: {
             id,
             status: InvoiceStatus.READY_FOR_FAWTARA,
             submissionLock: null,
             revision: oldState.revision,
+            billingEntity: { active: true },
           },
           data: {
             status: InvoiceStatus.FAWTARA_ACCEPTED,
             revision: { increment: 1 },
             activeDraftKey: null,
+            ...(oldState.sourceRenewalCaseId ? { renewalOfficialKey: oldState.sourceRenewalCaseId } : {}),
+            issuerPresentationSnapshot: {
+              ...presentation,
+              templateVersion: presentation.issuerType === 'INDIVIDUAL' ? 'personal-v1' : 'nusrv-company-v1',
+              logoAssetId: oldState.issuerLogoAssetId,
+            },
             fawtaraStatus: input.fawtaraStatus,
             fawtaraInvoiceNumber: input.invoiceNumber.trim(),
             fawtaraInvoiceUuid: this.cleanText(input.invoiceUuid),
@@ -651,6 +760,8 @@ export class InvoicesService {
           },
         });
         if (changed.count !== 1) {
+          const current = await tx.invoice.findUniqueOrThrow({ where: { id }, include: invoiceInclude });
+          if (this.matchesOfficialization(current, input, acceptedAt)) return this.toView(current);
           throw new ConflictException('Invoice status changed concurrently. Reload and try again.');
         }
         const invoice = await tx.invoice.findUniqueOrThrow({
@@ -804,7 +915,7 @@ export class InvoicesService {
   private toCalculationInput(
     input: InvoiceLineInputDto,
     existing: InvoiceWithLines['lines'][number] | undefined,
-    sourceSubscriptionId: string,
+    sourceSubscriptionId: string | null,
     invoicePeriodStart: Date,
     invoicePeriodEnd: Date,
   ): InvoiceLineCalculationInput {
@@ -848,6 +959,27 @@ export class InvoicesService {
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) {
       throw new BadRequestException('Service period end must be after its start date.');
     }
+  }
+
+  private matchesOfficialization(invoice: InvoiceWithLines, input: RecordFawtaraResultDto, acceptedAt: Date) {
+    const verified = officialInvoiceEvidence(invoice);
+    const amounts = [
+      [invoice.officialSubtotal, input.officialSubtotal],
+      [invoice.officialDiscountTotal, input.officialDiscountTotal],
+      [invoice.officialTaxTotal, input.officialTaxTotal],
+      [invoice.officialGrandTotal, input.officialGrandTotal],
+    ] as const;
+    return Boolean(verified &&
+      invoice.officializationProvenance === 'MANUAL' &&
+      verified.invoiceNumber === input.invoiceNumber.trim() &&
+      verified.currency === input.officialCurrencyCode &&
+      invoice.fawtaraStatus === input.fawtaraStatus &&
+      invoice.fawtaraAcceptedAt?.getTime() === acceptedAt.getTime() &&
+      invoice.fawtaraInvoiceUuid === this.cleanText(input.invoiceUuid) &&
+      invoice.fawtaraQrPayload === this.cleanText(input.qrPayload) &&
+      invoice.fawtaraQrImageDataUrl === this.cleanText(input.qrImageDataUrl) &&
+      invoice.officializationNote === this.cleanText(input.note) &&
+      amounts.every(([stored, submitted]) => stored && submitted !== undefined && moneyEqual(stored, submitted)));
   }
 
   private optionalText(value: string | undefined) {
@@ -975,12 +1107,12 @@ export class InvoicesService {
       effectiveDiscountTotal: invoice.officialDiscountTotal ?? invoice.discountTotal,
       effectiveTaxTotal: invoice.officialTaxTotal ?? invoice.taxTotal,
       effectiveGrandTotal: invoice.officialGrandTotal ?? invoice.grandTotal,
+      verifiedOfficial: isVerifiedOfficialInvoice(invoice),
       officialValueDiscrepancies: discrepancies,
       submissionPending: Boolean(invoice.submissionLock),
       finalPrintEnabled:
-        invoice.status === InvoiceStatus.FAWTARA_ACCEPTED &&
+        isVerifiedOfficialInvoice(invoice) &&
         !invoice.reconciliationRequired &&
-        Boolean(invoice.fawtaraQrImageDataUrl) &&
         Boolean(
           invoice.issuerLegalNameSnapshot?.trim() &&
           invoice.issuerAddressSnapshot?.trim() &&

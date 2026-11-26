@@ -1,13 +1,21 @@
 'use client';
 
+import { workspaceStatus } from '../lib/workspace-status';
+
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, type PageResult } from '../lib/api';
 import type { InvoiceView } from './invoice-types';
 import { Notice } from './notice';
+import { Modal } from './modal';
+import { useControlPanel } from './app-shell';
+import { ManualInvoiceDraftForm } from './manual-invoice-draft-form';
 import { PageHeading } from './page-heading';
 
 export function InvoicesManager() {
+  const { can } = useControlPanel();
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualBusy, setManualBusy] = useState(false);
   const [result, setResult] = useState<PageResult<InvoiceView> | null>(null);
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
@@ -34,9 +42,28 @@ export function InvoicesManager() {
       <PageHeading
         eyebrow="Financial operations"
         title="Invoices"
-        description="Human-reviewed invoice snapshots created from active subscriptions. A CRM draft is not an official JoFotara invoice."
+        description="Manually reviewed renewal, subscription and independent invoice drafts. A CRM draft is not an official JoFotara invoice."
       />
       <Notice message={error} />
+      {can('ADMIN') && (
+        <div className="mt-4">
+          <button type="button" className="button-primary" onClick={() => setManualOpen(true)}>
+            + Create Invoice
+          </button>
+        </div>
+      )}
+      {manualOpen && (
+        <Modal title="Create Invoice" maxWidth="54rem" closeDisabled={manualBusy} onClose={() => setManualOpen(false)}>
+          <ManualInvoiceDraftForm
+            onBusyChange={setManualBusy}
+            onCancel={() => setManualOpen(false)}
+            onCreated={() => {
+              void load().catch((cause: unknown) =>
+                setError(cause instanceof Error ? cause.message : 'Unable to refresh invoices.'));
+            }}
+          />
+        </Modal>
+      )}
       <div className="filter-bar mt-6">
         <input
           onChange={(event) => setSearch(event.target.value)}
@@ -45,11 +72,11 @@ export function InvoicesManager() {
         />
         <select onChange={(event) => setStatus(event.target.value)} value={status}>
           <option value="">All statuses</option>
-          <option value="DRAFT">DRAFT</option>
-          <option value="READY_FOR_FAWTARA">READY FOR JOFOTARA</option>
-          <option value="FAWTARA_ACCEPTED">JOFOTARA ACCEPTED</option>
-          <option value="FAWTARA_REJECTED">JOFOTARA REJECTED</option>
-          <option value="CANCELLED">CANCELLED</option>
+          <option value="DRAFT">Draft</option>
+          <option value="READY_FOR_FAWTARA">Ready to Record Official Invoice</option>
+          <option value="FAWTARA_ACCEPTED">Official Invoice Recorded</option>
+          <option value="FAWTARA_REJECTED">Official Invoice Rejected</option>
+          <option value="CANCELLED">Cancelled</option>
         </select>
       </div>
       <div className="table-wrap mt-5">
@@ -70,7 +97,7 @@ export function InvoicesManager() {
             {result?.data.map((invoice) => (
               <tr key={invoice.id}>
                 <td>
-                  <span className="status-badge">{invoice.status}</span>
+                  <span className="status-badge">{workspaceStatus(invoice.status)}</span>
                 </td>
                 <td>
                   {invoice.customerCodeSnapshot}
@@ -78,9 +105,15 @@ export function InvoicesManager() {
                   <small>{invoice.customerNameEnSnapshot || invoice.customerNameArSnapshot}</small>
                 </td>
                 <td>
-                  {invoice.sourceSubscription.name}
-                  <br />
-                  <small>{invoice.sourceSubscription.subscriptionCode}</small>
+                  {invoice.sourceSubscription ? (
+                    <>
+                      {invoice.sourceSubscription.name}
+                      <br />
+                      <small>{invoice.sourceSubscription.subscriptionCode}</small>
+                    </>
+                  ) : (
+                    <span className="muted">{invoice.customerId ? 'Independent / registered customer' : 'Independent / one-time invoice'}</span>
+                  )}
                 </td>
                 <td>{invoice.internalReference}</td>
                 <td>{invoice.fawtaraInvoiceNumber || '—'}</td>

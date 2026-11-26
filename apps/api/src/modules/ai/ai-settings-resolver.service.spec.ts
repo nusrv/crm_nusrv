@@ -1,10 +1,15 @@
 import { jest } from '@jest/globals';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { AiSettingsResolverService, AI_SETTINGS_DEFAULT_CONFIDENCE_THRESHOLD } from './ai-settings-resolver.service';
 
 function fakePrisma(row: Record<string, unknown> | null) {
   const findUnique = jest.fn(() => Promise.resolve(row));
   return { prisma: { aiSettings: { findUnique } }, findUnique };
 }
+
+// Exercise the retained AI implementation behind the frozen production gate.
+beforeEach(() => { jest.spyOn(aiOperationalPolicy, 'isDeferred').mockReturnValue(false); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 describe('AiSettingsResolverService (Phase 3.1 §J)', () => {
   it('returns safe, fully-disabled defaults when no AiSettings row exists — never an error, never inferred enablement', async () => {

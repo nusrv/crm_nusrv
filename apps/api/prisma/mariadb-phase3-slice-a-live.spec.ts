@@ -139,15 +139,16 @@ liveDescribe('Phase 3 Slice A MariaDB communication-domain integration', () => {
       },
     });
     userId = user.id;
-  }, 30_000);
+  }, 120_000);
 
   afterAll(async () => {
-    await prisma?.$disconnect();
-    if (connection) {
-      await reset(connection);
-      await connection.end();
+    try {
+      await prisma?.$disconnect();
+      if (connection) await reset(connection);
+    } finally {
+      if (connection) await connection.end();
     }
-  }, 30_000);
+  }, 120_000);
 
   // ----------------------------------------------------------------------------------------
   // B. Existing CommunicationOutbox rows remain valid with emailMessageId/messageIdHeader NULL

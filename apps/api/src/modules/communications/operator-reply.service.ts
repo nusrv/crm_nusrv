@@ -1,4 +1,6 @@
-import { ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { summarizeSmtpEvidence } from '../mail/smtp-evidence-summary';
+import { outboundMailboxEvidence } from '../mail/outbound-mailbox-evidence';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../database/prisma.service';
 import { ClockService } from '../../time/clock.service';
@@ -7,6 +9,7 @@ import { ActorType, MessageChannel, MessageDirection } from '../../generated/pri
 import { CustomerEmailResolutionService } from '../customers/customer-email-resolution.service';
 import { MailConfigurationResolverService } from '../mail/mail-configuration-resolver.service';
 import { generateStableMessageId } from '../mail/mail-message-id.util';
+import { hasRecordedSmtpAcceptance, resendAuthorizationSchema } from '../mail/outbound-resend-policy';
 import { COMMUNICATION_AUDIT_EVENT } from './communications-events.constants';
 import { deriveReplyThreadingHeaders, MAX_THREADING_CANDIDATE_MESSAGES, normalizeReplySubject } from './reply-threading.util';
 
@@ -48,6 +51,82 @@ export class OperatorReplyService {
     return this.attemptQueueReply(input, 0);
   }
 
+  async evidence(threadId: string, outboxId: string) {
+    const row = await this.prisma.operatorReplyOutbox.findFirst({
+      where: { id: outboxId, threadId },
+      select: { id: true, attempts: true, smtpUncertain: true, resendOfId: true, status: true, lastError: true },
+    });
+    if (!row) throw new NotFoundException('Reply not found.');
+    const events = await this.prisma.auditEvent.findMany({
+      where: { subjectType: 'OperatorReplyOutbox', subjectId: outboxId },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true, eventKey: true, actorId: true, actorType: true, metadata: true, createdAt: true },
+      take: 101,
+    });
+    const mailboxEvidence = await outboundMailboxEvidence(this.prisma, 'OperatorReplyOutbox', outboxId, events, events.length > 100);
+    return { ...row, events: events.slice(0, 100), smtpEvidence: summarizeSmtpEvidence('OperatorReplyOutbox', events, events.length > 100), mailboxEvidence };
+  }
+
+  async resend(threadId: string, outboxId: string, value: unknown, actorId: string) {
+    const parsed = resendAuthorizationSchema.safeParse(value);
+    if (!parsed.success) throw new BadRequestException('Acknowledge the risk of duplicate delivery before resending.');
+    const idempotencyKey = parsed.data.idempotencyKey;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const prior = await tx.operatorReplyOutbox.findUnique({ where: { actorId_idempotencyKey: { actorId, idempotencyKey } } });
+        if (prior) {
+          if (prior.resendOfId !== outboxId || prior.threadId !== threadId)
+            throw new ConflictException('Request identity already used for a different reply.');
+          return this.toResult(prior);
+        }
+        const original = await tx.operatorReplyOutbox.findFirst({
+          where: { id: outboxId, threadId },
+          include: { thread: true, emailMessage: true, mailConfiguration: true },
+        });
+        if (!original) throw new NotFoundException('Reply not found.');
+        if (original.status !== 'FAILED' || !original.smtpUncertain ||
+            await hasRecordedSmtpAcceptance(tx, 'OperatorReplyOutbox', outboxId) ||
+            await tx.operatorReplyOutbox.findUnique({ where: { resendOfId: outboxId } })) {
+          throw new ConflictException('This reply is not eligible for an authorized resend.');
+        }
+        const customerId = original.thread.customerId;
+        if (!customerId || (await this.emailResolution.resolvePrimaryRecipient(customerId, tx))?.email !== original.recipient)
+          throw new ConflictException('The original recipient is no longer registered for this thread.');
+        const config = this.mailConfigResolver.resolvePinned(original.mailConfiguration, { checkCutover: false });
+        if (!config.usable) throw new UnprocessableEntityException('Reply mailbox is unavailable.');
+        const now = this.clock.now();
+        const { subject, bodyText, inReplyTo, references } = original.emailMessage;
+        const message = await tx.emailMessage.create({
+          data: {
+            threadId, customerId, renewalCaseId: original.thread.renewalCaseId,
+            direction: MessageDirection.OUTBOUND, channel: MessageChannel.EMAIL,
+            subject, bodyText, inReplyTo, references, fromAddress: config.config.fromAddress,
+            toAddressesJson: [original.recipient], occurredAt: now, mailConfigurationId: config.config.id,
+            externalMessageId: generateStableMessageId(config.config.fromAddress),
+          },
+        });
+        const queued = await tx.operatorReplyOutbox.create({
+          data: { threadId, mailConfigurationId: config.config.id, emailMessageId: message.id,
+            recipient: original.recipient, idempotencyKey, actorId, resendOfId: outboxId },
+        });
+        await tx.communicationThread.update({ where: { id: threadId }, data: { lastMessageAt: now } });
+        await this.audit.record({
+          actorType: ActorType.USER, actorId, eventKey: 'communication.reply.resend_authorized',
+          subjectType: 'OperatorReplyOutbox', subjectId: queued.id,
+          metadata: { resendOfId: outboxId, duplicateRiskAcknowledged: true, emailMessageId: message.id },
+        }, tx);
+        return this.toResult(queued);
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2002', 'P2034'].includes(error.code)) {
+        const existing = await this.prisma.operatorReplyOutbox.findUnique({ where: { actorId_idempotencyKey: { actorId, idempotencyKey } } });
+        if (existing?.threadId === threadId && existing.resendOfId === outboxId) return this.toResult(existing);
+        throw new ConflictException('The reply was changed or already authorized for resend.');
+      }
+      throw error;
+    }
+  }
+
   /** §15 hardening — verified live against real InnoDB: a genuine concurrent double-submit with
    * the SAME (actorId, idempotencyKey) does not always surface as the clean P2002 unique-constraint
    * error a hand-rolled fake always produces. Depending on lock-wait timing, MariaDB/Prisma can
@@ -80,7 +159,13 @@ export class OperatorReplyService {
 
     // §9 — the thread's own pinned mailbox only, never re-resolved to another BillingEntity/global
     // configuration, and never silently falls back if unusable.
-    const configResolution = this.mailConfigResolver.resolvePinned(thread.mailConfiguration);
+    // Operator-originated replies are independent of automatic-reminder cutover.
+    // Keep the mailbox enablement/environment gates, but do not strand a
+    // human-approved reply behind an unrelated outbound scheduler watermark.
+    const configResolution = this.mailConfigResolver.resolvePinned(
+      thread.mailConfiguration,
+      { checkCutover: false },
+    );
     if (!configResolution.usable) {
       throw new UnprocessableEntityException(`Reply mailbox is unavailable (${configResolution.reason}).`);
     }
@@ -208,12 +293,12 @@ export class OperatorReplyService {
    * across two calls.
    */
   private resolveExisting(
-    existing: { id: string; emailMessageId: string; threadId: string; status: string; emailMessage: { bodyText: string; subject: string } },
+    existing: { id: string; emailMessageId: string; threadId: string; status: string; resendOfId?: string | null; emailMessage: { bodyText: string; subject: string } },
     input: QueueReplyInput,
     effectiveSubject: string,
   ): QueueReplyResult {
     if (
-      existing.threadId !== input.threadId ||
+      existing.threadId !== input.threadId || existing.resendOfId ||
       existing.emailMessage.bodyText !== input.bodyText ||
       existing.emailMessage.subject !== effectiveSubject
     ) {

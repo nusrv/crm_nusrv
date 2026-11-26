@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { ClassificationStatus, MessageDirection } from '../../generated/prisma/enums';
 import { AiClassificationWorker } from './ai.worker';
 import { AI_CLASSIFY_JOB, AI_RECOVERY_JOB, AI_ROUTE_JOB, AI_ROUTING_RECOVERY_JOB } from './ai-queue.constants';
@@ -19,6 +20,10 @@ function fakeConfig(values: Record<string, string>) {
 function fakeRouting() {
   return { processOne: jest.fn(), processBatch: jest.fn() };
 }
+
+// Exercise the retained AI implementation behind the frozen production gate.
+beforeEach(() => { jest.spyOn(aiOperationalPolicy, 'isDeferred').mockReturnValue(false); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 describe('AiClassificationWorker', () => {
   it('dispatches a classify-message job to AiClassificationService with isLastAttempt=false on an early attempt', async () => {

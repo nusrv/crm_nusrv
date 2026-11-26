@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Ip, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Ip, Post, Req, Res } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { CookieOptions, Response } from 'express';
 import { ACCESS_COOKIE, REFRESH_COOKIE } from './auth.constants';
@@ -17,6 +17,7 @@ export class AuthController {
   @Public()
   @Post('login')
   @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
   async login(
     @Body() input: LoginDto,
     @Ip() remoteAddress: string,
@@ -28,6 +29,7 @@ export class AuthController {
     response.cookie(REFRESH_COOKIE, result.refreshToken, {
       ...this.baseCookieOptions(),
       expires: result.refreshExpiresAt,
+      maxAge: Math.max(0, result.refreshExpiresAt.getTime() - Date.now()),
       path: '/api/v1/auth',
     });
     return { mfaRequired: false, user: result.user };
@@ -36,6 +38,7 @@ export class AuthController {
   @Public()
   @Post('refresh')
   @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
   async refresh(
     @Req() request: AuthenticatedRequest,
     @Res({ passthrough: true }) response: Response,
@@ -49,6 +52,7 @@ export class AuthController {
   @Public()
   @Post('logout')
   @HttpCode(204)
+  @Header('Cache-Control', 'no-store')
   async logout(
     @Req() request: AuthenticatedRequest,
     @Res({ passthrough: true }) response: Response,
@@ -60,6 +64,7 @@ export class AuthController {
   }
 
   @Get('me')
+  @Header('Cache-Control', 'no-store')
   currentUser(@Req() request: AuthenticatedRequest) {
     return { user: request.user };
   }

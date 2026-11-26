@@ -1,5 +1,6 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { PrismaService } from '../../database/prisma.service';
 import { ClassificationStatus, MessageDirection } from '../../generated/prisma/enums';
 import { AiClassificationEnqueueService } from './ai-classification-enqueue.service';
@@ -37,6 +38,7 @@ export class AiClassificationWorker extends WorkerHost {
   }
 
   async process(job: Job<AiJobData>) {
+    if (aiOperationalPolicy.isDeferred()) return { disabled: true };
     if (job.name === AI_CLASSIFY_JOB) {
       const data = job.data as ClassifyMessageJobData;
       const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);

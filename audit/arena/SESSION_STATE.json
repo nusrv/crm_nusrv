@@ -1,0 +1,12 @@
+{
+  "phase": "COMPLETE_SIGNED",
+  "lastCompletedRound": 5,
+  "codexSessionId": "01a1f2d8-ce9d-75d1-bc2c-b9ed96fb7341",
+  "codexCli": "codex-cli 0.169.0 (exec resume, high reasoning, read-only)",
+  "openChallengeIds": [],
+  "resolvedChallengeIds": ["CLAUDE-001","CLAUDE-002","CLAUDE-003","CLAUDE-004","CLAUDE-005","CLAUDE-006","CLAUDE-007","CLAUDE-008"],
+  "pendingVerification": ["all runtime/test acceptance (ACCEPTANCE_TESTS.md)", "browser session recovery", "legacy data prevalence"],
+  "stoppingCondition": "Converged: Codex SIGNED round 5; remaining items owner-only (OD-1..OD-12)",
+  "baselineHead": "32013c2",
+  "recovery": "No resume needed. To reopen: codex exec resume 01a1f2d8-ce9d-75d1-bc2c-b9ed96fb7341 with a new round; all prior rounds in audit/arena/rounds/."
+}

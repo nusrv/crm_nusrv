@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { randomBytes } from 'node:crypto';
+import { oauthCacheKey } from './oauth-cache-key';
 import type { MicrosoftOAuth2Credentials } from './microsoft-oauth-credentials';
 import {
   MICROSOFT_OAUTH_TOKEN_REFRESH_SKEW_MS,
@@ -16,7 +18,7 @@ interface CachedToken {
  * (XOAUTH2) against Exchange Online — narrowly scoped to exactly this one grant type/resource, never
  * a general-purpose Graph client and never a Graph API call of any kind.
  *
- * Access tokens are cached ONLY in memory, per (tenantId, clientId), for at most their own
+ * Access tokens are cached ONLY in memory, per exact credential tuple (opaque process-local HMAC), for at most their own
  * server-declared lifetime minus a safety skew — never persisted to the database, never logged, and
  * never included in a thrown error. SmtpMailTransport/ImapMailboxReader call getAccessToken()
  * immediately before use, exactly mirroring how they already decrypt the BASIC `password` field
@@ -32,15 +34,24 @@ export class MicrosoftOAuthTokenProvider {
   fetchImpl: typeof fetch = fetch;
 
   private readonly cache = new Map<string, CachedToken>();
+  private readonly cacheKeySecret = randomBytes(32);
 
   async getAccessToken(credentials: MicrosoftOAuth2Credentials): Promise<string> {
-    const cacheKey = `${credentials.tenantId}:${credentials.clientId}`;
+    const cacheKey = oauthCacheKey(this.cacheKeySecret, credentials);
     const cached = this.cache.get(cacheKey);
     if (cached && cached.expiresAt - MICROSOFT_OAUTH_TOKEN_REFRESH_SKEW_MS > Date.now()) {
       return cached.accessToken;
     }
 
     const token = await this.requestToken(credentials);
+    // Discard expired entries and bound memory even across credential rotations.
+    for (const [key, entry] of this.cache) {
+      if (entry.expiresAt <= Date.now()) this.cache.delete(key);
+    }
+    if (this.cache.size >= 128 && !this.cache.has(cacheKey)) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest !== undefined) this.cache.delete(oldest);
+    }
     this.cache.set(cacheKey, token);
     return token.accessToken;
   }
@@ -91,11 +102,14 @@ export class MicrosoftOAuthTokenProvider {
       throw new Error('Microsoft OAuth token response was not valid JSON.');
     }
 
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error('Microsoft OAuth token response was not a valid object.');
+    }
     const parsed = payload as { access_token?: unknown; expires_in?: unknown };
     if (typeof parsed.access_token !== 'string' || parsed.access_token.length === 0) {
       throw new Error('Microsoft OAuth token response did not include an access token.');
     }
-    const expiresInSeconds = typeof parsed.expires_in === 'number' && parsed.expires_in > 0 ? parsed.expires_in : 3600;
+    const expiresInSeconds = typeof parsed.expires_in === 'number' && Number.isFinite(parsed.expires_in) && parsed.expires_in > 0 ? Math.min(parsed.expires_in, 3600) : 3600;
 
     return { accessToken: parsed.access_token, expiresAt: Date.now() + expiresInSeconds * 1000 };
   }

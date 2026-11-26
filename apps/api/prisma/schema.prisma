@@ -608,6 +608,12 @@ model SubscriptionConnection {
 }
 
 model RenewalCase {
+  communicationRevision Int @default(0) @map("communication_revision")
+  clarificationPending Boolean @default(false) @map("clarification_pending")
+  proposedPeriodStart DateTime? @map("proposed_period_start") @db.Date
+  proposedPeriodEnd DateTime? @map("proposed_period_end") @db.Date
+  proposedNextRenewalDate DateTime? @map("proposed_next_renewal_date") @db.Date
+  invoices Invoice[]
   id                    String                      @id @default(uuid()) @db.VarChar(36)
   subscriptionId        String                      @map("subscription_id") @db.VarChar(36)
   cycleStartDate        DateTime                    @map("cycle_start_date") @db.Date
@@ -879,6 +885,14 @@ model RenewalHold {
 }
 
 model CommunicationOutbox {
+  purpose String? @db.VarChar(24)
+  caseRevision Int? @map("case_revision")
+  recipientContactId String? @map("recipient_contact_id") @db.VarChar(36)
+  resendOfId String? @unique @map("resend_of_id") @db.VarChar(36)
+  manualApprovedBy String? @map("manual_approved_by") @db.VarChar(36)
+  smtpRetrySafe Boolean @default(false) @map("smtp_retry_safe")
+  smtpUncertain Boolean @default(false) @map("smtp_uncertain")
+  nextAttemptAt DateTime? @map("next_attempt_at")
   id                 String                    @id @default(uuid()) @db.VarChar(36)
   customerId         String                    @map("customer_id") @db.VarChar(36)
   subscriptionId     String                    @map("subscription_id") @db.VarChar(36)
@@ -917,6 +931,7 @@ model CommunicationOutbox {
 
   @@index([renewalCaseId, status])
   @@index([status, scheduledAt])
+  @@index([status, nextAttemptAt, scheduledAt], map: "communication_outbox_attempt_due_idx")
   @@index([customerId])
   @@index([subscriptionId])
   @@index([reminderRuleId])
@@ -944,6 +959,9 @@ model CommunicationOutbox {
 // enum TYPE — this is data-type reuse only, never a relation to or dependency on the
 // CommunicationOutbox table/worker/eligibility logic itself.
 model OperatorReplyOutbox {
+  resendOfId String? @unique @map("resend_of_id") @db.VarChar(36)
+  smtpRetrySafe Boolean @default(false) @map("smtp_retry_safe")
+  smtpUncertain Boolean @default(false) @map("smtp_uncertain")
   id                  String                    @id @default(uuid()) @db.VarChar(36)
   threadId            String                    @map("thread_id") @db.VarChar(36)
   mailConfigurationId String                    @map("mail_configuration_id") @db.VarChar(36)
@@ -1055,6 +1073,8 @@ model CommunicationThread {
 }
 
 model EmailMessage {
+  reviewedAt DateTime? @map("reviewed_at")
+  reviewedBy String? @map("reviewed_by") @db.VarChar(36)
   id                       String                @id @default(uuid()) @db.VarChar(36)
   threadId                 String                @map("thread_id") @db.VarChar(36)
   customerId               String?               @map("customer_id") @db.VarChar(36)
@@ -1380,11 +1400,71 @@ model MailConfiguration {
   emailMessages             EmailMessage[]
   healthEvents              IntegrationHealthEvent[]
   operatorReplyOutbox       OperatorReplyOutbox[]
+  evidenceFolderCheckpoints MailEvidenceFolderCheckpoint[]
+  sentConnectionEpoch       MailSentConnectionEpoch?
+  providerEvidenceBindings  MailProviderEvidenceBinding[]
+  dsnFollowUps              MailDsnFollowUp[]
+  dsnReviews                MailDsnReview[]
 
   @@index([billingEntityId])
   @@index([environment])
   @@index([enabled])
   @@map("mail_configurations")
+}
+
+// P2.B: new folder-scoped checkpoint storage, NOT yet a worker cursor. Existing
+// MailConfiguration.lastSyncUidValidity/lastSyncUid remain authoritative for
+// current INBOX ingestion until owner-approved migration/cutover. No implicit
+// Sent/DSN folder discovery, no automatic seeding, and syncEnabled defaults false.
+// folderIdentityKey is a SHA-256 of the exact canonical IMAP folder (INBOX alone
+// is case-insensitive); unique identity does NOT rely on MariaDB's default
+// case-insensitive collation for folderName.
+model MailEvidenceFolderCheckpoint {
+  id                  String             @id @default(uuid()) @db.VarChar(36)
+  mailConfigurationId String             @map("mail_configuration_id") @db.VarChar(36)
+  folderName          String             @map("folder_name") @db.VarChar(255)
+  folderIdentityKey   String             @map("folder_identity_key") @db.VarChar(67)
+  connectionGeneration String            @default("legacy") @map("connection_generation") @db.VarChar(36)
+  sourceKind          String             @map("source_kind") @db.VarChar(24)
+  syncEnabled         Boolean            @default(false) @map("sync_enabled")
+  uidValidity         BigInt?            @map("uid_validity")
+  lastUid             BigInt?            @map("last_uid")
+  capability          String             @default("UNPROBED") @db.VarChar(24)
+  lastProbeAt         DateTime?          @map("last_probe_at")
+  lastObservedAt      DateTime?          @map("last_observed_at")
+  lastError           String?            @map("last_error") @db.VarChar(1000)
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+  mailConfiguration   MailConfiguration  @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict, map: "mail_evidence_folder_checkpoints_configuration_fkey")
+  // P2.C: independent observational metadata; no delivery or customer decision.
+  sentObservations    MailSentObservation[]
+
+  @@unique([mailConfigurationId, folderIdentityKey, connectionGeneration], map: "mail_evidence_folder_checkpoints_config_identity_uq")
+  @@index([mailConfigurationId, sourceKind], map: "mail_evidence_folder_checkpoints_config_kind_idx")
+  @@index([syncEnabled], map: "mail_evidence_folder_checkpoints_sync_enabled_idx")
+  @@map("mail_evidence_folder_checkpoints")
+}
+
+// P2.C Sent-folder evidence is NOT an EmailMessage and does not imply
+// customer delivery or human review. No mail worker or API may use this model
+// before separate P2.C release authorization, migration and concurrency proof.
+// Source identity reuses the frozen IMAP v1 tuple hashing contract.
+model MailSentObservation {
+  id                 String                        @id @default(uuid()) @db.VarChar(36)
+  folderCheckpointId String                        @map("folder_checkpoint_id") @db.VarChar(36)
+  sourceIdentityKey  String                        @unique(map: "mail_sent_observations_source_key_uq") @map("source_identity_key") @db.VarChar(67)
+  uidValidity        BigInt                        @map("uid_validity")
+  uid                BigInt
+  internalDate       DateTime?                     @map("internal_date")
+  messageIdHeader    String?                       @map("message_id_header") @db.VarChar(500)
+  parseFailed        Boolean                       @default(false) @map("parse_failed")
+  deliveryStatus     String                        @default("UNKNOWN") @map("delivery_status") @db.VarChar(24)
+  createdAt          DateTime                      @default(now()) @map("created_at")
+  folderCheckpoint   MailEvidenceFolderCheckpoint  @relation(fields: [folderCheckpointId], references: [id], onDelete: Restrict, map: "mail_sent_observations_checkpoint_fkey")
+
+  @@unique([folderCheckpointId, uidValidity, uid], map: "mail_sent_observations_ckpt_uid_uq")
+  @@index([folderCheckpointId, createdAt], map: "mail_sent_observations_ckpt_created_idx")
+  @@map("mail_sent_observations")
 }
 
 // Immutable event/signal log — NOT the future Phase 6/7 incident/action queue. Recovery is
@@ -1471,13 +1551,19 @@ model InvoiceSequence {
 // retained for traceability and use RESTRICT so financial history can never disappear through an
 // existing Customer/Subscription deletion flow.
 model Invoice {
+  qrCorrections InvoiceQrCorrection[]
+  renewalOfficialKey String? @unique(map: "invoices_renewal_official_key") @map("renewal_official_key") @db.VarChar(36)
+  sourceRenewalCaseId String? @map("source_renewal_case_id") @db.VarChar(36)
+  sourceRenewalCase RenewalCase? @relation(fields: [sourceRenewalCaseId], references: [id], onDelete: Restrict)
+  payments Payment[]
+  @@index([sourceRenewalCaseId])
   issuerPresentationSnapshot Json?                 @map("issuer_presentation_snapshot")
   issuerLogoAssetId          String?               @map("issuer_logo_asset_id") @db.VarChar(36)
   issuerLogoAsset            InvoiceBrandingAsset? @relation(fields: [issuerLogoAssetId], references: [id], onDelete: Restrict)
   id                         String                @id @default(uuid()) @db.VarChar(36)
-  customerId                 String                @map("customer_id") @db.VarChar(36)
+  customerId                 String?                @map("customer_id") @db.VarChar(36)
   billingEntityId            String                @map("billing_entity_id") @db.VarChar(36)
-  sourceSubscriptionId       String                @map("source_subscription_id") @db.VarChar(36)
+  sourceSubscriptionId       String?                @map("source_subscription_id") @db.VarChar(36)
   status                     InvoiceStatus         @default(DRAFT)
   internalReference          String                @unique @map("internal_reference") @db.VarChar(80)
   // Non-null only while the invoice is DRAFT/READY. The nullable unique key is the concurrent
@@ -1545,9 +1631,9 @@ model Invoice {
 
   createdAt          DateTime      @default(now()) @map("created_at")
   updatedAt          DateTime      @updatedAt @map("updated_at")
-  customer           Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict, map: "invoices_customer_fkey")
+  customer           Customer?      @relation(fields: [customerId], references: [id], onDelete: Restrict, map: "invoices_customer_fkey")
   billingEntity      BillingEntity @relation(fields: [billingEntityId], references: [id], onDelete: Restrict, map: "invoices_billing_entity_fkey")
-  sourceSubscription Subscription  @relation("InvoiceSourceSubscription", fields: [sourceSubscriptionId], references: [id], onDelete: Restrict, map: "invoices_source_subscription_fkey")
+  sourceSubscription Subscription?  @relation("InvoiceSourceSubscription", fields: [sourceSubscriptionId], references: [id], onDelete: Restrict, map: "invoices_source_subscription_fkey")
   lines              InvoiceLine[]
 
   @@unique([billingEntityId, fawtaraInvoiceNumber], map: "invoices_entity_fawtara_number_key")
@@ -1675,4 +1761,167 @@ model InvoiceBrandingAsset {
 
   @@unique([billingEntityId, sha256])
   @@map("invoice_branding_assets")
+}
+
+// Append-only human-recorded collection ledger. Financial history is never cascade-deleted.
+model Payment {
+ id String @id @default(uuid()) @db.VarChar(36)
+ invoiceId String @map("invoice_id") @db.VarChar(36)
+ amount Decimal @db.Decimal(14,3)
+ currency String @db.VarChar(3)
+ paymentDate DateTime @map("payment_date") @db.Date
+ method String @db.VarChar(30)
+ reference String? @db.VarChar(191)
+ notes String? @db.Text
+ recordedBy String @map("recorded_by") @db.VarChar(36)
+ idempotencyKey String @unique @map("idempotency_key") @db.VarChar(80)
+ createdAt DateTime @default(now()) @map("created_at")
+ invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+ receipt PaymentReceipt?
+ @@index([invoiceId,paymentDate])
+ @@map("payments")
+}
+model PaymentReceipt {
+ id String @id @default(uuid()) @db.VarChar(36)
+ paymentId String @unique @map("payment_id") @db.VarChar(36)
+ snapshot Json
+ createdBy String @map("created_by") @db.VarChar(36)
+ createdAt DateTime @default(now()) @map("created_at")
+ payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+ revisions PaymentReceiptRevision[]
+ @@map("payment_receipts")
+}
+
+model PaymentReceiptRevision {
+  id             String         @id @default(uuid()) @db.VarChar(36)
+  receiptId      String         @map("receipt_id") @db.VarChar(36)
+  version        Int
+  amount         Decimal        @db.Decimal(14, 3)
+  currency       String         @db.VarChar(3)
+  paymentDate    DateTime       @map("payment_date") @db.Date
+  method         String         @db.VarChar(30)
+  reference      String?        @db.VarChar(191)
+  notes          String?        @db.Text
+  voided         Boolean        @default(false)
+  reason         String         @db.VarChar(500)
+  actorId        String         @map("actor_id") @db.VarChar(36)
+  requestKey     String?        @unique @map("request_key") @db.VarChar(80)
+  requestHash    String?        @map("request_hash") @db.VarChar(64)
+  createdAt      DateTime       @default(now()) @map("created_at")
+  receipt        PaymentReceipt @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+
+  @@unique([receiptId, version])
+  @@map("payment_receipt_revisions")
+}
+
+model InvoiceQrCorrection {
+  id                 String   @id @default(uuid()) @db.VarChar(36)
+  invoiceId          String   @map("invoice_id") @db.VarChar(36)
+  invoiceRevision    Int      @map("invoice_revision")
+  oldImageDataUrl    String?  @map("old_image_data_url") @db.MediumText
+  newImageDataUrl    String   @map("new_image_data_url") @db.MediumText
+  reason             String   @db.VarChar(500)
+  actorId            String   @map("actor_id") @db.VarChar(36)
+  createdAt          DateTime @default(now()) @map("created_at")
+  invoice            Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, invoiceRevision])
+  @@map("invoice_qr_corrections")
+}
+
+
+// P2.D: inactive provider-binding history and corroborated DSN follow-up storage.
+// The nullable unique current mailbox key permits many retired generations but
+// at most one current generation per configuration. No existing row is seeded.
+model MailProviderEvidenceBinding {
+  generation          String            @id @db.VarChar(36)
+  mailConfigurationId String            @map("mail_configuration_id") @db.VarChar(36)
+  currentMailboxKey   String?           @unique(map: "mail_provider_bindings_current_uq") @map("current_mailbox_key") @db.VarChar(36)
+  providerNamespace   String            @map("provider_namespace") @db.VarChar(64)
+  providerAccountId   String            @map("provider_account_id") @db.VarChar(512)
+  sourceBindingKey    String            @unique(map: "mail_provider_bindings_source_uq") @map("source_binding_key") @db.VarChar(96)
+  observationEnabled  Boolean           @default(false) @map("observation_enabled")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  mailConfiguration   MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "mail_provider_bindings_config_fk")
+  observations        MailDsnObservation[]
+
+  @@unique([sourceBindingKey, mailConfigurationId], map: "mail_provider_bindings_scope_uq")
+  @@index([mailConfigurationId, createdAt], map: "mail_provider_bindings_config_idx")
+  @@map("mail_provider_evidence_bindings")
+}
+
+model MailDsnFollowUp {
+  id                  String            @id @default(uuid()) @db.VarChar(36)
+  followUpKey         String            @unique(map: "mail_dsn_follow_ups_key_uq") @map("follow_up_key") @db.VarChar(80)
+  mailConfigurationId String            @map("mail_configuration_id") @db.VarChar(36)
+  subjectType         String            @map("subject_type") @db.VarChar(32)
+  subjectId           String            @map("subject_id") @db.VarChar(36)
+  attemptId           String            @map("attempt_id") @db.VarChar(36)
+  recipient           String            @db.VarChar(320)
+  originalMessageId   String            @map("original_message_id") @db.VarChar(500)
+  status              String            @default("OPEN") @db.VarChar(16)
+  revision            Int               @default(1)
+  // Retain historical actor ID independently of later user administration.
+  resolvedById        String?           @map("resolved_by_id") @db.VarChar(36)
+  resolvedAt          DateTime?         @map("resolved_at")
+  resolutionReason    String?           @map("resolution_reason") @db.VarChar(500)
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  mailConfiguration   MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "mail_dsn_follow_ups_config_fk")
+  observations        MailDsnObservation[]
+
+  @@unique([followUpKey, mailConfigurationId], map: "mail_dsn_follow_ups_scope_uq")
+  @@index([status, createdAt], map: "mail_dsn_follow_ups_status_created_idx")
+  @@index([subjectType, subjectId, attemptId], map: "mail_dsn_follow_ups_subject_idx")
+  @@map("mail_dsn_follow_ups")
+}
+
+model MailDsnObservation {
+  id                  String                      @id @default(uuid()) @db.VarChar(36)
+  observationKey      String                      @unique(map: "mail_dsn_observations_key_uq") @map("observation_key") @db.VarChar(80)
+  followUpKey         String                      @map("follow_up_key") @db.VarChar(80)
+  mailConfigurationId String                      @map("mail_configuration_id") @db.VarChar(36)
+  sourceBindingKey    String                      @map("source_binding_key") @db.VarChar(96)
+  // Separate FK scalar plus SQL CHECK enforces the same mailbox on both relations.
+  bindingMailboxId    String                      @map("binding_mailbox_id") @db.VarChar(36)
+  sourceObjectId      String                      @map("source_object_id") @db.VarChar(256)
+  folder              String                      @db.VarChar(255)
+  enhancedStatus      String                      @map("enhanced_status") @db.VarChar(9)
+  createdAt           DateTime                    @default(now()) @map("created_at")
+  followUp            MailDsnFollowUp             @relation(fields: [followUpKey, mailConfigurationId], references: [followUpKey, mailConfigurationId], onDelete: Restrict, onUpdate: Restrict, map: "mail_dsn_observations_task_fk")
+  binding             MailProviderEvidenceBinding @relation(fields: [sourceBindingKey, bindingMailboxId], references: [sourceBindingKey, mailConfigurationId], onDelete: Restrict, onUpdate: Restrict, map: "mail_dsn_observations_binding_fk")
+
+  @@index([followUpKey, mailConfigurationId], map: "mail_dsn_observations_task_idx")
+  @@index([sourceBindingKey, bindingMailboxId], map: "mail_dsn_observations_binding_idx")
+  @@map("mail_dsn_observations")
+}
+
+// Untrusted transport reports are not customer EmailMessages or delivery proof.
+model MailDsnReview {
+  id                  String            @id @default(uuid()) @db.VarChar(36)
+  identityKey         String            @unique(map: "mail_dsn_reviews_identity_uq") @map("identity_key") @db.VarChar(80)
+  mailConfigurationId String            @map("mail_configuration_id") @db.VarChar(36)
+  folder              String            @db.VarChar(255)
+  uidValidity         BigInt            @map("uid_validity")
+  uid                 BigInt
+  reason              String            @db.VarChar(32)
+  sourceSha256        String            @map("source_sha256") @db.VarChar(64)
+  subject             String            @db.VarChar(500)
+  fromAddress         String            @map("from_address") @db.VarChar(320)
+  bodyText            String            @map("body_text") @db.Text
+  occurredAt          DateTime          @map("occurred_at")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  mailConfiguration   MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "mail_dsn_reviews_config_fk")
+  @@index([createdAt, id], map: "mail_dsn_reviews_created_idx")
+  @@map("mail_dsn_reviews")
+}
+
+// Local connection fence only; never provider-authenticated delivery evidence.
+model MailSentConnectionEpoch {
+  mailConfigurationId String @id @map("mail_configuration_id") @db.VarChar(36)
+  generation String @db.VarChar(36)
+  mailConfiguration MailConfiguration @relation(fields: [mailConfigurationId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "mail_sent_connection_epochs_config_fk")
+
+  @@map("mail_sent_connection_epochs")
 }

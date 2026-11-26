@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useControlPanel } from './app-shell';
 import { Modal } from './modal';
+import { useModalSave } from '../lib/use-modal-save';
 import { Notice } from './notice';
 import { PageHeading } from './page-heading';
 
@@ -25,10 +26,11 @@ interface TechnicalConnection {
 
 export function TechnicalConnectionsManager() {
   const { can } = useControlPanel();
-  const canManage = can('ADMIN', 'IT');
+  const canManage = can('ADMIN');
   const [items, setItems] = useState<TechnicalConnection[]>([]);
   const [editing, setEditing] = useState<TechnicalConnection | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const saveState = useModalSave();
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   async function load() {
@@ -44,6 +46,7 @@ export function TechnicalConnectionsManager() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const value = (name: string) => String(form.get(name) ?? '').trim();
+    if (!saveState.begin()) return;
     try {
       const capabilitiesText = value('capabilities');
       const credentialsText = value('credentials');
@@ -61,19 +64,21 @@ export function TechnicalConnectionsManager() {
           : undefined,
         ...(editing ? { clearCredentials: form.get('clearCredentials') === 'on' } : {}),
       };
-      await apiRequest(`/technical-connections${editing ? `/${editing.id}` : ''}`, {
+      const saved = await apiRequest<TechnicalConnection>(`/technical-connections${editing ? `/${editing.id}` : ''}`, {
         method: editing ? 'PATCH' : 'POST',
         body: JSON.stringify(body),
       });
-      setFormOpen(false);
-      setEditing(null);
+      setEditing(saved);
+      saveState.markSaved();
       setMessage(
         'Technical Connection saved. Credentials were encrypted and the change was audited.',
       );
       setError('');
-      await load();
+      await load().catch(() => setError('Saved successfully, but the list could not be refreshed.'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Save failed.');
+    } finally {
+      saveState.finish();
     }
   }
 
@@ -95,7 +100,7 @@ export function TechnicalConnectionsManager() {
             className="button-primary"
             onClick={() => {
               setEditing(null);
-              setFormOpen(true);
+              setError(''); setMessage(''); setFormOpen(true);
             }}
             type="button"
           >
@@ -106,14 +111,15 @@ export function TechnicalConnectionsManager() {
       {formOpen && (
         <Modal
           maxWidth="48rem"
-          onClose={() => setFormOpen(false)}
+          closeDisabled={saveState.busy}
+          onClose={() => { if (!saveState.busy) setFormOpen(false); }}
           title={editing ? `Edit ${editing.code}` : 'Create Technical Connection'}
         >
           <Notice message={error} />
           <Notice message={message} tone="success" />
           <form
             className="form-grid"
-            key={editing?.id ?? 'new'}
+            key={`${editing?.id ?? 'new'}:${saveState.revision}`}
             onSubmit={(event) => void save(event)}
           >
             {!editing && (
@@ -184,10 +190,10 @@ export function TechnicalConnectionsManager() {
               </label>
             )}
             <div className="field-wide flex gap-3">
-              <button className="button-primary" type="submit">
+              <button className="button-primary" disabled={saveState.busy} type="submit">
                 Save secure configuration
               </button>
-              <button className="button-secondary" onClick={() => setFormOpen(false)} type="button">
+              <button className="button-secondary" disabled={saveState.busy} onClick={() => setFormOpen(false)} type="button">
                 Cancel
               </button>
             </div>
@@ -240,7 +246,7 @@ export function TechnicalConnectionsManager() {
                       className="button-small"
                       onClick={() => {
                         setEditing(item);
-                        setFormOpen(true);
+                        setError(''); setMessage(''); setFormOpen(true);
                       }}
                       type="button"
                     >

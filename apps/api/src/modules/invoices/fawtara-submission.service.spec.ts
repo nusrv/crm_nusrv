@@ -4,8 +4,8 @@ import { FawtaraMapper } from './fawtara-mapper';
 import { fixture } from './jofotara-test-fixture';
 import type { HumanSubmissionContext } from './fawtara-submission.service';
 const context: HumanSubmissionContext = {
-  actorId: 'accountant',
-  roles: ['ACCOUNTANT'],
+  actorId: 'admin',
+  roles: ['ADMIN'],
   initiation: 'HUMAN',
 };
 const input = { confirmation: 'CREATE_REAL_JOFOTARA_INVOICE' };
@@ -158,11 +158,18 @@ describe('Human-only real submission orchestration (mock gateway)', () => {
     );
     expect(h.gateway.submit).not.toHaveBeenCalled();
   });
-  it('blocks non-human initiation even with accountant role', async () => {
+  it('blocks non-human initiation even with the ADMIN role', async () => {
     const h = harness();
     await expect(
       h.service.submit(h.i.id, input, { ...context, initiation: 'WORKER' as 'HUMAN' }),
     ).rejects.toThrow('human');
+  });
+  it('blocks a legacy accountant before preflight or submission', async () => {
+    const h = harness();
+    await expect(h.service.submit(h.i.id, input, { ...context, roles: ['ACCOUNTANT'] }))
+      .rejects.toThrow('Only an authorized human');
+    expect(h.invoices.preflight).not.toHaveBeenCalled();
+    expect(h.gateway.submit).not.toHaveBeenCalled();
   });
   it('HTTP success with rejected status does not accept', async () => {
     const h = harness();
@@ -188,7 +195,10 @@ describe('Human-only real submission orchestration (mock gateway)', () => {
       { ...input, recoverUncertain: true, connectionId: 'changed-default' },
       context,
     );
-    expect(h.invoices.preflight).toHaveBeenLastCalledWith(h.i.id, 'conn-a');
+    expect(h.invoices.preflight).toHaveBeenLastCalledWith(h.i.id);
+    expect(h.tx.joFotaraConnection.findFirst).toHaveBeenLastCalledWith({
+      where: { billingEntityId: 'entity-a', id: 'conn-a' },
+    });
     expect(h.get()?.requestXml).toBe(xml);
     expect(h.gateway.submit).toHaveBeenCalledTimes(2);
   });

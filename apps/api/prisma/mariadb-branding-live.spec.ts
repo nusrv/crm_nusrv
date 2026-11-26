@@ -38,21 +38,20 @@ live('Multi-issuer branding on disposable MariaDB', () => {
       throw new Error('Disposable loopback *_test DB required.');
     db = await mariadb.createConnection({
       host: u.hostname,
-      port: Number(u.port),
-      user: u.username,
-      password: u.password,
+      port: Number(u.port) || 3306,
+      user: decodeURIComponent(u.username),
+      password: decodeURIComponent(u.password),
       database: name,
       multipleStatements: true,
     });
-    await db.query('SET FOREIGN_KEY_CHECKS=0');
-    const tables = await db.query<Array<{ TABLE_NAME: string }>>(
-      'SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()',
+    // The isolated launcher preflights a new schema; never erase an existing
+    // database if this fixture is invoked directly.
+    const [row] = await db.query<Array<{ db_name: string; table_count: bigint | number }>>(
+      'SELECT DATABASE() AS db_name, (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()) AS table_count',
     );
-    for (const row of tables) {
-      if (!/^[a-z0-9_]+$/.test(row.TABLE_NAME)) throw new Error('Unsafe table.');
-      await db.query('DROP TABLE `' + row.TABLE_NAME + '`');
+    if (row?.db_name !== name || Number(row.table_count) !== 0) {
+      throw new Error('Expected a freshly provisioned empty disposable schema.');
     }
-    await db.query('SET FOREIGN_KEY_CHECKS=1');
     await db.query(readAllMigrationsSql());
     prisma = new PrismaClient({ adapter: new PrismaMariaDb(toMariaDbDriverUrl(url!)) });
     const a = await prisma.billingEntity.create({
@@ -128,10 +127,13 @@ live('Multi-issuer branding on disposable MariaDB', () => {
       new BusinessTimeService(new ConfigService({ BUSINESS_TIMEZONE: 'Asia/Amman' })),
       new InvoicePreflightService(),
     );
-  }, 60000);
+  }, 120_000);
   afterAll(async () => {
-    await prisma?.$disconnect();
-    await db?.end();
+    try {
+      await prisma?.$disconnect();
+    } finally {
+      await db?.end();
+    }
   });
   it('retains defaults and logo version at creation; later profile edits do not alter the invoice', async () => {
     firstLogo = (

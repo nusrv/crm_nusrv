@@ -1,7 +1,13 @@
+import { jest } from '@jest/globals';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { AnthropicProviderAdapter } from './anthropic-provider-adapter';
 import { GoogleGeminiProviderAdapter } from './google-gemini-provider-adapter';
 import { LlmProviderRegistry } from './llm-provider-registry.service';
 import { OpenAiProviderAdapter } from './openai-provider-adapter';
+
+// Exercise the retained AI implementation behind the frozen production gate.
+beforeEach(() => { jest.spyOn(aiOperationalPolicy, 'isDeferred').mockReturnValue(false); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 describe('LlmProviderRegistry (provider-neutral dispatcher)', () => {
   it('P1 — OPENAI resolves only the OpenAI adapter', () => {

@@ -1,0 +1,2 @@
+ROUND 5 (same thread; read-only; modify nothing)
+All five Round-4 objections were applied verbatim to audit/arena/FINAL_MASTER_PLAN.md and ACCEPTANCE_TESTS.md (scope summary AI sentence, sequencing/rollback lines, acceptance lines 9-14 and 20-22, finance text, OD-5). Re-read both files fully. Reply with exactly: SIGNED (if genuinely complete, with a one-line statement of what you did and did not verify) OR numbered remaining objections with exact replacement text. Nothing else needed.

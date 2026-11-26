@@ -1,0 +1,123 @@
+name: P1 isolated MariaDB migration rehearsal
+
+# Manually triggered only for this NUSRV CRM disposable database workflow.
+# Do not run on every commit/push to the recovery branch.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p1-disposable-db-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  disposable-db:
+    name: Fresh schema migration and focused P1/P2 checks (disposable only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: ci-throwaway-root-only
+          MARIADB_DATABASE: nusrv_rehearsal_test
+          MARIADB_USER: nusrv_rehearsal
+          MARIADB_PASSWORD: ci-throwaway-user-only
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      # A new MariaDB container is created for each CI job. NEVER set this
+      # to an owner-controlled or production database.
+      DATABASE_URL: mysql://nusrv_rehearsal:ci-throwaway-user-only@127.0.0.1:3306/nusrv_rehearsal_test
+      MARIADB_TEST_DATABASE_URL: mysql://nusrv_rehearsal:ci-throwaway-user-only@127.0.0.1:3306/nusrv_rehearsal_test
+      SMTP_MODE: mock
+      IMAP_MODE: mock
+      AI_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Generate Prisma client without connecting
+        run: npm run db:generate
+      - name: Verify disposable target identity (never production)
+        shell: bash
+        run: |
+          node -e '
+            const a = new URL(process.env.DATABASE_URL);
+            const b = new URL(process.env.MARIADB_TEST_DATABASE_URL);
+            if (a.protocol !== "mysql:" || a.hostname !== "127.0.0.1" ||
+                a.pathname !== "/nusrv_rehearsal_test" || a.href !== b.href) {
+              throw new Error("Refusing non-disposable MariaDB target");
+            }
+            console.log("Verified disposable localhost *_test target");
+          '
+      - name: Apply complete checked-in Prisma migration history to fresh disposable DB
+        working-directory: apps/api
+        run: ../../node_modules/.bin/prisma migrate deploy
+      - name: Verify all Prisma migrations applied
+        working-directory: apps/api
+        run: ../../node_modules/.bin/prisma migrate status
+      - name: Focused P1 finance invariants on real disposable MariaDB
+        working-directory: apps/api
+        run: node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --runInBand prisma/p1-finance-mariadb-live.spec.ts
+      - name: P2 independent folder cursor guard on disposable MariaDB
+        working-directory: apps/api
+        run: node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --runInBand prisma/p2-evidence-folder-mariadb-live.spec.ts
+      - name: P2 DSN physical persistence and invalidation on disposable MariaDB
+        working-directory: apps/api
+        run: node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --runInBand prisma/p2-dsn-prisma-mariadb-live.spec.ts
+
+  legacy-db:
+    name: Historical MariaDB / ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        suite: [core, phase2, phase21, subscription_backfill, subscription_sequence_delete, phase3a, phase3b, phase3c, phase3d, phase3e, phase4, branding]
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: ci-legacy-throwaway-root
+          MARIADB_DATABASE: nusrv_legacy_${{ matrix.suite }}_test
+          MARIADB_USER: nusrv_legacy
+          MARIADB_PASSWORD: ci-legacy-throwaway-user
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      DATABASE_URL: mysql://nusrv_legacy:ci-legacy-throwaway-user@127.0.0.1:3306/nusrv_legacy_${{ matrix.suite }}_test
+      MARIADB_TEST_DATABASE_URL: mysql://nusrv_legacy:ci-legacy-throwaway-user@127.0.0.1:3306/nusrv_legacy_${{ matrix.suite }}_test
+      SMTP_MODE: mock
+      IMAP_MODE: mock
+      AI_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Generate Prisma client
+        run: npm run db:generate
+      - name: Run isolated historical fixture
+        working-directory: apps/api
+        run: node scripts/run-mariadb-integration.mjs --suite ${{ matrix.suite }}

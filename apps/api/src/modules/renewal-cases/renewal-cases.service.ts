@@ -1,3 +1,7 @@
+import { summarizeSmtpEvidence } from '../mail/smtp-evidence-summary';
+import { proposedRenewalPeriod } from './renewal-period';
+import { lockAcceptedRenewal } from './accepted-renewal-invoice';
+import { isVerifiedOfficialInvoice } from '../invoices/official-invoice-eligibility';
 import {
   BadRequestException,
   ConflictException,
@@ -32,6 +36,16 @@ export const TERMINAL_STATUSES: RenewalCaseStatus[] = [
 ];
 
 const renewalCaseInclude = {
+  invoices: {
+    select: {
+      id: true,
+      status: true,
+      internalReference: true,
+      fawtaraInvoiceNumber: true,
+      renewalOfficialKey: true,
+    },
+  },
+  emailMessages: { where: { direction: 'INBOUND' as const }, orderBy: { occurredAt: 'desc' as const }, take: 20, select: { id: true, reviewedAt: true, occurredAt: true, threadId: true } },
   subscription: {
     include: {
       customer: {
@@ -55,11 +69,12 @@ const renewalCaseInclude = {
   // the single most recent outbox message tells us "not sent / queued / delivered / failed"
   // without pulling the full history, which the detail view fetches separately.
   communicationOutbox: {
+    where: { audience: 'CUSTOMER' as const },
     orderBy: { queuedAt: 'desc' as const },
     take: 1,
-    select: { status: true, queuedAt: true, audience: true },
+    select: { status: true, queuedAt: true, audience: true, smtpUncertain: true },
   },
-  _count: { select: { communicationOutbox: true } },
+  _count: { select: { communicationOutbox: { where: { audience: 'CUSTOMER' as const } }, emailMessages: { where: { direction: 'INBOUND' as const, reviewedAt: null } } } },
 } as const;
 
 @Injectable()
@@ -127,7 +142,8 @@ export class RenewalCasesService {
       }),
       this.prisma.renewalCase.count({ where }),
     ]);
-    return { data, meta: pageMetadata(total, query.page, query.pageSize), asOf: now.toISOString() };
+    const summaries = await this.reminderSummaries(data.map(row => row.id));
+    return { data: data.map(row => ({ ...row, unreadReplyCount: row._count.emailMessages, reminderSummary: summaries.get(row.id) ?? { acceptedCount: 0, lastAcceptedAt: null } })), meta: pageMetadata(total, query.page, query.pageSize), asOf: now.toISOString() };
   }
 
   /**
@@ -171,11 +187,58 @@ export class RenewalCasesService {
       include: {
         ...renewalCaseInclude,
         communicationOutbox: { orderBy: { queuedAt: 'desc' }, take: 100 },
-        evaluationDecisions: { orderBy: { createdAt: 'desc' }, take: 100 },
+        invoices: true,
       },
     });
     if (!record) throw new NotFoundException('Renewal Case not found.');
-    return record;
+    const summaries = await this.reminderSummaries([id]);
+    return { ...record, invoices: record.invoices.map(invoice => ({ id: invoice.id, status: invoice.status, internalReference: invoice.internalReference, fawtaraInvoiceNumber: invoice.fawtaraInvoiceNumber, renewalOfficialKey: invoice.renewalOfficialKey, verifiedOfficial: isVerifiedOfficialInvoice(invoice) })), unreadReplyCount: record._count.emailMessages, reminderSummary: summaries.get(id) ?? { acceptedCount: 0, lastAcceptedAt: null } };
+  }
+
+  private async reminderSummaries(caseIds: string[]) {
+    type Summary = { acceptedCount: number; lastAcceptedAt: Date | null; limited: boolean };
+    const result = new Map<string, Summary>(caseIds.map(id => [id, { acceptedCount: 0, lastAcceptedAt: null, limited: false }]));
+    if (!caseIds.length) return result;
+    // Bounded batched reads: avoid a sequential audit lookup for every reminder.
+    const rows = await this.prisma.communicationOutbox.findMany({
+      where: { renewalCaseId: { in: caseIds }, audience: 'CUSTOMER', purpose: 'REMINDER', manualApprovedBy: { not: null } },
+      orderBy: [{ queuedAt: 'desc' }, { id: 'desc' }], take: 2001,
+      select: { id: true, renewalCaseId: true },
+    });
+    if (rows.length > 2000) for (const summary of result.values()) summary.limited = true;
+    for (let offset = 0; offset < Math.min(rows.length, 2000); offset += 50) {
+      const batch = rows.slice(offset, Math.min(offset + 50, 2000));
+      const events = await this.prisma.auditEvent.findMany({
+        where: { subjectType: 'CommunicationOutbox', subjectId: { in: batch.map(row => row.id) }, eventKey: { in: ['mail.send.attempt_started', 'mail.send.succeeded'] } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { subjectId: true, actorType: true, eventKey: true, metadata: true, createdAt: true },
+        take: 5001,
+      });
+      if (events.length > 5000) {
+        for (const row of batch) { const summary = result.get(row.renewalCaseId); if (summary) summary.limited = true; }
+        continue;
+      }
+      const grouped = new Map<string, typeof events>();
+      for (const event of events) {
+        if (!event.subjectId) continue;
+        const existing = grouped.get(event.subjectId) ?? [];
+        existing.push(event);
+        grouped.set(event.subjectId, existing);
+      }
+      for (const row of batch) {
+        const summary = result.get(row.renewalCaseId);
+        if (!summary) continue;
+        const history = grouped.get(row.id) ?? [];
+        const evidence = summarizeSmtpEvidence('CommunicationOutbox', history, history.length > 100);
+        if (evidence.state === 'REVIEW_REQUIRED') summary.limited = true;
+        if (evidence.state !== 'SMTP_ACCEPTED') continue;
+        const accepted = history.find(event => event.eventKey === 'mail.send.succeeded');
+        if (!accepted) continue;
+        summary.acceptedCount += 1;
+        if (!summary.lastAcceptedAt || accepted.createdAt > summary.lastAcceptedAt) summary.lastAcceptedAt = accepted.createdAt;
+      }
+    }
+    return result;
   }
 
   async createHold(id: string, input: CreateRenewalHoldDto, context: MutationContext) {
@@ -255,43 +318,77 @@ export class RenewalCasesService {
   // locked and unbuilt; these four are the ones the current Phase 2 domain model already supports.
 
   async markAwaitingCustomer(id: string, context: MutationContext) {
-    return this.transitionStatus(
-      id,
-      RenewalCaseStatus.AWAITING_CUSTOMER,
-      {},
-      'renewal.case.marked_awaiting_customer',
-      context,
-    );
+    void context;
+    if (!(await this.prisma.renewalCase.findUnique({ where: { id }, select: { id: true } }))) {
+      throw new NotFoundException('Renewal Case not found.');
+    }
+    throw new ConflictException('Waiting for Customer is set only by recorded SMTP acceptance of an eligible case-linked message.');
   }
 
-  async markAccepted(id: string, context: MutationContext) {
+  async markAccepted(id: string, context: MutationContext, review?: { messageId?: string; expectedRevision?: number }) {
+    const row = await this.prisma.renewalCase.findUnique({ where: { id }, include: { subscription: true } });
+    if (!row) throw new NotFoundException('Renewal case not found.');
+    const proposal = proposedRenewalPeriod(row.dueDate, row.subscription.renewalIntervalMonths);
     return this.transitionStatus(
       id,
       RenewalCaseStatus.ACCEPTED,
-      { customerDecision: CustomerDecision.ACCEPTED, acceptedAt: this.clock.now() },
+      { customerDecision: CustomerDecision.ACCEPTED, acceptedAt: this.clock.now(), clarificationPending: false,
+        communicationRevision: { increment: 1 }, ...proposal },
       'renewal.case.marked_accepted',
       context,
+      review,
     );
   }
 
-  async markDoNotRenew(id: string, context: MutationContext) {
+  async markDoNotRenew(id: string, context: MutationContext, review?: { messageId?: string; expectedRevision?: number }) {
     return this.transitionStatus(
       id,
       RenewalCaseStatus.DO_NOT_RENEW,
-      { customerDecision: CustomerDecision.REJECTED, doNotRenewAt: this.clock.now() },
+      { customerDecision: CustomerDecision.REJECTED, doNotRenewAt: this.clock.now(), clarificationPending: false,
+        communicationRevision: { increment: 1 } },
       'renewal.case.marked_do_not_renew',
       context,
+      review,
     );
   }
 
+  async markNeedsClarification(id: string, context: MutationContext) {
+    return this.transitionStatus(id, RenewalCaseStatus.HUMAN_REVIEW,
+      { customerDecision: CustomerDecision.UNDECIDED }, 'renewal.case.needs_clarification', context);
+  }
+
   async markFulfilled(id: string, context: MutationContext) {
-    return this.transitionStatus(
-      id,
-      RenewalCaseStatus.FULFILLED,
-      { fulfilledAt: this.clock.now() },
-      'renewal.case.marked_fulfilled',
-      context,
-    );
+    const existing = await this.prisma.renewalCase.findUnique({ where: { id }, select: { subscriptionId: true } });
+    if (!existing) throw new NotFoundException('Renewal case not found.');
+    return this.prisma.$transaction(async (tx) => {
+      const { renewal: current, period } = await lockAcceptedRenewal(tx, id, existing.subscriptionId);
+      const invoice = await tx.invoice.findUnique({ where: { renewalOfficialKey: id } });
+      if (!invoice || !isVerifiedOfficialInvoice(invoice) ||
+          invoice.sourceRenewalCaseId !== id ||
+          invoice.sourceSubscriptionId !== current.subscriptionId ||
+          invoice.customerId !== current.subscription.customerId ||
+          invoice.billingEntityId !== current.subscription.customer.billingEntityId ||
+          invoice.periodStart.getTime() !== period.start.getTime() ||
+          invoice.periodEnd.getTime() !== period.end.getTime()) {
+        throw new ConflictException('Record a verified official invoice linked to this renewal before fulfillment.');
+      }
+      const changed = await tx.subscription.updateMany({
+        where: { id: current.subscriptionId, renewalDate: current.dueDate },
+        data: { renewalDate: period.next, currentTermEndDate: period.end },
+      });
+      if (changed.count !== 1) throw new ConflictException('Subscription tracking date changed; review before fulfillment.');
+      const { subscription: _subscription, ...caseRow } = current;
+      void _subscription; // Preserve the flat RenewalCase payload for the shared CAS primitive.
+      const result = await applyRenewalCaseTransition(tx, this.audit, {
+        id, currentRow: caseRow, toStatus: RenewalCaseStatus.FULFILLED,
+        extraData: { fulfilledAt: this.clock.now(), clarificationPending: false,
+          communicationRevision: { increment: 1 } }, eventKey: 'renewal.case.marked_fulfilled',
+        actor: { actorType: ActorType.USER, actorId: context.actorId, ipAddress: context.ipAddress },
+        auditMetadata: { invoiceId: invoice.id, oldRenewalDate: current.dueDate, newRenewalDate: period.next, trackingOnly: true },
+      });
+      if (result.kind === 'cas_lost') throw new ConflictException('Renewal changed concurrently.');
+      return result.renewalCase;
+    });
   }
 
   private async transitionStatus(
@@ -300,6 +397,7 @@ export class RenewalCasesService {
     extraData: Record<string, unknown>,
     eventKey: string,
     context: MutationContext,
+    review?: { messageId?: string; expectedRevision?: number },
   ) {
     // Fast pre-check against a plain read: gives a precise, immediate rejection for a genuinely
     // illegal transition (wrong role of caller aside — e.g. ACCEPTED -> AWAITING_CUSTOMER) without
@@ -308,14 +406,22 @@ export class RenewalCasesService {
     // using whatever the row's status actually is at write time, not this pre-check's snapshot.
     const current = await this.prisma.renewalCase.findUnique({ where: { id } });
     if (!current) throw new NotFoundException('Renewal Case not found.');
+    if (status === RenewalCaseStatus.AWAITING_CUSTOMER &&
+        (current.clarificationPending || current.status === RenewalCaseStatus.HUMAN_REVIEW))
+      throw new ConflictException('A clarification must be accepted by SMTP before waiting for the customer.');
     if (TERMINAL_STATUSES.includes(current.status)) {
       throw new ConflictException(
         `Renewal Case is already ${current.status} and cannot be moved to ${status}.`,
       );
     }
     assertLegalRenewalCaseTransition(current.status, status);
+    if (review?.expectedRevision !== undefined && review.expectedRevision !== current.communicationRevision)
+      throw new ConflictException('Renewal changed since review. Refresh before recording the decision.');
 
     return this.prisma.$transaction(async (tx) => {
+      if (review?.messageId && !(await tx.emailMessage.findFirst({
+        where: { id: review.messageId, renewalCaseId: id, direction: 'INBOUND' }, select: { id: true },
+      }))) throw new NotFoundException('Inbound reply not found for this renewal.');
       // Slice G §L — this shared primitive owns the actual CAS write, the re-fetch, and the audit
       // record; see its own doc comment (renewal-transition-policy.ts) for why it was extracted
       // (AiRoutingService's AI-actor auto-accept transition reuses the exact same function).
@@ -326,11 +432,23 @@ export class RenewalCasesService {
         extraData,
         eventKey,
         actor: { actorType: ActorType.USER, actorId: context.actorId, ipAddress: context.ipAddress },
+        expectedCommunicationRevision: current.communicationRevision,
+        auditMetadata: review?.messageId ? { replyMessageId: review.messageId } : { decisionSource: 'HUMAN_RECORDED' },
       });
       if (result.kind === 'cas_lost') {
         throw new ConflictException(
           `Renewal Case status changed concurrently (now ${result.currentStatus}); the requested transition to ${status} was not applied. Reload and try again.`,
         );
+      }
+      if (review?.messageId) {
+        const read = await tx.emailMessage.updateMany({
+          where: { id: review.messageId, renewalCaseId: id, direction: 'INBOUND', reviewedAt: null },
+          data: { reviewedAt: this.clock.now(), reviewedBy: context.actorId },
+        });
+        if (read.count) await this.audit.record({
+          actorType: ActorType.USER, actorId: context.actorId, eventKey: 'renewal.reply.reviewed',
+          subjectType: 'EmailMessage', subjectId: review.messageId, metadata: { renewalCaseId: id, decision: status },
+        }, tx);
       }
       return result.renewalCase;
     });

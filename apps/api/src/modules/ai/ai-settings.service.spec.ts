@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import { aiOperationalPolicy } from './ai-operational-policy';
 import { AiSettingsResolverService } from './ai-settings-resolver.service';
 import { AiSettingsService } from './ai-settings.service';
 import { LlmPermanentError } from './llm-errors';
@@ -65,6 +66,10 @@ function harness(
   const service = new AiSettingsService(prisma as never, encryption as never, audit as never, health as never, aiSettings, providerRegistry as never);
   return { service, encryption, auditRecord, healthRecord, adapters, getUpsertArgs: () => upsertArgs };
 }
+
+// Exercise the retained AI implementation behind the frozen production gate.
+beforeEach(() => { jest.spyOn(aiOperationalPolicy, 'isDeferred').mockReturnValue(false); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 describe('AiSettingsService — secret handling', () => {
   it('get() never returns the API key or its ciphertext, only apiKeyConfigured', async () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../database/prisma.service';
@@ -7,9 +8,11 @@ import { ActorType, CommunicationOutboxStatus, HealthStatus } from '../../genera
 import { CustomerEmailResolutionService } from '../customers/customer-email-resolution.service';
 import { MailConfigurationResolverService } from '../mail/mail-configuration-resolver.service';
 import { MailHealthService } from '../mail/mail-health.service';
+import { hasRecordedSmtpAcceptance } from '../mail/outbound-resend-policy';
 import { MAIL_TRANSPORT, type MailTransport } from '../mail/mail-transport';
 import { STALE_PROCESSING_LEASE_MS } from '../mail/mail-timing.constants';
 import { classifySmtpError } from '../mail/smtp-error-classification';
+import { dispatchSmtp, quarantineEligible, replayEligible, smtpFailure, UNCERTAIN_SMTP, type MailAcceptance } from '../mail/smtp-attempt-policy';
 import { COMMUNICATION_AUDIT_EVENT } from './communications-events.constants';
 import { OPERATOR_REPLY_BATCH_SIZE } from './operator-reply-queue.constants';
 import { DEFER_RETRY_DELAY_MS, SMTP_RETRY_BACKOFF_MS } from './operator-reply-timing.constants';
@@ -98,33 +101,17 @@ export class OperatorReplyOutboundService {
     };
 
     const now = this.clock.now();
-    const staleThreshold = this.staleThreshold(now);
-    // §7 (contract audit) — deliberately NO `queuedAt >= cutover` filter here, unlike
-    // MailOutboundService. That filter exists in Slice B to stop historical, pre-Slice-B
-    // AUTOMATIC reminder rows (queued by a system with no real send capability yet) from suddenly
-    // being sent once real SMTP activates — a one-time watermark for rows that predate this
-    // feature entirely. OperatorReplyOutbox has no such history: every row is a deliberate human
-    // send action created by this very feature, with no automatic regeneration mechanism if
-    // skipped. Gating on a cutover watermark here would risk PERMANENTLY stranding a real human
-    // reply — an unacceptable outcome for a one-of-a-kind human message. resolvePinned()'s own
-    // `outboundSendEnabled` DB switch (checked per-row in evaluateEligibility(), always with
-    // `{ checkCutover: false }`) remains the correct safety gate: it is a live toggle, not a
-    // watermark, so it can never strand a row — disabling it just leaves QUEUED rows QUEUED until
-    // re-enabled.
-    // §2 (contract audit) — a QUEUED row is only a candidate once its own retry-backoff time has
-    // arrived (nextAttemptAt IS NULL, meaning "eligible immediately" — a freshly-queued human
-    // reply always is — OR nextAttemptAt <= now). See operator-reply-timing.constants.ts for the
-    // exact schedule and setNextAttemptAt()'s doc comment for how it is set on every deferral.
+    const quarantinable = await this.prisma.operatorReplyOutbox.findMany({
+      where: quarantineEligible(this.staleThreshold(now)),
+      select: { id: true },
+      orderBy: { id: 'asc' },
+      take: OPERATOR_REPLY_BATCH_SIZE,
+    });
+    for (const row of quarantinable) {
+      if (await this.quarantine(row.id, now)) summary.failed += 1;
+    }
     const candidates = await this.prisma.operatorReplyOutbox.findMany({
-      where: {
-        OR: [
-          {
-            status: CommunicationOutboxStatus.QUEUED,
-            OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
-          },
-          { status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: { lt: staleThreshold } },
-        ],
-      },
+      where: this.eligibleForClaim(now),
       select: { id: true },
       orderBy: [{ queuedAt: 'asc' }, { id: 'asc' }],
       take: OPERATOR_REPLY_BATCH_SIZE,
@@ -146,6 +133,7 @@ export class OperatorReplyOutboundService {
 
   async processOne(outboxId: string): Promise<ReplyProcessingOutcome> {
     const now = this.clock.now();
+    if (await this.quarantine(outboxId, now)) return 'failed';
     const leaseToken = await this.claim(outboxId, now);
     if (!leaseToken) return 'not_claimed';
 
@@ -162,12 +150,14 @@ export class OperatorReplyOutboundService {
         if (rebound === 'conflict') return 'conflict';
       }
 
-      const attemptMarked = await this.markAttempt(outboxId, leaseToken);
-      if (!attemptMarked) return 'conflict'; // ownership lost before the SMTP call — safe.
-
-      let sendError: { failed: true; error: unknown } | { failed: false } = { failed: false };
-      try {
-        await this.transport.send(
+      return await dispatchSmtp(
+        () => this.markAttempt(outboxId, leaseToken, {
+          messageId: row.emailMessage.externalMessageId ?? row.emailMessage.id,
+          mailConfigurationId: eligibility.mailConfiguration.id,
+          recipient: currentRecipient,
+          authorizedBy: row.actorId,
+        }, row),
+        () => this.transport.send(
           {
             messageId: row.emailMessage.externalMessageId ?? row.emailMessage.id,
             fromAddress: eligibility.mailConfiguration.fromAddress,
@@ -183,17 +173,11 @@ export class OperatorReplyOutboundService {
             },
           },
           eligibility.mailConfiguration,
-        );
-      } catch (error) {
-        sendError = { failed: true, error };
-      }
-
-      if (!sendError.failed) {
-        const recorded = await this.recordSuccess(outboxId, eligibility.mailConfiguration.id, leaseToken);
-        return recorded ? 'sent' : 'ownership_lost_after_send';
-      }
-      const recorded = await this.recordFailure(outboxId, eligibility.mailConfiguration.id, sendError.error, leaseToken);
-      return recorded ? 'failed' : 'ownership_lost_after_send';
+        ),
+        (attemptId, result) => result.accepted
+          ? this.recordSuccess(outboxId, eligibility.mailConfiguration.id, leaseToken, attemptId, result.acceptance)
+          : this.recordFailure(outboxId, eligibility.mailConfiguration.id, result.error, leaseToken, attemptId),
+      );
     } catch (error) {
       if (error instanceof OwnershipLostError) return 'conflict';
       throw error;
@@ -204,22 +188,31 @@ export class OperatorReplyOutboundService {
     return new Date(now.getTime() - STALE_PROCESSING_LEASE_MS);
   }
 
-  /** Same claim predicate/lease-token discipline as MailOutboundService.claim() — see that
-   * method's doc comment for the exact rationale (not repeated here). Deliberately no cutover
-   * gate — see processBatch()'s doc comment for why one would risk permanently stranding a human
-   * reply. */
+  private eligibleForClaim(now: Date): Prisma.OperatorReplyOutboxWhereInput {
+    return replayEligible(now);
+  }
+
+  private async quarantine(id: string, now: Date): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      const changed = await tx.operatorReplyOutbox.updateMany({
+        where: { id, ...quarantineEligible(this.staleThreshold(now)) },
+        data: { status: CommunicationOutboxStatus.FAILED, smtpRetrySafe: false, smtpUncertain: true },
+      });
+      if (changed.count !== 1) return false;
+      await this.audit.record({
+        actorType: ActorType.SYSTEM,
+        eventKey: 'mail.send.quarantined',
+        subjectType: 'OperatorReplyOutbox',
+        subjectId: id,
+        metadata: { reason: UNCERTAIN_SMTP },
+      }, tx);
+      return true;
+    });
+  }
+
   private async claim(id: string, now: Date): Promise<Date | null> {
     const result = await this.prisma.operatorReplyOutbox.updateMany({
-      where: {
-        id,
-        OR: [
-          {
-            status: CommunicationOutboxStatus.QUEUED,
-            OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
-          },
-          { status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: { lt: this.staleThreshold(now) } },
-        ],
-      },
+      where: { id, ...this.eligibleForClaim(now) },
       data: { status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: now },
     });
     if (result.count !== 1) return null;
@@ -238,6 +231,11 @@ export class OperatorReplyOutboundService {
   }
 
   private async evaluateEligibility(row: OutboxContext): Promise<EligibilityResult> {
+    const actor = await this.prisma.user.findFirst({
+      where: { id: row.actorId, active: true, roles: { some: { role: { code: 'ADMIN' } } } },
+      select: { id: true },
+    });
+    if (!actor) return { kind: 'cancel', reason: 'human_approval_required' };
     // §9 — always the thread's own pinned mailbox; never re-resolved to a different one.
     const configResolution = this.mailConfigResolver.resolvePinned(
       await this.prisma.mailConfiguration.findUnique({ where: { id: row.mailConfigurationId } }),
@@ -247,7 +245,10 @@ export class OperatorReplyOutboundService {
       return { kind: 'defer', reason: `mail_configuration_unusable:${configResolution.reason}` };
     }
 
-    const attempted = row.attempts > 0;
+    const attempted = row.attempts > 0 || Boolean(row.resendOfId);
+    if (row.resendOfId && await hasRecordedSmtpAcceptance(this.prisma, 'OperatorReplyOutbox', row.resendOfId)) {
+      return { kind: 'cancel', reason: 'previous_attempt_accepted_by_smtp' };
+    }
     if (!row.thread.customerId) {
       return attempted
         ? { kind: 'cancel', reason: 'no_customer_attributed' }
@@ -307,7 +308,7 @@ export class OperatorReplyOutboundService {
       data: {
         status: CommunicationOutboxStatus.QUEUED,
         lastError: reason,
-        nextAttemptAt: new Date(expectedLeaseTimestamp.getTime() + DEFER_RETRY_DELAY_MS),
+        nextAttemptAt: new Date(this.clock.now().getTime() + DEFER_RETRY_DELAY_MS),
       },
     });
     return result.count === 1;
@@ -365,28 +366,74 @@ export class OperatorReplyOutboundService {
     }
   }
 
-  private async markAttempt(outboxId: string, expectedLeaseTimestamp: Date): Promise<boolean> {
-    const result = await this.prisma.operatorReplyOutbox.updateMany({
-      where: { id: outboxId, status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: expectedLeaseTimestamp },
-      data: { attempts: { increment: 1 } },
+  private async markAttempt(
+    outboxId: string,
+    lease: Date,
+    evidence: { messageId: string; mailConfigurationId: string; recipient: string; authorizedBy: string },
+    row: OutboxContext,
+  ): Promise<string | null> {
+    const attemptId = randomUUID();
+    return this.prisma.$transaction(async (tx) => {
+      // Pair the original reply row lock with its acceptance evidence check. A late
+      // original acceptance committed BEFORE this attempt cannot be overlooked;
+      // a genuinely later acceptance remains the warned duplicate-delivery risk.
+      if (row.resendOfId) {
+        await tx.$queryRaw`SELECT id FROM operator_reply_outbox WHERE id = ${row.resendOfId} FOR UPDATE`;
+        if (await hasRecordedSmtpAcceptance(tx, 'OperatorReplyOutbox', row.resendOfId)) {
+          const cancelled = await tx.operatorReplyOutbox.updateMany({
+            where: { id: outboxId, status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: lease },
+            data: { status: CommunicationOutboxStatus.CANCELLED, lastError: 'original_accepted_before_resend_attempt' },
+          });
+          if (cancelled.count === 1) {
+            await this.audit.record({
+              actorType: ActorType.SYSTEM,
+              eventKey: 'communication.reply.cancelled',
+              subjectType: 'OperatorReplyOutbox',
+              subjectId: outboxId,
+              metadata: { reason: 'original_accepted_before_resend_attempt', originalOutboxId: row.resendOfId },
+            }, tx);
+          }
+          return null;
+        }
+      }
+      const changed = await tx.operatorReplyOutbox.updateMany({
+        where: { id: outboxId, status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: lease },
+        data: { attempts: { increment: 1 }, smtpRetrySafe: false },
+      });
+      if (changed.count !== 1) return null;
+      await this.audit.record({
+        actorType: ActorType.SYSTEM,
+        eventKey: 'mail.send.attempt_started',
+        subjectType: 'OperatorReplyOutbox',
+        subjectId: outboxId,
+        metadata: { attemptId, ...evidence },
+      }, tx);
+      return attemptId;
     });
-    return result.count === 1;
   }
 
-  private async recordSuccess(outboxId: string, mailConfigurationId: string, expectedLeaseTimestamp: Date): Promise<boolean> {
+  private async recordSuccess(
+    outboxId: string,
+    mailConfigurationId: string,
+    expectedLeaseTimestamp: Date,
+    attemptId: string,
+    acceptance: MailAcceptance,
+  ): Promise<boolean> {
     const guarded = await this.prisma.$transaction(async (tx) => {
+      // Synchronize late original SMTP acceptance with a resend's
+      // markAttempt() lock, including after lease quarantine.
+      await tx.$queryRaw`SELECT id FROM operator_reply_outbox WHERE id = ${outboxId} FOR UPDATE`;
       const result = await tx.operatorReplyOutbox.updateMany({
         where: { id: outboxId, status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: expectedLeaseTimestamp },
         // §3 (contract audit) — no stale operator-visible error survives a later successful send,
         // regardless of how many prior defers/failures this row went through.
-        data: { status: CommunicationOutboxStatus.DELIVERED, lastError: null, nextAttemptAt: null },
+        data: { status: CommunicationOutboxStatus.DELIVERED, smtpRetrySafe: false, lastError: null, nextAttemptAt: null },
       });
-      if (result.count !== 1) return false;
       await this.audit.record(
-        { actorType: ActorType.SYSTEM, eventKey: 'communication.reply.delivered', subjectType: 'OperatorReplyOutbox', subjectId: outboxId },
+        { actorType: ActorType.SYSTEM, eventKey: 'communication.reply.delivered', subjectType: 'OperatorReplyOutbox', subjectId: outboxId, metadata: { attemptId, acceptance: { ...acceptance }, applied: result.count === 1 } },
         tx,
       );
-      return true;
+      return result.count === 1;
     });
     if (guarded) {
       await this.health.record(mailConfigurationId, HealthStatus.HEALTHY, 'SMTP send succeeded.');
@@ -396,12 +443,19 @@ export class OperatorReplyOutboundService {
     return guarded;
   }
 
-  private async recordFailure(outboxId: string, mailConfigurationId: string, error: unknown, expectedLeaseTimestamp: Date): Promise<boolean> {
-    const sanitized = this.sanitizeError(error);
+  private async recordFailure(
+    outboxId: string,
+    mailConfigurationId: string,
+    error: unknown,
+    expectedLeaseTimestamp: Date,
+    attemptId: string,
+  ): Promise<boolean> {
+    const evidence = smtpFailure(error);
+    const sanitized = evidence.outcome === 'uncertain' ? UNCERTAIN_SMTP : 'SMTP did not accept this attempt.';
     const classification = classifySmtpError(error);
     const current = await this.prisma.operatorReplyOutbox.findUniqueOrThrow({ where: { id: outboxId }, select: { attempts: true } });
     const boundExhausted = current.attempts >= OperatorReplyOutboundService.MAX_SEND_ATTEMPTS;
-    const terminal = classification.terminal || boundExhausted;
+    const terminal = evidence.outcome === 'uncertain' || classification.terminal || boundExhausted;
     const nextStatus = terminal ? CommunicationOutboxStatus.FAILED : CommunicationOutboxStatus.QUEUED;
     // §2 (contract audit) — real escalating backoff, keyed off the just-incremented attempts count
     // (markAttempt() already ran before the SMTP call this failure came from): attempt 1 -> index 0
@@ -412,28 +466,28 @@ export class OperatorReplyOutboundService {
     const nextAttemptAt = terminal
       ? null
       : new Date(
-          expectedLeaseTimestamp.getTime() +
+          this.clock.now().getTime() +
             SMTP_RETRY_BACKOFF_MS[Math.min(current.attempts - 1, SMTP_RETRY_BACKOFF_MS.length - 1)]!,
         );
     const guarded = await this.prisma.$transaction(async (tx) => {
       const result = await tx.operatorReplyOutbox.updateMany({
         where: { id: outboxId, status: CommunicationOutboxStatus.PROCESSING, lastAttemptAt: expectedLeaseTimestamp },
-        data: { status: nextStatus, lastError: sanitized, nextAttemptAt },
+        data: {
+          status: nextStatus,
+          smtpRetrySafe: !terminal,
+          smtpUncertain: evidence.outcome === 'uncertain',
+          lastError: sanitized,
+          nextAttemptAt,
+        },
       });
-      if (result.count !== 1) return false;
-      if (terminal) {
-        await this.audit.record(
-          {
-            actorType: ActorType.SYSTEM,
-            eventKey: COMMUNICATION_AUDIT_EVENT.REPLY_SEND_FAILED,
-            subjectType: 'OperatorReplyOutbox',
-            subjectId: outboxId,
-            metadata: { error: sanitized, classification },
-          },
-          tx,
-        );
-      }
-      return true;
+      await this.audit.record({
+        actorType: ActorType.SYSTEM,
+        eventKey: terminal ? COMMUNICATION_AUDIT_EVENT.REPLY_SEND_FAILED : 'mail.send.retryable_nonacceptance',
+        subjectType: 'OperatorReplyOutbox',
+        subjectId: outboxId,
+        metadata: { attemptId, evidence, classification, applied: result.count === 1 },
+      }, tx);
+      return result.count === 1;
     });
     if (guarded) {
       if (classification.healthImpact === 'infrastructure') {
@@ -453,17 +507,8 @@ export class OperatorReplyOutboundService {
       subjectId: outboxId,
       metadata: {
         mailConfigurationId,
-        note:
-          'SMTP was called (outcome not necessarily known here) but this worker had already lost row ' +
-          "ownership to a newer claimant before it could persist the result; the newer owner's state " +
-          'was preserved untouched — see MailOutboundService for the identical, previously-documented ' +
-          'residual at-least-once delivery ambiguity this mirrors.',
+        note: 'SMTP evidence arrived after the outbox stopped accepting writes for this lease.',
       },
     });
-  }
-
-  private sanitizeError(error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
-    return message.replace(/[A-Za-z0-9+/]{40,}={0,2}/g, '[REDACTED]').slice(0, 1000);
   }
 }
