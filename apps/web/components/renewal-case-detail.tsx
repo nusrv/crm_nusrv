@@ -54,6 +54,8 @@ interface RenewalCaseDetailData {
   status: string;
   customerDecision: string;
   clarificationPending: boolean;
+  communicationRevision: number;
+  unreadReplyCount: number;
   reminderSummary: { acceptedCount: number; lastAcceptedAt: string | null };
   proposedPeriodStart: string | null;
   proposedPeriodEnd: string | null;
@@ -185,7 +187,8 @@ export function RenewalCaseDetail({
 
   async function runAction(path: string, successMessage: string) {
     try {
-      await apiRequest(`/renewal-cases/${caseId}/${path}`, { method: 'POST' });
+      if ((path === 'mark-accepted' || path === 'mark-do-not-renew') && !window.confirm('Record the customer decision received outside this CRM email conversation?')) return;
+      await apiRequest(`/renewal-cases/${caseId}/${path}`, { method: 'POST', ...((path === 'mark-accepted' || path === 'mark-do-not-renew') ? { body: JSON.stringify({ expectedRevision: detail?.communicationRevision }) } : {}) });
       setMessage(successMessage);
       setError('');
       await load();
@@ -335,7 +338,7 @@ function RenewalCaseBody({
         </div>
       </section>
 
-      {canManage && <RenewalHumanCommunications caseId={detail.id} status={detail.status} clarificationPending={detail.clarificationPending} canManage={canManage} onChanged={onChanged} prepareOnOpen={prepareOnOpen} />}
+      {canManage && <RenewalHumanCommunications caseId={detail.id} status={detail.status} communicationRevision={detail.communicationRevision} clarificationPending={detail.clarificationPending} canManage={canManage} onChanged={onChanged} prepareOnOpen={prepareOnOpen} />}
       <section className="rounded-lg border border-[var(--line)] p-4">
         <div className="flex items-center justify-between gap-3">
           <h4 className="font-medium">Customer</h4>
@@ -512,6 +515,7 @@ function RenewalCaseBody({
             {!isTerminal &&
               MARK_ACTIONS.filter((action) =>
                 MARK_ACTION_LEGAL_FROM[action.key].includes(detail.status) &&
+                  (action.key === 'mark-fulfilled' || detail.unreadReplyCount === 0) &&
                   (action.key !== 'mark-fulfilled' || (approvedRenewal && hasOfficialRenewalInvoice)),
               ).map((action) => (
                 <button
@@ -525,7 +529,7 @@ function RenewalCaseBody({
                   }
                   type="button"
                 >
-                  {action.label}
+                  {action.key === 'mark-fulfilled' ? action.label : `${action.label} (outside email)`}
                 </button>
               ))}
           </div>

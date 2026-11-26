@@ -81,6 +81,7 @@ export async function applyRenewalCaseTransition(
     eventKey: string;
     actor: RenewalCaseTransitionActor;
     auditMetadata?: Record<string, unknown>;
+    expectedCommunicationRevision?: number;
   },
 ): Promise<RenewalCaseTransitionResult> {
   // Re-asserted here (not just by the caller's own pre-check, if any) so this primitive is safe to
@@ -92,7 +93,7 @@ export async function applyRenewalCaseTransition(
   // `input.currentRow` was read — see RenewalCasesService.transitionStatus()'s own doc comment for
   // the full rationale (identical here).
   const result = await tx.renewalCase.updateMany({
-    where: { id: input.id, status: input.currentRow.status },
+    where: { id: input.id, status: input.currentRow.status, ...(input.expectedCommunicationRevision === undefined ? {} : { communicationRevision: input.expectedCommunicationRevision }) },
     data: { status: input.toStatus, ...input.extraData },
   });
   if (result.count === 0) {

@@ -243,6 +243,7 @@ describe('RenewalCasesService workflow actions — accepted prospective policy',
         findFirst: jest.fn(() => Promise.resolve(null)),
         findUniqueOrThrow: jest.fn(() => Promise.resolve({ ...oldState, status: latestStatus })),
       },
+      emailMessage: { findFirst: jest.fn(() => Promise.resolve({ id: 'reply-1' })), updateMany: jest.fn(() => Promise.resolve({ count: 1 })) },
       invoice: { findUnique: jest.fn(() => Promise.resolve(official)) },
       subscription: { updateMany: jest.fn(() => Promise.resolve({ count: 1 })) },
     };
@@ -264,17 +265,11 @@ describe('RenewalCasesService workflow actions — accepted prospective policy',
     return { service, tx, audit };
   }
 
-  it('marks a case Awaiting Customer in a permissible non-clarification workflow', async () => {
+  it('rejects the obsolete manual waiting action before SMTP acceptance', async () => {
     const { service, tx, audit } = harness(RenewalCaseStatus.REMINDER_CYCLE);
-    await service.markAwaitingCustomer('case-id', { actorId: 'actor-id' });
-    expect(tx.renewalCase.updateMany).toHaveBeenCalledWith({
-      where: { id: 'case-id', status: RenewalCaseStatus.REMINDER_CYCLE },
-      data: { status: RenewalCaseStatus.AWAITING_CUSTOMER },
-    });
-    expect(audit.record.mock.calls[0]?.[0]).toMatchObject({
-      eventKey: 'renewal.case.marked_awaiting_customer',
-      oldState: { id: 'case-id', status: RenewalCaseStatus.REMINDER_CYCLE },
-    });
+    await expect(service.markAwaitingCustomer('case-id', { actorId: 'actor-id' })).rejects.toThrow('SMTP acceptance');
+    expect(tx.renewalCase.updateMany).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
   });
 
   it('marks Accepted and stores the proposed period without changing the subscription', async () => {
@@ -300,7 +295,7 @@ describe('RenewalCasesService workflow actions — accepted prospective policy',
     const { service, tx } = harness(RenewalCaseStatus.HUMAN_REVIEW);
     await service.markDoNotRenew('case-id', { actorId: 'actor-id' });
     expect(tx.renewalCase.updateMany).toHaveBeenCalledWith({
-      where: { id: 'case-id', status: RenewalCaseStatus.HUMAN_REVIEW },
+      where: { id: 'case-id', status: RenewalCaseStatus.HUMAN_REVIEW, communicationRevision: 0 },
       data: {
         status: RenewalCaseStatus.DO_NOT_RENEW,
         customerDecision: CustomerDecision.REJECTED,
@@ -309,6 +304,20 @@ describe('RenewalCasesService workflow actions — accepted prospective policy',
         communicationRevision: { increment: 1 },
       },
     });
+  });
+
+  it('records a selected inbound reply with the commercial decision and marks that reply read', async () => {
+    const { service, tx, audit } = harness(RenewalCaseStatus.HUMAN_REVIEW);
+    await service.markAccepted('case-id', { actorId: 'actor-id' }, { messageId: 'reply-1', expectedRevision: 0 });
+    expect(tx.emailMessage.findFirst).toHaveBeenCalledWith({ where: { id: 'reply-1', renewalCaseId: 'case-id', direction: 'INBOUND' }, select: { id: true } });
+    expect(tx.emailMessage.updateMany).toHaveBeenCalledWith({ where: { id: 'reply-1', renewalCaseId: 'case-id', direction: 'INBOUND', reviewedAt: null }, data: { reviewedAt: now, reviewedBy: 'actor-id' } });
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ eventKey: 'renewal.case.marked_accepted', metadata: { replyMessageId: 'reply-1' } }), expect.anything());
+  });
+
+  it('rejects stale reviewed decisions before changing state', async () => {
+    const { service, tx } = harness(RenewalCaseStatus.HUMAN_REVIEW);
+    await expect(service.markDoNotRenew('case-id', { actorId: 'actor-id' }, { messageId: 'reply-1', expectedRevision: 1 })).rejects.toThrow('Refresh');
+    expect(tx.renewalCase.updateMany).not.toHaveBeenCalled();
   });
 
   it('fulfills an accepted renewal with a linked official invoice, without payment evidence', async () => {

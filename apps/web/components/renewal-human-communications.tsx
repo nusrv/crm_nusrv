@@ -27,6 +27,7 @@ const reminderStatuses = ['UPCOMING', 'REMINDER_CYCLE', 'AWAITING_CUSTOMER'];
 export function RenewalHumanCommunications({
   caseId,
   status,
+  communicationRevision,
   clarificationPending,
   canManage,
   onChanged,
@@ -34,6 +35,7 @@ export function RenewalHumanCommunications({
 }: {
   caseId: string;
   status: string;
+  communicationRevision: number;
   clarificationPending: boolean;
   canManage: boolean;
   onChanged: () => Promise<void>;
@@ -96,12 +98,13 @@ export function RenewalHumanCommunications({
     });
   }
 
-  function review(path: 'needs-clarification' | 'keep-in-review', messageId: string) {
+  function review(path: 'needs-clarification' | 'keep-in-review' | 'mark-accepted' | 'mark-do-not-renew', messageId: string) {
     void act(async () => {
-      await apiRequest(`${root}/${path}`, { method: 'POST', body: JSON.stringify({ messageId }) });
+      const isDecision = path === 'mark-accepted' || path === 'mark-do-not-renew';
+      await apiRequest(`${root}/${path}`, { method: 'POST', body: JSON.stringify(isDecision ? { messageId, expectedRevision: communicationRevision } : { messageId }) });
       setReplies(await apiRequest<Reply[]>(`${root}/replies`));
       setPreview(null);
-      setMessage(path === 'needs-clarification' ? 'Clarification requested. Compose and send it when ready.' : 'Case kept in review.');
+      setMessage(path === 'needs-clarification' ? 'Clarification requested. Compose and send it when ready.' : path === 'mark-accepted' ? 'Renewal accepted. Review the proposed period before invoicing.' : path === 'mark-do-not-renew' ? 'Customer decision recorded: do not renew.' : 'Case kept in review.');
       await onChanged();
     });
   }
@@ -185,6 +188,8 @@ export function RenewalHumanCommunications({
           <p className="muted text-sm">{new Date(reply.occurredAt).toLocaleString()} · {reply.reviewedAt ? 'Read' : 'Unread'}</p>
           <p className="mt-2 whitespace-pre-wrap text-sm">{reply.bodyText}</p>
           {canManage && reviewable && <div className="mt-2 flex gap-2 flex-wrap">
+            <button className="button-small" disabled={busy} onClick={() => review('mark-accepted', reply.id)} type="button">Accept Renewal</button>
+            <button className="button-small" disabled={busy} onClick={() => review('mark-do-not-renew', reply.id)} type="button">Do Not Renew</button>
             {!clarificationPending && <button className="button-small" disabled={busy} onClick={() => review('needs-clarification', reply.id)} type="button">Needs Clarification</button>}
             <button className="button-small" disabled={busy} onClick={() => review('keep-in-review', reply.id)} type="button">Keep in Review</button>
           </div>}

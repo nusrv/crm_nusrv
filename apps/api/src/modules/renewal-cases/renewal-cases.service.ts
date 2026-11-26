@@ -289,16 +289,14 @@ export class RenewalCasesService {
   // locked and unbuilt; these four are the ones the current Phase 2 domain model already supports.
 
   async markAwaitingCustomer(id: string, context: MutationContext) {
-    return this.transitionStatus(
-      id,
-      RenewalCaseStatus.AWAITING_CUSTOMER,
-      {},
-      'renewal.case.marked_awaiting_customer',
-      context,
-    );
+    void context;
+    if (!(await this.prisma.renewalCase.findUnique({ where: { id }, select: { id: true } }))) {
+      throw new NotFoundException('Renewal Case not found.');
+    }
+    throw new ConflictException('Waiting for Customer is set only by recorded SMTP acceptance of an eligible case-linked message.');
   }
 
-  async markAccepted(id: string, context: MutationContext) {
+  async markAccepted(id: string, context: MutationContext, review?: { messageId?: string; expectedRevision?: number }) {
     const row = await this.prisma.renewalCase.findUnique({ where: { id }, include: { subscription: true } });
     if (!row) throw new NotFoundException('Renewal case not found.');
     const proposal = proposedRenewalPeriod(row.dueDate, row.subscription.renewalIntervalMonths);
@@ -309,10 +307,11 @@ export class RenewalCasesService {
         communicationRevision: { increment: 1 }, ...proposal },
       'renewal.case.marked_accepted',
       context,
+      review,
     );
   }
 
-  async markDoNotRenew(id: string, context: MutationContext) {
+  async markDoNotRenew(id: string, context: MutationContext, review?: { messageId?: string; expectedRevision?: number }) {
     return this.transitionStatus(
       id,
       RenewalCaseStatus.DO_NOT_RENEW,
@@ -320,6 +319,7 @@ export class RenewalCasesService {
         communicationRevision: { increment: 1 } },
       'renewal.case.marked_do_not_renew',
       context,
+      review,
     );
   }
 
@@ -368,6 +368,7 @@ export class RenewalCasesService {
     extraData: Record<string, unknown>,
     eventKey: string,
     context: MutationContext,
+    review?: { messageId?: string; expectedRevision?: number },
   ) {
     // Fast pre-check against a plain read: gives a precise, immediate rejection for a genuinely
     // illegal transition (wrong role of caller aside — e.g. ACCEPTED -> AWAITING_CUSTOMER) without
@@ -385,8 +386,13 @@ export class RenewalCasesService {
       );
     }
     assertLegalRenewalCaseTransition(current.status, status);
+    if (review?.expectedRevision !== undefined && review.expectedRevision !== current.communicationRevision)
+      throw new ConflictException('Renewal changed since review. Refresh before recording the decision.');
 
     return this.prisma.$transaction(async (tx) => {
+      if (review?.messageId && !(await tx.emailMessage.findFirst({
+        where: { id: review.messageId, renewalCaseId: id, direction: 'INBOUND' }, select: { id: true },
+      }))) throw new NotFoundException('Inbound reply not found for this renewal.');
       // Slice G §L — this shared primitive owns the actual CAS write, the re-fetch, and the audit
       // record; see its own doc comment (renewal-transition-policy.ts) for why it was extracted
       // (AiRoutingService's AI-actor auto-accept transition reuses the exact same function).
@@ -397,11 +403,23 @@ export class RenewalCasesService {
         extraData,
         eventKey,
         actor: { actorType: ActorType.USER, actorId: context.actorId, ipAddress: context.ipAddress },
+        expectedCommunicationRevision: current.communicationRevision,
+        auditMetadata: review?.messageId ? { replyMessageId: review.messageId } : { decisionSource: 'HUMAN_RECORDED' },
       });
       if (result.kind === 'cas_lost') {
         throw new ConflictException(
           `Renewal Case status changed concurrently (now ${result.currentStatus}); the requested transition to ${status} was not applied. Reload and try again.`,
         );
+      }
+      if (review?.messageId) {
+        const read = await tx.emailMessage.updateMany({
+          where: { id: review.messageId, renewalCaseId: id, direction: 'INBOUND', reviewedAt: null },
+          data: { reviewedAt: this.clock.now(), reviewedBy: context.actorId },
+        });
+        if (read.count) await this.audit.record({
+          actorType: ActorType.USER, actorId: context.actorId, eventKey: 'renewal.reply.reviewed',
+          subjectType: 'EmailMessage', subjectId: review.messageId, metadata: { renewalCaseId: id, decision: status },
+        }, tx);
       }
       return result.renewalCase;
     });

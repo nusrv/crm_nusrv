@@ -1,9 +1,18 @@
+import { z } from 'zod';
 import { ManualRenewalService } from './manual-renewal.service';
-import { Body, Controller, Get, Ip, Param, Post, Query, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Ip, Param, Post, Query, Req } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../../identity/auth-user';
 import { Roles } from '../../identity/roles.decorator';
 import { CreateRenewalHoldDto, RenewalCaseListQueryDto } from './renewal-cases.dto';
 import { RenewalCasesService } from './renewal-cases.service';
+
+const decisionInput = z.object({ messageId: z.uuid().optional(), expectedRevision: z.number().int().nonnegative().optional() }).strict();
+function parseDecision(input: unknown) {
+  const parsed = decisionInput.safeParse(input ?? {});
+  if (!parsed.success || (parsed.data.messageId && parsed.data.expectedRevision === undefined))
+    throw new BadRequestException('Select a valid reply and current renewal revision.');
+  return parsed.data;
+}
 
 @Controller('renewal-cases')
 export class RenewalCasesController {
@@ -58,7 +67,7 @@ export class RenewalCasesController {
     return this.renewalCases.findOne(id);
   }
 
-  @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')
+  @Roles('ADMIN')
   @Post(':id/holds')
   createHold(
     @Param('id') id: string,
@@ -69,7 +78,7 @@ export class RenewalCasesController {
     return this.renewalCases.createHold(id, input, { actorId: req.user.id, ipAddress: ip });
   }
 
-  @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')
+  @Roles('ADMIN')
   @Post(':id/holds/:holdId/release')
   releaseHold(
     @Param('id') id: string,
@@ -83,7 +92,7 @@ export class RenewalCasesController {
     });
   }
 
-  @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')
+  @Roles('ADMIN')
   @Post(':id/mark-awaiting-customer')
   markAwaitingCustomer(
     @Param('id') id: string,
@@ -93,16 +102,16 @@ export class RenewalCasesController {
     return this.renewalCases.markAwaitingCustomer(id, { actorId: req.user.id, ipAddress: ip });
   }
 
-  @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')
+  @Roles('ADMIN')
   @Post(':id/mark-accepted')
-  markAccepted(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Ip() ip: string) {
-    return this.renewalCases.markAccepted(id, { actorId: req.user.id, ipAddress: ip });
+  markAccepted(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Ip() ip: string, @Body() input?: unknown) {
+    return this.renewalCases.markAccepted(id, { actorId: req.user.id, ipAddress: ip }, parseDecision(input));
   }
 
-  @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')
+  @Roles('ADMIN')
   @Post(':id/mark-do-not-renew')
-  markDoNotRenew(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Ip() ip: string) {
-    return this.renewalCases.markDoNotRenew(id, { actorId: req.user.id, ipAddress: ip });
+  markDoNotRenew(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Ip() ip: string, @Body() input?: unknown) {
+    return this.renewalCases.markDoNotRenew(id, { actorId: req.user.id, ipAddress: ip }, parseDecision(input));
   }
 
   @Roles('ADMIN')
@@ -117,7 +126,7 @@ export class RenewalCasesController {
     return this.manual.review(id, false, req.user.id, input);
   }
 
-  @Roles('ADMIN', 'ACCOUNTANT', 'IT', 'SALES_DEVELOPMENT')
+  @Roles('ADMIN')
   @Post(':id/mark-fulfilled')
   markFulfilled(@Param('id') id: string, @Req() req: AuthenticatedRequest, @Ip() ip: string) {
     return this.renewalCases.markFulfilled(id, { actorId: req.user.id, ipAddress: ip });
